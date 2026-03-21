@@ -256,6 +256,7 @@ class ClobWebSocket:
                     log.exception("ws_seed_prices_error")
 
             rows = []
+            fresh_ids = []
             for market_id, data in snapshots.items():
                 # Start from last known complete state, overlay WS updates
                 merged = dict(self._last_known_prices.get(market_id, {}))
@@ -264,6 +265,15 @@ class ClobWebSocket:
                 # Update last known state for next flush
                 self._last_known_prices[market_id] = merged
 
+                # Don't write mixed-age snapshots to DB — periodic readers
+                # (detector full run, optimizer sweep) query price_snapshots
+                # directly, so stale rows would bypass event suppression.
+                # Keep the merge in _last_known_prices only so the state is
+                # ready once all outcomes are WS-refreshed.
+                if market_id in self._reconnect_pending:
+                    continue
+
+                fresh_ids.append(market_id)
                 rows.append({
                     "market_id": market_id,
                     "prices": merged,
@@ -271,12 +281,15 @@ class ClobWebSocket:
                     "order_book": None,
                 })
 
-            try:
-                async with self._session_factory() as session:
-                    await session.execute(insert(PriceSnapshot), rows)
-                    await session.commit()
+            stale_count = len(snapshots) - len(rows)
 
-                # Check for resolution
+            try:
+                if rows:
+                    async with self._session_factory() as session:
+                        await session.execute(insert(PriceSnapshot), rows)
+                        await session.commit()
+
+                # Check for resolution (only on fresh rows)
                 for row_data in rows:
                     for outcome, price_str in row_data["prices"].items():
                         try:
@@ -299,23 +312,15 @@ class ClobWebSocket:
                                         "price": price,
                                     })
 
-                # Exclude markets still pending full WS refresh after
-                # reconnect — their prices mix stale DB seed with partial
-                # WS updates and could create phantom arb spreads.
-                fresh_ids = [
-                    r["market_id"] for r in rows
-                    if r["market_id"] not in self._reconnect_pending
-                ]
                 if fresh_ids:
                     await publish(self._redis, CHANNEL_SNAPSHOT_CREATED, {
                         "count": len(fresh_ids),
                         "source": "websocket",
                         "market_ids": fresh_ids,
                     })
-                stale_count = len(rows) - len(fresh_ids)
                 log.info(
                     "ws_snapshots_flushed",
-                    count=len(fresh_ids),
+                    count=len(rows),
                     stale_suppressed=stale_count,
                 )
             except Exception:
