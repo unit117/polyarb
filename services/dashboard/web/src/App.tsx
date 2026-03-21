@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import StatsBar from "./components/StatsBar.tsx";
 import OpportunitiesTable from "./components/OpportunitiesTable.tsx";
 import TradesTable from "./components/TradesTable.tsx";
@@ -6,14 +6,14 @@ import PnlChart from "./components/PnlChart.tsx";
 import PairsTable from "./components/PairsTable.tsx";
 import OpportunityDetail from "./components/OpportunityDetail.tsx";
 import { useDashboardData } from "./hooks/useDashboardData.ts";
-import type { TradingMode, Opportunity } from "./hooks/useDashboardData.ts";
+import type { TradingMode } from "./hooks/useDashboardData.ts";
 import s from "./App.module.css";
 
 type Tab = "opportunities" | "trades" | "pairs";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("opportunities");
-  const [selectedOpp, setSelectedOpp] = useState<Opportunity | null>(null);
+  const [selectedOppId, setSelectedOppId] = useState<number | null>(null);
   const {
     stats,
     history,
@@ -30,6 +30,12 @@ export default function App() {
     mode,
     setMode,
   } = useDashboardData();
+
+  // Derive selected opportunity from live data so it stays in sync with WS updates
+  const selectedOpp = useMemo(
+    () => selectedOppId != null ? opportunities.find((o) => o.id === selectedOppId) ?? null : null,
+    [selectedOppId, opportunities],
+  );
 
   const liveActive = stats?.live_trading?.active ?? false;
 
@@ -70,7 +76,7 @@ export default function App() {
             pagination={opportunitiesPagination}
             onLoadMore={loadMoreOpportunities}
             loading={loadingMore.opportunities}
-            onSelect={setSelectedOpp}
+            onSelect={(o) => setSelectedOppId(o.id)}
           />
         )}
         {tab === "trades" && (
@@ -94,7 +100,7 @@ export default function App() {
       {selectedOpp && (
         <OpportunityDetail
           opportunity={selectedOpp}
-          onClose={() => setSelectedOpp(null)}
+          onClose={() => setSelectedOppId(null)}
         />
       )}
     </div>

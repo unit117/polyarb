@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import type { Opportunity } from "../hooks/useDashboardData.ts";
 import s from "./OpportunityDetail.module.css";
 
@@ -11,14 +11,21 @@ const OpportunityDetail = React.memo(function OpportunityDetail({
   opportunity: o,
   onClose,
 }: Props) {
+  const [closing, setClosing] = useState(false);
+
+  const handleClose = useCallback(() => {
+    setClosing(true);
+    setTimeout(onClose, 200); // match animation duration
+  }, [onClose]);
+
   // Close on Escape key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") handleClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [handleClose]);
 
   const profitDelta = o.theoretical_profit - o.estimated_profit;
   const feesImpact = o.theoretical_profit > 0
@@ -33,17 +40,19 @@ const OpportunityDetail = React.memo(function OpportunityDetail({
     : "Poor"
     : null;
 
+  // Map bregman_gap to 0–100% bar using log scale.
+  // gap=1e-6 -> 100%, gap=1e-3 -> 75%, gap=1e-1 -> 25%, gap=1 -> 0%
   const convergencePct = o.bregman_gap != null
-    ? Math.max(0, Math.min(100, 100 - Math.log10(Math.max(o.bregman_gap, 1e-8)) * 12.5))
+    ? Math.max(0, Math.min(100, (-Math.log10(Math.max(o.bregman_gap, 1e-8)) / 6) * 100))
     : 0;
 
   return (
     <>
-      <div className={s.overlay} onClick={onClose} />
-      <div className={s.panel}>
+      <div className={`${s.overlay} ${closing ? s.overlayClosing : ""}`} onClick={handleClose} />
+      <div className={`${s.panel} ${closing ? s.panelClosing : ""}`}>
         <div className={s.header}>
           <span className={s.headerTitle}>Opportunity Detail</span>
-          <button className={s.closeBtn} onClick={onClose}>&times;</button>
+          <button className={s.closeBtn} onClick={handleClose}>&times;</button>
         </div>
         <div className={s.body}>
           {/* Status & Meta */}
@@ -72,7 +81,7 @@ const OpportunityDetail = React.memo(function OpportunityDetail({
                 <span className={s.kvLabel}>Dependency</span>
                 <span className={s.kvValue}>
                   {o.pair?.dependency_type
-                    ? o.pair.dependency_type.replace(/_/g, " ")
+                    ? formatDepType(o.pair.dependency_type)
                     : "\u2014"}
                 </span>
               </div>
@@ -190,6 +199,12 @@ const OpportunityDetail = React.memo(function OpportunityDetail({
 });
 
 export default OpportunityDetail;
+
+function formatDepType(dt: string): string {
+  return dt
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function statusBadgeClass(status: string): string {
   switch (status) {
