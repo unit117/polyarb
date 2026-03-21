@@ -1,0 +1,165 @@
+/* PairsTable */
+.wrap {
+  overflow-x: auto;
+}
+
+.explainer {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  border-left: 2px solid var(--color-border-light);
+}
+
+.filterBar {
+  padding: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.filterText {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.toggleBtn {
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  color: var(--color-blue);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  padding: 2px var(--space-2);
+  transition: all var(--transition-fast);
+}
+
+.toggleBtn:hover {
+  background: var(--color-blue-bg);
+  border-color: var(--color-blue);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-light);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.row {
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition: background var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--color-bg-hover);
+}
+
+.td {
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdMarket {
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 250px;
+}
+
+.tdNum {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dependency badge */
+.depBadge {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  background: var(--color-bg-card);
+  color: var(--color-blue-light);
+  cursor: help;
+  font-weight: 500;
+}
+
+/* Confidence meter */
+.confidenceCell {
+  padding: var(--space-2) var(--space-3);
+}
+
+.confidenceBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.confidenceTrack {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 40px;
+  max-width: 60px;
+}
+
+.confidenceFill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width var(--transition-base);
+}
+
+.confidenceHigh {
+  background: var(--color-green);
+}
+
+.confidenceMedium {
+  background: var(--color-yellow);
+}
+
+.confidenceLow {
+  background: var(--color-red);
+}
+
+.confidenceValue {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Verified */
+.verifiedYes {
+  color: var(--color-green);
+  font-weight: 500;
+}
+
+.verifiedNo {
+  color: var(--color-text-muted);
+}
+
+.empty {
+  text-align: center;
+  color: var(--color-text-dim);
+  padding: var(--space-10) var(--space-3);
+}

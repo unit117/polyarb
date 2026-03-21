@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import type { Pair, PaginationInfo } from "../hooks/useDashboardData.ts";
 import LoadMoreBar from "./LoadMoreBar.tsx";
+import s from "./PairsTable.module.css";
 
 interface Props {
   pairs: Pair[];
@@ -30,19 +31,19 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
   const hiddenCount = pairs.length - sorted.length;
 
   return (
-    <div style={styles.wrap}>
-      <div style={styles.explainer}>
+    <div className={s.wrap}>
+      <div className={s.explainer}>
         Pairs are markets whose outcomes are logically linked. The bot
         monitors their prices for inconsistencies.
       </div>
 
       {!showEmpty && hiddenCount > 0 && (
-        <div style={styles.filterBar}>
-          <span style={{ color: "#888", fontSize: 12 }}>
+        <div className={s.filterBar}>
+          <span className={s.filterText}>
             Showing {sorted.length} pairs with opportunities.{" "}
           </span>
           <button
-            style={styles.toggleBtn}
+            className={s.toggleBtn}
             onClick={() => setShowEmpty(true)}
           >
             Show all {pairs.length} ({hiddenCount} with 0 opportunities)
@@ -50,12 +51,12 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
         </div>
       )}
       {showEmpty && (
-        <div style={styles.filterBar}>
-          <span style={{ color: "#888", fontSize: 12 }}>
+        <div className={s.filterBar}>
+          <span className={s.filterText}>
             Showing all {sorted.length} pairs.{" "}
           </span>
           <button
-            style={styles.toggleBtn}
+            className={s.toggleBtn}
             onClick={() => setShowEmpty(false)}
           >
             Hide pairs with 0 opportunities
@@ -63,35 +64,35 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
         </div>
       )}
 
-      <table style={styles.table}>
+      <table className={s.table}>
         <thead>
           <tr>
-            <th style={styles.th}>Detected</th>
-            <th style={styles.th}>Market A</th>
-            <th style={styles.th}>Market B</th>
-            <th style={styles.th}>Relationship</th>
-            <th style={styles.th}>Confidence</th>
-            <th style={styles.th}>Opportunities</th>
-            <th style={styles.th}>Verified</th>
+            <th className={s.th}>Detected</th>
+            <th className={s.th}>Market A</th>
+            <th className={s.th}>Market B</th>
+            <th className={s.th}>Relationship</th>
+            <th className={s.th}>Confidence</th>
+            <th className={s.th}>Opportunities</th>
+            <th className={s.th}>Verified</th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((p) => (
-            <tr key={p.id} style={styles.row}>
-              <td style={styles.td}>
+            <tr key={p.id} className={s.row}>
+              <td className={s.td}>
                 {p.detected_at
                   ? new Date(p.detected_at).toLocaleDateString()
                   : "\u2014"}
               </td>
-              <td style={{ ...styles.td, maxWidth: 250 }}>
+              <td className={s.tdMarket}>
                 {p.market_a?.question || "\u2014"}
               </td>
-              <td style={{ ...styles.td, maxWidth: 250 }}>
+              <td className={s.tdMarket}>
                 {p.market_b?.question || "\u2014"}
               </td>
-              <td style={styles.td}>
+              <td className={s.td}>
                 <span
-                  style={styles.depBadge}
+                  className={s.depBadge}
                   title={
                     DEP_LABELS[p.dependency_type] || p.dependency_type
                   }
@@ -99,29 +100,22 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
                   {formatDepType(p.dependency_type)}
                 </span>
               </td>
-              <td style={styles.tdNum}>
-                {(p.confidence * 100).toFixed(0)}%
+              <td className={s.confidenceCell}>
+                <ConfidenceMeter value={p.confidence} />
               </td>
-              <td style={styles.tdNum}>{p.opportunity_count}</td>
-              <td style={styles.td}>
+              <td className={s.tdNum}>{p.opportunity_count}</td>
+              <td className={s.td}>
                 {p.verified ? (
-                  <span style={{ color: "#00ff88" }}>Yes</span>
+                  <span className={s.verifiedYes}>Yes</span>
                 ) : (
-                  <span style={{ color: "#666" }}>No</span>
+                  <span className={s.verifiedNo}>No</span>
                 )}
               </td>
             </tr>
           ))}
           {sorted.length === 0 && (
             <tr>
-              <td
-                colSpan={7}
-                style={{
-                  ...styles.td,
-                  textAlign: "center",
-                  color: "#555",
-                }}
-              >
+              <td colSpan={7} className={s.empty}>
                 {pairs.length === 0
                   ? "No pairs detected yet"
                   : "No pairs with opportunities (toggle to see all)"}
@@ -142,62 +136,28 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
 
 export default PairsTable;
 
+function ConfidenceMeter({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  const fillClass =
+    pct >= 80 ? s.confidenceHigh :
+    pct >= 50 ? s.confidenceMedium :
+    s.confidenceLow;
+
+  return (
+    <div className={s.confidenceBar}>
+      <div className={s.confidenceTrack}>
+        <div
+          className={`${s.confidenceFill} ${fillClass}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={s.confidenceValue}>{pct}%</span>
+    </div>
+  );
+}
+
 function formatDepType(dt: string): string {
   return dt
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  wrap: { overflowX: "auto" },
-  explainer: {
-    fontSize: 12,
-    color: "#888",
-    padding: "8px 10px",
-    marginBottom: 8,
-    borderLeft: "2px solid #333",
-  },
-  filterBar: {
-    padding: "4px 10px",
-    marginBottom: 8,
-  },
-  toggleBtn: {
-    background: "transparent",
-    border: "1px solid #333",
-    borderRadius: 4,
-    color: "#4488ff",
-    cursor: "pointer",
-    fontSize: 12,
-    padding: "2px 8px",
-  },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
-  th: {
-    textAlign: "left",
-    padding: "8px 10px",
-    borderBottom: "1px solid #333",
-    color: "#666",
-    fontSize: 11,
-    textTransform: "uppercase",
-    whiteSpace: "nowrap",
-  },
-  row: { borderBottom: "1px solid #1a1a1a" },
-  td: {
-    padding: "8px 10px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  tdNum: {
-    padding: "8px 10px",
-    fontFamily: "monospace",
-    textAlign: "right",
-  },
-  depBadge: {
-    padding: "2px 8px",
-    borderRadius: 4,
-    fontSize: 11,
-    background: "#1a1a2e",
-    color: "#8888ff",
-    cursor: "help",
-  },
-};

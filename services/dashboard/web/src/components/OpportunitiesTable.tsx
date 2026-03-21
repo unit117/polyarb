@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from "react";
 import type { Opportunity, PaginationInfo } from "../hooks/useDashboardData.ts";
 import LoadMoreBar from "./LoadMoreBar.tsx";
+import s from "./OpportunitiesTable.module.css";
 
 interface Props {
   opportunities: Opportunity[];
   pagination: PaginationInfo;
   onLoadMore: () => void;
   loading: boolean;
+  onSelect?: (opp: Opportunity) => void;
 }
 
 const OpportunitiesTable = React.memo(function OpportunitiesTable({
@@ -14,6 +16,7 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
   pagination,
   onLoadMore,
   loading,
+  onSelect,
 }: Props) {
   const [showUnprofitable, setShowUnprofitable] = useState(false);
 
@@ -29,14 +32,14 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
   const hiddenCount = opportunities.length - sorted.length;
 
   return (
-    <div style={styles.wrap}>
+    <div className={s.wrap}>
       {!showUnprofitable && hiddenCount > 0 && (
-        <div style={styles.filterBar}>
-          <span style={{ color: "#888", fontSize: 12 }}>
+        <div className={s.filterBar}>
+          <span className={s.filterText}>
             Showing {sorted.length} profitable opportunities.{" "}
           </span>
           <button
-            style={styles.toggleBtn}
+            className={s.toggleBtn}
             onClick={() => setShowUnprofitable(true)}
           >
             Show all {opportunities.length} ({hiddenCount} with zero profit
@@ -45,98 +48,91 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
         </div>
       )}
       {showUnprofitable && (
-        <div style={styles.filterBar}>
-          <span style={{ color: "#888", fontSize: 12 }}>
+        <div className={s.filterBar}>
+          <span className={s.filterText}>
             Showing all {sorted.length} opportunities.{" "}
           </span>
           <button
-            style={styles.toggleBtn}
+            className={s.toggleBtn}
             onClick={() => setShowUnprofitable(false)}
           >
             Hide zero-profit
           </button>
         </div>
       )}
-      <table style={styles.table}>
+      <table className={s.table}>
         <thead>
           <tr>
-            <th style={styles.th}>Time</th>
-            <th style={styles.th}>Status</th>
-            <th style={styles.th}>Type</th>
-            <th style={styles.th}>Market A</th>
-            <th style={styles.th}>Market B</th>
-            <th style={styles.th}>Dep.</th>
-            <th style={styles.th}>Theo. Profit</th>
-            <th style={styles.th}>
+            <th className={s.th}>Time</th>
+            <th className={s.th}>Status</th>
+            <th className={s.th}>Type</th>
+            <th className={s.th}>Market A</th>
+            <th className={s.th}>Market B</th>
+            <th className={s.th}>Dep.</th>
+            <th className={s.th}>Theo. Profit</th>
+            <th className={s.th}>
               Est. Profit
-              <span
-                style={{ fontSize: 9, color: "#555", display: "block" }}
-              >
-                after fees
-              </span>
+              <span className={s.thSub}>after fees</span>
             </th>
-            <th style={styles.th} title="Frank-Wolfe optimizer iterations to convergence">
+            <th className={s.th} title="Frank-Wolfe optimizer iterations to convergence">
               Optimizer Iters
             </th>
-            <th style={styles.th} title="Bregman divergence gap — lower = better convergence">
+            <th className={s.th} title="Bregman divergence gap — lower = better convergence">
               Gap
             </th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((o) => {
-            const profitColor =
+            const profitClass =
               o.estimated_profit > 0.01
-                ? "#00ff88"
+                ? s.profitGreen
                 : o.estimated_profit > 0
-                  ? "#ffcc00"
-                  : "#555";
+                  ? s.profitYellow
+                  : s.profitGray;
+
+            const rowClass = [
+              s.row,
+              o.estimated_profit > 0.01 ? s.rowProfitable : "",
+              o.estimated_profit > 0 && o.estimated_profit <= 0.01 ? s.rowMarginal : "",
+            ].filter(Boolean).join(" ");
 
             return (
               <tr
                 key={o.id}
-                style={{
-                  ...styles.row,
-                  background:
-                    o.estimated_profit > 0.01
-                      ? "rgba(0,255,136,0.03)"
-                      : o.estimated_profit > 0
-                        ? "rgba(255,204,0,0.03)"
-                        : "transparent",
-                }}
+                className={rowClass}
+                onClick={() => onSelect?.(o)}
               >
-                <td style={styles.td}>
+                <td className={s.td}>
                   {o.timestamp
                     ? new Date(o.timestamp).toLocaleTimeString()
                     : "\u2014"}
                 </td>
-                <td style={styles.td}>
-                  <span
-                    style={{ ...styles.badge, ...statusColor(o.status) }}
-                  >
+                <td className={s.td}>
+                  <span className={`${s.badge} ${statusClass(o.status)}`}>
                     {o.status}
                   </span>
                 </td>
-                <td style={styles.td}>{o.type}</td>
-                <td style={{ ...styles.td, maxWidth: 200 }}>
+                <td className={s.td}>{o.type}</td>
+                <td className={s.tdMarket}>
                   {o.pair?.market_a || "\u2014"}
                 </td>
-                <td style={{ ...styles.td, maxWidth: 200 }}>
+                <td className={s.tdMarket}>
                   {o.pair?.market_b || "\u2014"}
                 </td>
-                <td style={styles.td}>
+                <td className={s.td}>
                   {o.pair?.dependency_type || "\u2014"}
                 </td>
-                <td style={styles.tdNum}>
+                <td className={s.tdNum}>
                   {o.theoretical_profit.toFixed(4)}
                 </td>
-                <td style={{ ...styles.tdNum, color: profitColor }}>
+                <td className={`${s.tdNum} ${profitClass}`}>
                   {o.estimated_profit.toFixed(4)}
                 </td>
-                <td style={styles.tdNum}>
+                <td className={s.tdNum}>
                   {o.fw_iterations ?? "\u2014"}
                 </td>
-                <td style={styles.tdNum}>
+                <td className={s.tdNum}>
                   {o.bregman_gap != null
                     ? o.bregman_gap.toFixed(6)
                     : "\u2014"}
@@ -146,10 +142,7 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
           })}
           {sorted.length === 0 && (
             <tr>
-              <td
-                colSpan={10}
-                style={{ ...styles.td, textAlign: "center", color: "#555" }}
-              >
+              <td colSpan={10} className={s.empty}>
                 {opportunities.length === 0
                   ? "No opportunities yet"
                   : "No profitable opportunities (toggle to see all)"}
@@ -170,66 +163,12 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
 
 export default OpportunitiesTable;
 
-function statusColor(s: string): React.CSSProperties {
-  switch (s) {
-    case "detected":
-      return { background: "#2a2a00", color: "#ffcc00" };
-    case "optimized":
-      return { background: "#002a00", color: "#00ff88" };
-    case "simulated":
-      return { background: "#00002a", color: "#4488ff" };
-    case "unconverged":
-      return { background: "#2a0000", color: "#ff6644" };
-    default:
-      return { background: "#1a1a1a", color: "#888" };
+function statusClass(status: string): string {
+  switch (status) {
+    case "detected":    return s.statusDetected;
+    case "optimized":   return s.statusOptimized;
+    case "simulated":   return s.statusSimulated;
+    case "unconverged": return s.statusUnconverged;
+    default:            return s.statusDefault;
   }
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  wrap: { overflowX: "auto" },
-  filterBar: {
-    padding: "8px 10px",
-    marginBottom: 8,
-  },
-  toggleBtn: {
-    background: "transparent",
-    border: "1px solid #333",
-    borderRadius: 4,
-    color: "#4488ff",
-    cursor: "pointer",
-    fontSize: 12,
-    padding: "2px 8px",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: 12,
-  },
-  th: {
-    textAlign: "left",
-    padding: "8px 10px",
-    borderBottom: "1px solid #333",
-    color: "#666",
-    fontSize: 11,
-    textTransform: "uppercase",
-    whiteSpace: "nowrap",
-  },
-  row: { borderBottom: "1px solid #1a1a1a" },
-  td: {
-    padding: "8px 10px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  tdNum: {
-    padding: "8px 10px",
-    fontFamily: "monospace",
-    textAlign: "right",
-  },
-  badge: {
-    padding: "2px 8px",
-    borderRadius: 4,
-    fontSize: 11,
-    fontWeight: 600,
-  },
-};

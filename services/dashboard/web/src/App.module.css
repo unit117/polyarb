@@ -1,0 +1,123 @@
+/* App layout */
+.root {
+  min-height: 100vh;
+  padding: var(--space-5) var(--space-8);
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  color: var(--color-green);
+  letter-spacing: -0.5px;
+}
+
+.subtitle {
+  font-size: var(--text-lg);
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Tab navigation */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-2);
+}
+
+.tab {
+  padding: var(--space-2) var(--space-5);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-base);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  letter-spacing: 0.01em;
+}
+
+.tab:hover {
+  color: var(--color-text);
+  background: var(--color-bg-hover);
+}
+
+.tabActive {
+  background: var(--color-bg-card);
+  color: var(--color-green);
+  border-color: var(--color-green);
+}
+
+.tabActive:hover {
+  background: var(--color-bg-card);
+  color: var(--color-green);
+}
+
+/* Mode switcher */
+.switcher {
+  display: flex;
+  gap: 2px;
+  background: var(--color-bg-panel);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.switchBtn {
+  padding: var(--space-1) var(--space-4);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--text-base);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  position: relative;
+  transition: all var(--transition-fast);
+}
+
+.switchBtn:hover {
+  color: var(--color-text-secondary);
+}
+
+.switchBtnActive {
+  background: rgba(0, 230, 122, 0.1);
+  color: var(--color-green);
+}
+
+.switchBtnActiveLive {
+  background: var(--color-orange-bg);
+  color: var(--color-orange);
+}
+
+.liveDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-green);
+  margin-left: 6px;
+  vertical-align: middle;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.main {
+  animation: fadeIn var(--transition-slow);
+}

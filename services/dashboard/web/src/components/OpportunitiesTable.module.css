@@ -1,0 +1,152 @@
+/* OpportunitiesTable */
+.wrap {
+  overflow-x: auto;
+}
+
+.filterBar {
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.filterText {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.toggleBtn {
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  color: var(--color-blue);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  padding: 2px var(--space-2);
+  transition: all var(--transition-fast);
+}
+
+.toggleBtn:hover {
+  background: var(--color-blue-bg);
+  border-color: var(--color-blue);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-light);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.thSub {
+  font-size: 9px;
+  color: var(--color-text-dim);
+  display: block;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.row {
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition: background var(--transition-fast);
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--color-bg-hover) !important;
+}
+
+.rowProfitable {
+  background: var(--color-green-bg-subtle);
+}
+
+.rowMarginal {
+  background: var(--color-yellow-bg);
+}
+
+.td {
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdMarket {
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.tdNum {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  display: inline-block;
+}
+
+.statusDetected {
+  background: rgba(255, 204, 0, 0.12);
+  color: var(--color-yellow);
+}
+
+.statusOptimized {
+  background: var(--color-green-bg);
+  color: var(--color-green);
+}
+
+.statusSimulated {
+  background: var(--color-blue-bg);
+  color: var(--color-blue);
+}
+
+.statusUnconverged {
+  background: var(--color-red-bg);
+  color: var(--color-orange);
+}
+
+.statusDefault {
+  background: rgba(136, 136, 136, 0.1);
+  color: var(--color-text-secondary);
+}
+
+.profitGreen {
+  color: var(--color-green);
+}
+
+.profitYellow {
+  color: var(--color-yellow);
+}
+
+.profitGray {
+  color: var(--color-text-dim);
+}
+
+.empty {
+  text-align: center;
+  color: var(--color-text-dim);
+  padding: var(--space-10) var(--space-3);
+}
