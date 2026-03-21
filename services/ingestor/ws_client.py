@@ -238,17 +238,17 @@ class ClobWebSocket:
                 )
                 row = result.scalar_one_or_none()
                 if row:
-                    prices = dict(row)
-                    self._last_known_prices[market_id] = prices
-                    # Track DB-seeded outcomes that need WS refresh
-                    self._reconnect_pending[market_id] = set(prices.keys())
-                else:
-                    # No DB snapshot yet — mark all known outcomes as
-                    # pending so partial WS data doesn't create an
-                    # incomplete snapshot that readers treat as complete.
-                    expected = self._get_market_outcomes(market_id)
-                    if expected:
-                        self._reconnect_pending[market_id] = expected
+                    self._last_known_prices[market_id] = dict(row)
+                # Use token map as the source of truth for expected
+                # outcomes — DB snapshot keys may be stale/incomplete
+                # for multi-option markets or renamed outcomes.  Fall
+                # back to snapshot keys only if the token map has no
+                # entry (market not in current subscription set).
+                expected = self._get_market_outcomes(market_id)
+                if not expected and row:
+                    expected = set(dict(row).keys())
+                if expected:
+                    self._reconnect_pending[market_id] = expected
 
     async def _flush_snapshots(self) -> None:
         """Periodically flush buffered price updates to DB.
@@ -288,6 +288,14 @@ class ClobWebSocket:
                 # Keep the merge in _last_known_prices only so the state is
                 # ready once all outcomes are WS-refreshed.
                 if market_id in self._reconnect_pending:
+                    continue
+
+                # Cold-start guard: if this market was never seeded and
+                # wasn't added to _reconnect_pending (e.g., token map
+                # wasn't built yet), check that the snapshot has all
+                # expected outcomes before writing a partial row.
+                expected = self._get_market_outcomes(market_id)
+                if expected and not expected.issubset(merged.keys()):
                     continue
 
                 fresh_ids.append(market_id)

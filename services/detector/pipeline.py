@@ -7,6 +7,7 @@ import openai
 import redis.asyncio as aioredis
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish
@@ -245,7 +246,14 @@ class DetectionPipeline:
                     status="detected",
                 )
                 session.add(opp)
-                await session.flush()
+                try:
+                    await session.flush()
+                except IntegrityError:
+                    await session.rollback()
+                    logger.info(
+                        "rescan_duplicate_skipped", pair_id=pair.id
+                    )
+                    continue
                 stats["opportunities"] += 1
 
                 deferred_events.append({
@@ -373,7 +381,18 @@ class DetectionPipeline:
                         status="detected",
                     )
                     session.add(opp)
-                    await session.flush()
+                    try:
+                        await session.flush()
+                    except IntegrityError:
+                        # Unique index violation — another loop already
+                        # created an in-flight opp for this pair.  Roll
+                        # back the failed INSERT and continue with the
+                        # rest of the batch instead of aborting.
+                        await session.rollback()
+                        logger.info(
+                            "rescan_duplicate_skipped", pair_id=pair.id
+                        )
+                        continue
                     stats["opportunities"] += 1
 
                     deferred_events.append({
