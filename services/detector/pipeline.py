@@ -42,6 +42,7 @@ class DetectionPipeline:
     async def run_once(self) -> dict:
         """Execute one full detection cycle. Returns stats dict."""
         stats = {"candidates": 0, "pairs_created": 0, "opportunities": 0}
+        deferred_events: list[tuple[str, dict]] = []
 
         async with self.session_factory() as session:
             # Step 1: Find similar market pairs via pgvector
@@ -127,8 +128,7 @@ class DetectionPipeline:
                 await session.flush()
                 stats["pairs_created"] += 1
 
-                await publish(
-                    self.redis,
+                deferred_events.append((
                     CHANNEL_PAIR_DETECTED,
                     {
                         "pair_id": pair.id,
@@ -137,7 +137,7 @@ class DetectionPipeline:
                         "dependency_type": classification["dependency_type"],
                         "confidence": classification["confidence"],
                     },
-                )
+                ))
 
                 # If there's a theoretical profit on a verified pair, record an opportunity
                 profit = constraint.get("profit_bound", 0.0)
@@ -152,8 +152,7 @@ class DetectionPipeline:
                     await session.flush()
                     stats["opportunities"] += 1
 
-                    await publish(
-                        self.redis,
+                    deferred_events.append((
                         CHANNEL_ARBITRAGE_FOUND,
                         {
                             "opportunity_id": opp.id,
@@ -161,9 +160,13 @@ class DetectionPipeline:
                             "type": "rebalancing",
                             "theoretical_profit": float(profit),
                         },
-                    )
+                    ))
 
             await session.commit()
+
+        # Publish events after commit so downstream consumers can read the rows
+        for channel, payload in deferred_events:
+            await publish(self.redis, channel, payload)
 
         logger.info("detection_cycle_complete", **stats)
 
@@ -176,6 +179,7 @@ class DetectionPipeline:
     async def _rescan_existing_pairs(self) -> dict:
         """Re-evaluate existing pairs that have prices but no opportunities."""
         stats = {"opportunities": 0}
+        deferred_events: list[dict] = []
 
         async with self._rescan_lock, self.session_factory() as session:
             # Find pairs with no opportunities that now have price data
@@ -234,18 +238,18 @@ class DetectionPipeline:
                 await session.flush()
                 stats["opportunities"] += 1
 
-                await publish(
-                    self.redis,
-                    CHANNEL_ARBITRAGE_FOUND,
-                    {
-                        "opportunity_id": opp.id,
-                        "pair_id": pair.id,
-                        "type": "rebalancing",
-                        "theoretical_profit": float(profit),
-                    },
-                )
+                deferred_events.append({
+                    "opportunity_id": opp.id,
+                    "pair_id": pair.id,
+                    "type": "rebalancing",
+                    "theoretical_profit": float(profit),
+                })
 
             await session.commit()
+
+        # Publish after commit so optimizer can read the rows
+        for payload in deferred_events:
+            await publish(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
         if stats["opportunities"] > 0:
             logger.info("rescan_complete", **stats)
@@ -263,10 +267,12 @@ class DetectionPipeline:
         - Has optimized/unconverged opp (blocked by breaker, waiting for retry):
           refresh the pair's constraint matrix and reset the opp to detected so
           the optimizer re-plans with current prices instead of stale trades.
+        - Has pending opp (simulator mid-execution): skip — don't pull the rug.
         - Has detected opp: just refresh the constraint matrix (optimizer hasn't
           run yet, it will read the updated matrix).
         """
         stats = {"opportunities": 0, "pairs_checked": 0, "refreshed": 0}
+        deferred_events: list[dict] = []
 
         async with self._rescan_lock, self.session_factory() as session:
             # Fetch all verified pairs affected by these market IDs
@@ -326,6 +332,9 @@ class DetectionPipeline:
 
                 existing_opp = in_flight_opps.get(pair.id)
                 if existing_opp:
+                    # Don't touch pending opps — simulator is mid-execution
+                    if existing_opp.status == "pending":
+                        continue
                     # Refresh the existing opportunity with current profit
                     existing_opp.theoretical_profit = Decimal(
                         str(max(profit, 0))
@@ -338,6 +347,13 @@ class DetectionPipeline:
                         existing_opp.optimal_trades = None
                         existing_opp.fw_iterations = None
                         existing_opp.bregman_gap = None
+                        # Emit arb event so optimizer picks it up reactively
+                        deferred_events.append({
+                            "opportunity_id": existing_opp.id,
+                            "pair_id": pair.id,
+                            "type": "rebalancing",
+                            "theoretical_profit": float(max(profit, 0)),
+                        })
                     stats["refreshed"] += 1
                 elif profit > 0:
                     opp = ArbitrageOpportunity(
@@ -350,18 +366,18 @@ class DetectionPipeline:
                     await session.flush()
                     stats["opportunities"] += 1
 
-                    await publish(
-                        self.redis,
-                        CHANNEL_ARBITRAGE_FOUND,
-                        {
-                            "opportunity_id": opp.id,
-                            "pair_id": pair.id,
-                            "type": "rebalancing",
-                            "theoretical_profit": float(profit),
-                        },
-                    )
+                    deferred_events.append({
+                        "opportunity_id": opp.id,
+                        "pair_id": pair.id,
+                        "type": "rebalancing",
+                        "theoretical_profit": float(profit),
+                    })
 
             await session.commit()
+
+        # Publish after commit so optimizer/simulator can read the rows
+        for payload in deferred_events:
+            await publish(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
         if stats["opportunities"] > 0 or stats["refreshed"] > 0:
             logger.info("snapshot_rescan_complete", **stats)
