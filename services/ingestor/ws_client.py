@@ -60,7 +60,12 @@ class ClobWebSocket:
         self._flush_task: asyncio.Task | None = None
         self._running = False
         self.connected = False  # Exposed for graceful degradation
-        self._reconnect_grace = False  # Suppress first flush after reconnect
+        # After reconnect, tracks markets whose prices were DB-seeded and
+        # still have outcomes not yet refreshed by WS.  Maps market_id →
+        # set of outcome names still awaiting a WS update.  Markets in
+        # this dict are excluded from detector snapshot events to prevent
+        # phantom arbs from mixed old-DB / new-WS prices.
+        self._reconnect_pending: dict[int, set[str]] = {}
 
     async def _build_token_map(self) -> None:
         """Build token_id -> (market_id, outcome_name) lookup from DB."""
@@ -205,7 +210,11 @@ class ClobWebSocket:
                 break
 
     async def _seed_last_known_prices(self, market_ids: list[int]) -> None:
-        """Load the latest complete snapshot for each market from DB."""
+        """Load the latest complete snapshot for each market from DB.
+
+        If we're in a post-reconnect window, records the seeded outcomes
+        so we can track when each market has been fully refreshed by WS.
+        """
         if not market_ids:
             return
         async with self._session_factory() as session:
@@ -218,7 +227,11 @@ class ClobWebSocket:
                 )
                 row = result.scalar_one_or_none()
                 if row:
-                    self._last_known_prices[market_id] = dict(row)
+                    prices = dict(row)
+                    self._last_known_prices[market_id] = prices
+                    # Track DB-seeded outcomes that need WS refresh
+                    if self._reconnect_pending is not None:
+                        self._reconnect_pending[market_id] = set(prices.keys())
 
     async def _flush_snapshots(self) -> None:
         """Periodically flush buffered price updates to DB.
@@ -286,19 +299,25 @@ class ClobWebSocket:
                                         "price": price,
                                     })
 
-                # After reconnect, write snapshots to DB but don't notify
-                # the detector until the WS has had a full flush cycle to
-                # populate prices — avoids phantom arbs from partial data.
-                if self._reconnect_grace:
-                    self._reconnect_grace = False
-                    log.info("ws_grace_flush_suppressed", count=len(rows))
-                else:
+                # Exclude markets still pending full WS refresh after
+                # reconnect — their prices mix stale DB seed with partial
+                # WS updates and could create phantom arb spreads.
+                fresh_ids = [
+                    r["market_id"] for r in rows
+                    if r["market_id"] not in self._reconnect_pending
+                ]
+                if fresh_ids:
                     await publish(self._redis, CHANNEL_SNAPSHOT_CREATED, {
-                        "count": len(rows),
+                        "count": len(fresh_ids),
                         "source": "websocket",
-                        "market_ids": [r["market_id"] for r in rows],
+                        "market_ids": fresh_ids,
                     })
-                    log.info("ws_snapshots_flushed", count=len(rows))
+                stale_count = len(rows) - len(fresh_ids)
+                log.info(
+                    "ws_snapshots_flushed",
+                    count=len(fresh_ids),
+                    stale_suppressed=stale_count,
+                )
             except Exception:
                 log.exception("ws_flush_error", count=len(rows))
 
@@ -324,6 +343,7 @@ class ClobWebSocket:
                     self._pending_snapshots[market_id] = {"prices": {}, "midpoints": {}}
                 self._pending_snapshots[market_id]["prices"][outcome] = mid
                 self._pending_snapshots[market_id]["midpoints"][outcome] = mid
+                self._mark_outcome_refreshed(market_id, outcome)
 
     def _handle_last_trade(self, msg: dict) -> None:
         """Process a last_trade_price event — update buffered price."""
@@ -340,6 +360,15 @@ class ClobWebSocket:
         if market_id not in self._pending_snapshots:
             self._pending_snapshots[market_id] = {"prices": {}, "midpoints": {}}
         self._pending_snapshots[market_id]["prices"][outcome] = str(price)
+        self._mark_outcome_refreshed(market_id, outcome)
+
+    def _mark_outcome_refreshed(self, market_id: int, outcome: str) -> None:
+        """Remove an outcome from the reconnect-pending set for a market."""
+        if market_id not in self._reconnect_pending:
+            return
+        self._reconnect_pending[market_id].discard(outcome)
+        if not self._reconnect_pending[market_id]:
+            del self._reconnect_pending[market_id]
 
     async def _listen(self) -> None:
         """Main message loop — parse and dispatch events."""
@@ -380,11 +409,12 @@ class ClobWebSocket:
         while self._running:
             try:
                 log.info("ws_connecting", url=self._ws_url, tokens=len(initial_token_ids))
-                # Clear stale cached prices so first flush re-seeds from DB,
-                # preventing phantom spreads from old/new price mixing.
+                # Clear stale cached prices so first flush re-seeds from DB.
+                # _reconnect_pending will be populated during seeding to
+                # track which markets still need full WS price refresh.
                 self._last_known_prices.clear()
                 self._pending_snapshots.clear()
-                self._reconnect_grace = consecutive_failures > 0
+                self._reconnect_pending.clear()
                 await self._connect(initial_token_ids)
                 consecutive_failures = 0
                 self.connected = True
