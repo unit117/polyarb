@@ -1,5 +1,6 @@
 """Detection pipeline: similarity → classification → constraint generation."""
 
+import asyncio
 from decimal import Decimal
 
 import openai
@@ -36,6 +37,7 @@ class DetectionPipeline:
         self.similarity_top_k = similarity_top_k
         self.batch_size = batch_size
         self.classifier_model = classifier_model
+        self._rescan_lock = asyncio.Lock()
 
     async def run_once(self) -> dict:
         """Execute one full detection cycle. Returns stats dict."""
@@ -175,7 +177,7 @@ class DetectionPipeline:
         """Re-evaluate existing pairs that have prices but no opportunities."""
         stats = {"opportunities": 0}
 
-        async with self.session_factory() as session:
+        async with self._rescan_lock, self.session_factory() as session:
             # Find pairs with no opportunities that now have price data
             from shared.models import PriceSnapshot
 
@@ -259,7 +261,7 @@ class DetectionPipeline:
         """
         stats = {"opportunities": 0, "pairs_checked": 0}
 
-        async with self.session_factory() as session:
+        async with self._rescan_lock, self.session_factory() as session:
             # Exclude pairs with in-flight opportunities at any pipeline stage.
             # Terminal statuses (simulated, skipped) mean the opportunity is done
             # and the pair is eligible for fresh detection as prices move.
