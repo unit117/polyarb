@@ -225,7 +225,7 @@ class SimulatorPipeline:
             )
 
             return {
-                "status": "simulated",
+                "status": "simulated" if trades_executed > 0 else "blocked",
                 "trades_executed": trades_executed,
                 "cash_remaining": float(self.portfolio.cash),
             }
