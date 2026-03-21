@@ -1,0 +1,108 @@
+/* StatsBar */
+.bar {
+  display: flex;
+  gap: var(--space-6);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg-panel);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+  align-items: flex-start;
+  border: 1px solid var(--color-border);
+}
+
+.stat {
+  min-width: 80px;
+}
+
+.clickable {
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.clickable:hover {
+  opacity: 0.8;
+}
+
+.label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  margin-bottom: var(--space-1);
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.value {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.valueSmall {
+  font-size: var(--text-lg);
+}
+
+/* PnL group */
+.pnlGroup {
+  min-width: 200px;
+}
+
+.pnlGroupLabel {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  margin-bottom: var(--space-1);
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.pnlRow {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.pnlItem {
+  position: relative;
+}
+
+.pnlLabel {
+  font-size: 9px;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+  letter-spacing: 0.05em;
+}
+
+.pnlAmount {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.pnlBold {
+  font-weight: 700;
+}
+
+.positive {
+  color: var(--color-green);
+}
+
+.negative {
+  color: var(--color-red);
+}
+
+/* Trend arrow */
+.trendUp {
+  color: var(--color-green);
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+.trendDown {
+  color: var(--color-red);
+  font-size: 10px;
+  margin-left: 4px;
+}

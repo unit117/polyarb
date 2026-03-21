@@ -1,5 +1,6 @@
 import React from "react";
 import type { Stats } from "../hooks/useDashboardData.ts";
+import s from "./StatsBar.module.css";
 
 interface Props {
   stats: Stats | null;
@@ -7,12 +8,10 @@ interface Props {
 }
 
 const StatsBar = React.memo(function StatsBar({ stats, onStatClick }: Props) {
-  if (!stats) return <div style={styles.bar}>Loading...</div>;
+  if (!stats) return <div className={s.bar}>Loading...</div>;
 
   const p = stats.portfolio;
 
-  // Unrealized win rate: % of open positions currently in profit
-  // (approximated from unrealized PNL > 0 when we have positions)
   const unrealizedWinRate =
     p && p.total_positions > 0 && p.unrealized_pnl > 0
       ? `~${Math.min(100, Math.round((p.unrealized_pnl / p.total_value) * 1000))}%`
@@ -20,14 +19,13 @@ const StatsBar = React.memo(function StatsBar({ stats, onStatClick }: Props) {
         ? "0%"
         : "\u2014";
 
-  // Realized win rate: nothing has resolved yet
   const realizedWinRate =
     p && p.settled_trades > 0
       ? `${((p.winning_trades / p.settled_trades) * 100).toFixed(1)}%`
       : null;
 
   return (
-    <div style={styles.bar}>
+    <div className={s.bar}>
       <Stat
         label="Markets"
         value={stats.active_markets.toLocaleString()}
@@ -51,9 +49,9 @@ const StatsBar = React.memo(function StatsBar({ stats, onStatClick }: Props) {
         label="Portfolio"
         value={p ? `$${p.total_value.toFixed(2)}` : "\u2014"}
       />
-      <div style={styles.pnlGroup}>
-        <div style={styles.pnlGroupLabel}>PnL</div>
-        <div style={styles.pnlRow}>
+      <div className={s.pnlGroup}>
+        <div className={s.pnlGroupLabel}>PnL</div>
+        <div className={s.pnlRow}>
           <PnlValue label="Unrealized" amount={p?.unrealized_pnl ?? null} total={p?.total_value ?? null} />
           <PnlValue label="Realized" amount={p?.realized_pnl ?? null} total={p?.total_value ?? null} />
           <PnlValue label="Total" amount={p?.total_pnl ?? null} total={p?.total_value ?? null} bold />
@@ -89,28 +87,24 @@ function PnlValue({
 }) {
   if (amount === null) {
     return (
-      <div style={styles.pnlItem}>
-        <div style={styles.pnlLabel}>{label}</div>
-        <div style={styles.pnlAmount}>{"\u2014"}</div>
+      <div className={s.pnlItem}>
+        <div className={s.pnlLabel}>{label}</div>
+        <div className={s.pnlAmount}>{"\u2014"}</div>
       </div>
     );
   }
 
-  const color = amount >= 0 ? "#00ff88" : "#ff4444";
-  const sign = amount >= 0 ? "+" : "";
+  const isPositive = amount >= 0;
+  const sign = isPositive ? "+" : "";
   const pct = total && total > 0 ? ` (${sign}${((amount / total) * 100).toFixed(1)}%)` : "";
+  const trendClass = isPositive ? s.trendUp : s.trendDown;
 
   return (
-    <div style={styles.pnlItem}>
-      <div style={styles.pnlLabel}>{label}</div>
-      <div
-        style={{
-          ...styles.pnlAmount,
-          color,
-          fontWeight: bold ? 700 : 600,
-        }}
-      >
+    <div className={s.pnlItem}>
+      <div className={s.pnlLabel}>{label}</div>
+      <div className={`${s.pnlAmount} ${isPositive ? s.positive : s.negative} ${bold ? s.pnlBold : ""}`}>
         {sign}${amount.toFixed(2)}{pct}
+        <span className={trendClass}>{isPositive ? "\u25B2" : "\u25BC"}</span>
       </div>
     </div>
   );
@@ -119,81 +113,23 @@ function PnlValue({
 function Stat({
   label,
   value,
-  color,
   onClick,
   small,
 }: {
   label: string;
   value: string;
-  color?: string;
   onClick?: () => void;
   small?: boolean;
 }) {
   return (
     <div
-      style={{
-        ...styles.stat,
-        ...(onClick ? styles.clickable : {}),
-      }}
+      className={`${s.stat} ${onClick ? s.clickable : ""}`}
       onClick={onClick}
     >
-      <div style={styles.label}>{label}</div>
-      <div
-        style={{
-          ...styles.value,
-          color: color || "#e0e0e0",
-          ...(small ? { fontSize: 14 } : {}),
-        }}
-      >
+      <div className={s.label}>{label}</div>
+      <div className={`${s.value} ${small ? s.valueSmall : ""}`}>
         {value}
       </div>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  bar: {
-    display: "flex",
-    gap: 24,
-    padding: "16px 20px",
-    background: "#111118",
-    borderRadius: 8,
-    marginBottom: 20,
-    flexWrap: "wrap",
-    alignItems: "flex-start",
-  },
-  stat: { minWidth: 80 },
-  clickable: { cursor: "pointer" },
-  label: {
-    fontSize: 11,
-    color: "#666",
-    textTransform: "uppercase",
-    marginBottom: 4,
-  },
-  value: { fontSize: 20, fontWeight: 600 },
-  pnlGroup: {
-    minWidth: 200,
-  },
-  pnlGroupLabel: {
-    fontSize: 11,
-    color: "#666",
-    textTransform: "uppercase",
-    marginBottom: 4,
-  },
-  pnlRow: {
-    display: "flex",
-    gap: 16,
-  },
-  pnlItem: {},
-  pnlLabel: {
-    fontSize: 9,
-    color: "#555",
-    textTransform: "uppercase",
-    marginBottom: 2,
-  },
-  pnlAmount: {
-    fontSize: 16,
-    fontWeight: 600,
-    fontFamily: "monospace",
-  },
-};

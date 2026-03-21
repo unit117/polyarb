@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import {
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -10,6 +10,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import type { HistoryPoint } from "../hooks/useDashboardData.ts";
+import s from "./PnlChart.module.css";
 
 interface Props {
   history: HistoryPoint[];
@@ -50,61 +51,75 @@ const PnlChart = React.memo(function PnlChart({
 
   if (chartData.length === 0) {
     return (
-      <div style={styles.empty}>
+      <div className={s.empty}>
         No portfolio data yet. Waiting for first trades...
       </div>
     );
   }
 
   return (
-    <div style={styles.container}>
-      <h3 style={styles.title}>Portfolio Value (24h)</h3>
+    <div className={s.container}>
+      <h3 className={s.title}>Portfolio Value (24h)</h3>
       <ResponsiveContainer width="100%" height={250}>
-        <LineChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#222" />
+        <AreaChart data={chartData}>
+          <defs>
+            <linearGradient id="gradientGreen" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#00e67a" stopOpacity={0.2} />
+              <stop offset="100%" stopColor="#00e67a" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="gradientBlue" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4488ff" stopOpacity={0.1} />
+              <stop offset="100%" stopColor="#4488ff" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2e" />
           <XAxis
             dataKey="time"
             stroke="#555"
             fontSize={11}
+            fontFamily="var(--font-mono)"
             interval={Math.max(0, Math.floor(chartData.length / 8) - 1)}
             angle={0}
           />
           <YAxis
             stroke="#555"
             fontSize={11}
+            fontFamily="var(--font-mono)"
             domain={[yMin, yMax]}
             tickFormatter={(v: number) => `$${v.toLocaleString()}`}
           />
           <Tooltip content={<CustomTooltip initialCapital={initialCapital} />} />
           <ReferenceLine
             y={initialCapital}
-            stroke="#666"
+            stroke="#444"
             strokeDasharray="6 3"
             label={{
               value: `Starting $${initialCapital.toLocaleString()}`,
               position: "insideTopRight",
-              fill: "#666",
+              fill: "#555",
               fontSize: 10,
             }}
           />
-          <Line
+          <Area
             type="monotone"
             dataKey="value"
-            stroke="#00ff88"
+            stroke="#00e67a"
             strokeWidth={2}
+            fill="url(#gradientGreen)"
             dot={false}
             name="Portfolio Value"
           />
-          <Line
+          <Area
             type="monotone"
             dataKey="pnl"
             stroke="#4488ff"
             strokeWidth={1.5}
+            fill="url(#gradientBlue)"
             dot={false}
             strokeDasharray="4 2"
             name="Unrealized PnL"
           />
-        </LineChart>
+        </AreaChart>
       </ResponsiveContainer>
     </div>
   );
@@ -126,20 +141,20 @@ function CustomTooltip({
 
   const value = payload[0]?.value ?? 0;
   const pnl = value - initialCapital;
-  const pnlColor = pnl >= 0 ? "#00ff88" : "#ff4444";
-  const sign = pnl >= 0 ? "+" : "";
+  const isPositive = pnl >= 0;
+  const sign = isPositive ? "+" : "";
 
   return (
-    <div style={tooltipStyles.container}>
-      <div style={tooltipStyles.row}>
-        <span style={{ color: "#888" }}>Value:</span>
-        <span style={{ color: "#e0e0e0", fontWeight: 600 }}>
+    <div className={s.tooltip}>
+      <div className={s.tooltipRow}>
+        <span className={s.tooltipLabel}>Value:</span>
+        <span className={s.tooltipValue}>
           ${value.toFixed(2)}
         </span>
       </div>
-      <div style={tooltipStyles.row}>
-        <span style={{ color: "#888" }}>PnL:</span>
-        <span style={{ color: pnlColor, fontWeight: 600 }}>
+      <div className={s.tooltipRow}>
+        <span className={s.tooltipLabel}>PnL:</span>
+        <span className={isPositive ? s.tooltipValuePositive : s.tooltipValueNegative}>
           {sign}${pnl.toFixed(2)} ({sign}
           {((pnl / initialCapital) * 100).toFixed(2)}%)
         </span>
@@ -147,38 +162,3 @@ function CustomTooltip({
     </div>
   );
 }
-
-const tooltipStyles: Record<string, React.CSSProperties> = {
-  container: {
-    background: "#1a1a2e",
-    border: "1px solid #333",
-    borderRadius: 6,
-    padding: "8px 12px",
-    fontSize: 12,
-  },
-  row: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 16,
-    lineHeight: 1.6,
-  },
-};
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    background: "#111118",
-    borderRadius: 8,
-    padding: 20,
-    marginBottom: 20,
-  },
-  title: { margin: "0 0 12px", fontSize: 14, color: "#888" },
-  empty: {
-    background: "#111118",
-    borderRadius: 8,
-    padding: 40,
-    textAlign: "center",
-    color: "#555",
-    marginBottom: 20,
-    fontSize: 13,
-  },
-};

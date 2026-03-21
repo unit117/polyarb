@@ -1,0 +1,108 @@
+/* TradesTable */
+.wrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-light);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.row {
+  border-bottom: 1px solid var(--color-border-subtle);
+  transition: background var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--color-bg-hover) !important;
+}
+
+.rowGroupStart {
+  border-top: 1px solid rgba(100, 100, 150, 0.2);
+}
+
+.rowAlt {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.td {
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdMarket {
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.tdNum {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tdReason {
+  padding: var(--space-2) var(--space-3);
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Source badge */
+.sourceBadge {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  display: inline-block;
+}
+
+.sourcePaper {
+  background: rgba(0, 230, 122, 0.1);
+  color: var(--color-green);
+}
+
+.sourceLive {
+  background: var(--color-orange-bg);
+  color: var(--color-orange);
+}
+
+/* Side */
+.sideBuy {
+  color: var(--color-green);
+  font-weight: 600;
+}
+
+.sideSell {
+  color: var(--color-red);
+  font-weight: 600;
+}
+
+.empty {
+  text-align: center;
+  color: var(--color-text-dim);
+  padding: var(--space-10) var(--space-3);
+}
