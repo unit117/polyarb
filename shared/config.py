@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     max_snapshot_markets: int = 100
     log_level: str = "INFO"
 
+    # WebSocket streaming settings
+    ws_enabled: bool = True
+    ws_clob_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    ws_reconnect_base_delay: float = 1.0
+    ws_reconnect_max_delay: float = 60.0
+    ws_ping_interval: int = 10
+    ws_snapshot_buffer_seconds: float = 2.0
+
     # Detector settings
     similarity_threshold: float = 0.82
     similarity_top_k: int = 20
