@@ -147,6 +147,26 @@
   color: var(--color-green);
 }
 
+.venueBadge {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.venuePolymarket {
+  background: rgba(106, 90, 205, 0.12);
+  color: #8b7fd4;
+}
+
+.venueKalshi {
+  background: rgba(0, 150, 255, 0.12);
+  color: #4da6ff;
+}
+
 .profitYellow {
   color: var(--color-yellow);
 }

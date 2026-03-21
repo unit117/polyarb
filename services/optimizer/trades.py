@@ -8,7 +8,7 @@ capture the arbitrage.
 import structlog
 import numpy as np
 
-from shared.config import polymarket_fee
+from shared.config import venue_fee
 from services.optimizer.frank_wolfe import FWResult
 
 logger = structlog.get_logger()
@@ -24,6 +24,8 @@ def compute_trades(
     outcomes_b: list[str],
     theoretical_profit: float = 0.0,
     min_edge: float = 0.03,
+    venue_a: str = "polymarket",
+    venue_b: str = "polymarket",
 ) -> dict:
     """Compute optimal trades from the FW result.
 
@@ -48,9 +50,9 @@ def compute_trades(
     # best-edge leg.  In binary markets BUY Yes and SELL No are mirrors
     # of the same mispricing — executing both pays double fees for the
     # same edge.
-    for market_label, outcomes, q_vec, p_vec in [
-        ("A", outcomes_a, q_a, p_a),
-        ("B", outcomes_b, q_b, p_b),
+    for market_label, outcomes, q_vec, p_vec, venue in [
+        ("A", outcomes_a, q_a, p_a, venue_a),
+        ("B", outcomes_b, q_b, p_b, venue_b),
     ]:
         candidates = []
         for i, outcome in enumerate(outcomes):
@@ -64,6 +66,7 @@ def compute_trades(
                     "edge": round(abs(edge), 6),
                     "market_price": round(float(p_vec[i]), 6),
                     "fair_price": round(float(q_vec[i]), 6),
+                    "venue": venue,
                 })
         if candidates:
             # Keep only the single best leg per market
@@ -99,7 +102,8 @@ def compute_trades(
 
     # Estimated fees: per-leg using venue fee schedule at trade price
     est_fees = sum(
-        polymarket_fee(t["market_price"], t["side"]) for t in trades
+        venue_fee(t.get("venue", "polymarket"), t["market_price"], t["side"])
+        for t in trades
     )
 
     estimated_profit = max(raw_edge - est_fees, 0.0)

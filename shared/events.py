@@ -8,9 +8,7 @@ from shared.config import settings
 # Channel payload schemas (all payloads are JSON dicts):
 #
 # MARKET_UPDATED:        {action: "sync", count: int}
-# SNAPSHOT_CREATED:      {count: int, source?: "websocket", market_ids?: [int]}
-#                        - source/market_ids present only from WS path
-#                        - polling path omits them (triggers full detection instead)
+# SNAPSHOT_CREATED:      {count: int, source: "websocket"|"polling", market_ids: [int]}
 # PAIR_DETECTED:         {pair_id, market_a_id, market_b_id, dependency_type, confidence}
 # ARBITRAGE_FOUND:       {opportunity_id, pair_id, type, theoretical_profit}
 # OPTIMIZATION_COMPLETE: {opportunity_id, pair_id, status, iterations, bregman_gap,

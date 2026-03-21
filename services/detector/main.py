@@ -89,10 +89,10 @@ async def _snapshot_rescan_loop(pipeline: DetectionPipeline, redis) -> None:
     # Two concurrent tasks: one collects, one drains
     async def _collect():
         async for event in subscribe(redis, CHANNEL_SNAPSHOT_CREATED):
-            if event.get("source") == "websocket":
-                # The snapshot event contains market IDs from the flush
-                market_ids = event.get("market_ids", [])
-                pending_market_ids.update(market_ids)
+            # React to snapshots from any source (WS or polling) so
+            # graceful degradation rescans pairs even when WS is down.
+            market_ids = event.get("market_ids", [])
+            pending_market_ids.update(market_ids)
 
     async def _drain():
         while True:

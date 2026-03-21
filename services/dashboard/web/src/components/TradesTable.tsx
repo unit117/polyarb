@@ -63,7 +63,12 @@ const TradesTable = React.memo(function TradesTable({ trades, pagination, onLoad
                       {t.source || "paper"}
                     </span>
                   </td>
-                  <td className={s.tdMarket}>{t.market}</td>
+                  <td className={s.tdMarket}>
+                    {t.venue && t.venue !== "polymarket" && (
+                      <span className={s.venueBadge}>{t.venue}</span>
+                    )}
+                    {t.market}
+                  </td>
                   <td className={s.td}>{t.outcome}</td>
                   <td className={s.td}>
                     <span className={t.side === "BUY" ? s.sideBuy : s.sideSell}>

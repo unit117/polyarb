@@ -120,6 +120,7 @@ class MarketPoller:
             if not polymarket_id:
                 continue
             rows_by_id[polymarket_id] = {
+                "venue": "polymarket",
                 "polymarket_id": polymarket_id,
                 "event_id": raw.get("eventId"),
                 "question": raw.get("question", ""),
@@ -141,7 +142,7 @@ class MarketPoller:
                 batch = rows[i : i + BATCH_SIZE]
                 stmt = insert(Market).values(batch)
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=["polymarket_id"],
+                    constraint="uq_markets_venue_polymarket_id",
                     set_={
                         "question": stmt.excluded.question,
                         "description": stmt.excluded.description,
@@ -156,11 +157,10 @@ class MarketPoller:
                 await session.execute(stmt)
                 log.info("sync_markets_batch", offset=i, batch_size=len(batch))
 
-            # Mark stale markets inactive using a subquery approach
-            # Instead of notin_ with 30K+ IDs, update all active then re-activate seen ones
+            # Mark stale Polymarket markets inactive (scoped to venue)
             await session.execute(
                 update(Market)
-                .where(Market.active == True)  # noqa: E712
+                .where(Market.active == True, Market.venue == "polymarket")  # noqa: E712
                 .values(active=False)
             )
             # The upserts above already set active=True for all seen markets,
@@ -169,14 +169,14 @@ class MarketPoller:
                 batch_ids = [r["polymarket_id"] for r in rows[i : i + BATCH_SIZE]]
                 await session.execute(
                     update(Market)
-                    .where(Market.polymarket_id.in_(batch_ids))
+                    .where(Market.polymarket_id.in_(batch_ids), Market.venue == "polymarket")
                     .values(active=True)
                 )
 
             await session.commit()
 
             result = await session.execute(
-                select(Market).where(Market.active == True)  # noqa: E712
+                select(Market).where(Market.active == True, Market.venue == "polymarket")  # noqa: E712
             )
             markets = list(result.scalars().all())
 
@@ -288,7 +288,11 @@ class MarketPoller:
         await publish(
             self._redis,
             CHANNEL_SNAPSHOT_CREATED,
-            {"count": len(snapshots_to_insert)},
+            {
+                "count": len(snapshots_to_insert),
+                "source": "polling",
+                "market_ids": [s["market_id"] for s in snapshots_to_insert],
+            },
         )
 
     async def check_resolved_markets(self) -> None:
@@ -300,6 +304,7 @@ class MarketPoller:
             return
 
         resolved_count = 0
+        deferred_resolution_events: list[dict] = []
         async with self._session_factory() as session:
             for raw in closed_markets:
                 polymarket_id = str(raw.get("id", ""))
@@ -307,7 +312,10 @@ class MarketPoller:
                     continue
 
                 result = await session.execute(
-                    select(Market).where(Market.polymarket_id == polymarket_id)
+                    select(Market).where(
+                        Market.polymarket_id == polymarket_id,
+                        Market.venue == "polymarket",
+                    )
                 )
                 market = result.scalar_one_or_none()
                 if not market or market.resolved_outcome:
@@ -323,7 +331,7 @@ class MarketPoller:
                 market.active = False
                 resolved_count += 1
 
-                await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
+                deferred_resolution_events.append({
                     "market_id": market.id,
                     "resolved_outcome": winning_outcome,
                     "source": "gamma_api",
@@ -331,6 +339,9 @@ class MarketPoller:
 
             if resolved_count > 0:
                 await session.commit()
+                # Publish after commit so subscribers see durable rows
+                for event in deferred_resolution_events:
+                    await publish(self._redis, CHANNEL_MARKET_RESOLVED, event)
                 log.info("resolution_check_done", resolved=resolved_count)
 
     async def poll_once(self) -> list[Market]:

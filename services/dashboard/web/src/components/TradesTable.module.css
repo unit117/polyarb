@@ -101,6 +101,17 @@
   font-weight: 600;
 }
 
+.venueBadge {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-right: 4px;
+  background: rgba(0, 150, 255, 0.12);
+  color: #4da6ff;
+}
+
 .empty {
   text-align: center;
   color: var(--color-text-dim);

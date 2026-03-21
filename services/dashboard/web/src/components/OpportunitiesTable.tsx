@@ -120,9 +120,15 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
                 </td>
                 <td className={s.td}>{o.type}</td>
                 <td className={s.tdMarket}>
+                  {o.pair?.market_a_venue && o.pair.market_a_venue !== "polymarket" && (
+                    <span className={`${s.venueBadge} ${s.venueKalshi}`}>{o.pair.market_a_venue}</span>
+                  )}
                   {o.pair?.market_a || "\u2014"}
                 </td>
                 <td className={s.tdMarket}>
+                  {o.pair?.market_b_venue && o.pair.market_b_venue !== "polymarket" && (
+                    <span className={`${s.venueBadge} ${s.venueKalshi}`}>{o.pair.market_b_venue}</span>
+                  )}
                   {o.pair?.market_b || "\u2014"}
                 </td>
                 <td className={s.td}>

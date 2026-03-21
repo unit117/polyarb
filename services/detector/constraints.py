@@ -50,6 +50,8 @@ def build_constraint_matrix(
         matrix = _conditional_matrix(
             n_a, n_b, outcomes_a, outcomes_b, prices_a, prices_b, correlation
         )
+    elif dependency_type == "cross_platform":
+        matrix = _cross_platform_matrix(n_a, n_b)
     else:
         matrix = _unconstrained_matrix(n_a, n_b)
 
@@ -195,6 +197,20 @@ def _conditional_matrix(
     return matrix
 
 
+def _cross_platform_matrix(n_a: int, n_b: int) -> list[list[int]]:
+    """Same event on two venues: outcomes must agree (identity constraint).
+
+    (Yes,Yes)=1, (No,No)=1, mixed=0 — the markets should resolve identically.
+    """
+    if n_a == 2 and n_b == 2:
+        return [
+            [1, 0],  # A=Yes ↔ B=Yes
+            [0, 1],  # A=No ↔ B=No
+        ]
+    # Fallback for non-binary (shouldn't happen for cross-platform)
+    return [[1 if i == j else 0 for j in range(n_b)] for i in range(n_a)]
+
+
 def _unconstrained_matrix(n_a: int, n_b: int) -> list[list[int]]:
     return [[1] * n_b for _ in range(n_a)]
 
@@ -221,6 +237,22 @@ def _compute_profit_bound(
             return float(v)
         except (TypeError, ValueError):
             return 0.0
+
+    if dependency_type == "cross_platform":
+        # Cross-platform arb: buy cheap Yes, sell expensive Yes (or vice versa).
+        # Profit = price spread minus both venue fees.
+        from shared.config import venue_fee
+
+        p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
+        p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
+        spread = abs(p_a - p_b)
+        # Determine venues from the constraint metadata (fallback to polymarket)
+        venue_a = "polymarket"
+        venue_b = "kalshi"
+        fee_a = venue_fee(venue_a, min(p_a, p_b), "BUY")
+        fee_b = venue_fee(venue_b, max(p_a, p_b), "BUY")
+        net = spread - fee_a - fee_b
+        return round(net, 6) if net > 0.001 else 0.0
 
     if dependency_type == "partition":
         total = sum(_f(prices_a.get(o, 0)) for o in outcomes_a) + sum(

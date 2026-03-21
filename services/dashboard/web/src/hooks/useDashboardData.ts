@@ -47,7 +47,9 @@ export interface Opportunity {
     dependency_type: string;
     confidence: number;
     market_a: string;
+    market_a_venue?: string;
     market_b: string;
+    market_b_venue?: string;
   } | null;
 }
 
@@ -64,6 +66,7 @@ export interface Trade {
   fees: number;
   executed_at: string;
   source?: string;
+  venue?: string;
 }
 
 export interface Pair {
@@ -72,8 +75,8 @@ export interface Pair {
   confidence: number;
   verified: boolean;
   detected_at: string;
-  market_a: { id: number; question: string } | null;
-  market_b: { id: number; question: string } | null;
+  market_a: { id: number; question: string; venue?: string } | null;
+  market_b: { id: number; question: string; venue?: string } | null;
   opportunity_count: number;
 }
 
