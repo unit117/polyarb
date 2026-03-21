@@ -55,6 +55,8 @@ class SimulatorPipeline:
             self._in_flight.discard(opportunity_id)
 
     async def _simulate_opportunity_inner(self, opportunity_id: int) -> dict:
+        # Mark as pending in a short transaction so the detector won't
+        # reset this opportunity while we're mid-execution.
         async with self.session_factory() as session:
             opp = await session.get(ArbitrageOpportunity, opportunity_id)
             if not opp:
@@ -65,6 +67,14 @@ class SimulatorPipeline:
 
             if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
                 return {"status": "no_trades"}
+
+            opp.status = "pending"
+            await session.commit()
+
+        async with self.session_factory() as session:
+            opp = await session.get(ArbitrageOpportunity, opportunity_id)
+            if not opp or opp.status != "pending":
+                return {"status": "skipped", "reason": "status_changed"}
 
             pair = await session.get(MarketPair, opp.pair_id)
             if not pair:
@@ -206,11 +216,12 @@ class SimulatorPipeline:
                     },
                 )
 
-            # Only mark simulated if at least one trade executed;
-            # leave as optimized/unconverged so it can be retried after
-            # a circuit breaker cooldown clears.
+            # Mark simulated if trades executed; revert to optimized
+            # if all were blocked so it can be retried after cooldown.
             if trades_executed > 0:
                 opp.status = "simulated"
+            else:
+                opp.status = "optimized"
             await session.commit()
 
             # Record success/loss on circuit breaker

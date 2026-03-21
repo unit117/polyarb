@@ -60,6 +60,7 @@ class ClobWebSocket:
         self._flush_task: asyncio.Task | None = None
         self._running = False
         self.connected = False  # Exposed for graceful degradation
+        self._reconnect_grace = False  # Suppress first flush after reconnect
 
     async def _build_token_map(self) -> None:
         """Build token_id -> (market_id, outcome_name) lookup from DB."""
@@ -285,12 +286,19 @@ class ClobWebSocket:
                                         "price": price,
                                     })
 
-                await publish(self._redis, CHANNEL_SNAPSHOT_CREATED, {
-                    "count": len(rows),
-                    "source": "websocket",
-                    "market_ids": [r["market_id"] for r in rows],
-                })
-                log.info("ws_snapshots_flushed", count=len(rows))
+                # After reconnect, write snapshots to DB but don't notify
+                # the detector until the WS has had a full flush cycle to
+                # populate prices — avoids phantom arbs from partial data.
+                if self._reconnect_grace:
+                    self._reconnect_grace = False
+                    log.info("ws_grace_flush_suppressed", count=len(rows))
+                else:
+                    await publish(self._redis, CHANNEL_SNAPSHOT_CREATED, {
+                        "count": len(rows),
+                        "source": "websocket",
+                        "market_ids": [r["market_id"] for r in rows],
+                    })
+                    log.info("ws_snapshots_flushed", count=len(rows))
             except Exception:
                 log.exception("ws_flush_error", count=len(rows))
 
@@ -372,6 +380,11 @@ class ClobWebSocket:
         while self._running:
             try:
                 log.info("ws_connecting", url=self._ws_url, tokens=len(initial_token_ids))
+                # Clear stale cached prices so first flush re-seeds from DB,
+                # preventing phantom spreads from old/new price mixing.
+                self._last_known_prices.clear()
+                self._pending_snapshots.clear()
+                self._reconnect_grace = consecutive_failures > 0
                 await self._connect(initial_token_ids)
                 consecutive_failures = 0
                 self.connected = True
