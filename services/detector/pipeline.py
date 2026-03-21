@@ -159,6 +159,7 @@ class DetectionPipeline:
                         type="rebalancing",
                         theoretical_profit=Decimal(str(profit)),
                         status="detected",
+                        dependency_type=pair.dependency_type,
                     )
                     session.add(opp)
                     await session.flush()
@@ -245,6 +246,7 @@ class DetectionPipeline:
                     type="rebalancing",
                     theoretical_profit=Decimal(str(profit)),
                     status="detected",
+                    dependency_type=pair.dependency_type,
                 )
                 session.add(opp)
                 try:
@@ -399,6 +401,7 @@ class DetectionPipeline:
                         type="rebalancing",
                         theoretical_profit=Decimal(str(profit)),
                         status="detected",
+                        dependency_type=pair.dependency_type,
                     )
                     session.add(opp)
                     try:

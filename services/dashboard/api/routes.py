@@ -395,10 +395,25 @@ async def get_opportunity_funnel(hours: int = 24):
             )
         )
 
-    # Cumulative funnel: statuses that imply passing through each stage
-    passed_optimization = {"optimized", "unconverged", "pending", "simulated", "expired"}
+    # Cumulative funnel: statuses that imply passing through each stage.
+    # "expired" is excluded — opportunities can expire while still "detected"
+    # (before the optimizer touches them).  We count expired-after-optimization
+    # separately via fw_iterations below.
+    passed_optimization = {"optimized", "unconverged", "pending", "simulated"}
     detected = sum(status_counts.values())
     optimized = sum(v for k, v in status_counts.items() if k in passed_optimization)
+
+    # Count expired opportunities that actually passed through the optimizer
+    # (the optimizer always sets fw_iterations).
+    async with SessionFactory() as session:
+        expired_optimized = await session.scalar(
+            select(func.count(ArbitrageOpportunity.id)).where(
+                ArbitrageOpportunity.timestamp >= since,
+                ArbitrageOpportunity.status == "expired",
+                ArbitrageOpportunity.fw_iterations.isnot(None),
+            )
+        )
+    optimized += expired_optimized or 0
     simulated = status_counts.get("simulated", 0)
 
     return {
@@ -419,10 +434,15 @@ async def get_metrics_by_dependency_type(hours: int = 24):
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     async with SessionFactory() as session:
-        # Opportunities per dependency type with hit rate
+        # Use the opportunity's own dependency_type snapshot so that
+        # pair downgrades don't retroactively relabel historical data.
+        # Fall back to the pair's current value for pre-migration rows.
+        dep_type_col = func.coalesce(
+            ArbitrageOpportunity.dependency_type, MarketPair.dependency_type
+        )
         result = await session.execute(
             select(
-                MarketPair.dependency_type,
+                dep_type_col.label("dependency_type"),
                 func.count(ArbitrageOpportunity.id).label("total_opps"),
                 func.sum(
                     case((ArbitrageOpportunity.status == "simulated", 1), else_=0)
@@ -436,7 +456,7 @@ async def get_metrics_by_dependency_type(hours: int = 24):
             )
             .join(MarketPair, ArbitrageOpportunity.pair_id == MarketPair.id)
             .where(ArbitrageOpportunity.timestamp >= since)
-            .group_by(MarketPair.dependency_type)
+            .group_by(dep_type_col)
         )
         rows = result.all()
 
@@ -590,10 +610,16 @@ async def get_correlation_validation(
             else:
                 entry["assessment"] = "insufficient_data"
 
-            # Write back downgrade if requested
+            # Write back downgrade if requested — update both dependency_type
+            # AND constraint_matrix so the optimizer (which keys off
+            # constraint_matrix["type"]) sees the change too.
             if downgrade and entry.get("assessment") in ("weak_correlation", "contradicted"):
                 pair.dependency_type = "none"
                 pair.verified = False
+                if pair.constraint_matrix:
+                    updated_cm = dict(pair.constraint_matrix)
+                    updated_cm["type"] = "none"
+                    pair.constraint_matrix = updated_cm
                 entry["downgraded"] = True
 
             results.append(entry)
