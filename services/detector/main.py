@@ -5,11 +5,20 @@ import structlog
 
 from shared.config import settings
 from shared.db import SessionFactory, init_db
-from shared.events import get_redis, subscribe, CHANNEL_MARKET_UPDATED
+from shared.events import (
+    get_redis,
+    subscribe,
+    CHANNEL_MARKET_UPDATED,
+    CHANNEL_SNAPSHOT_CREATED,
+)
 from shared.logging import setup_logging
 from services.detector.pipeline import DetectionPipeline
 
 logger = structlog.get_logger()
+
+# Debounce interval for snapshot-triggered rescans (seconds).
+# Collects market IDs from WS snapshots and rescans in batch.
+SNAPSHOT_RESCAN_INTERVAL = 10
 
 
 async def main() -> None:
@@ -37,12 +46,14 @@ async def main() -> None:
         interval=settings.detection_interval_seconds,
     )
 
-    # Run detection on two triggers:
-    # 1. Periodically on a timer
-    # 2. Reactively when markets are updated
+    # Run detection on three triggers:
+    # 1. Periodically on a timer (full detection with pgvector search)
+    # 2. Reactively when markets are synced (full detection)
+    # 3. On price snapshots from WS (lightweight rescan of affected pairs only)
     await asyncio.gather(
         _periodic_loop(pipeline, settings.detection_interval_seconds),
         _event_loop(pipeline, redis),
+        _snapshot_rescan_loop(pipeline, redis),
     )
 
 
@@ -65,6 +76,37 @@ async def _event_loop(pipeline: DetectionPipeline, redis) -> None:
                 await pipeline.run_once()
             except Exception:
                 logger.exception("event_triggered_detection_error")
+
+
+async def _snapshot_rescan_loop(pipeline: DetectionPipeline, redis) -> None:
+    """Rescan pairs when WS price snapshots arrive.
+
+    Debounces by collecting market IDs over SNAPSHOT_RESCAN_INTERVAL seconds,
+    then triggers a single lightweight rescan for all affected pairs.
+    """
+    pending_market_ids: set[int] = set()
+
+    # Two concurrent tasks: one collects, one drains
+    async def _collect():
+        async for event in subscribe(redis, CHANNEL_SNAPSHOT_CREATED):
+            if event.get("source") == "websocket":
+                # The snapshot event contains market IDs from the flush
+                market_ids = event.get("market_ids", [])
+                pending_market_ids.update(market_ids)
+
+    async def _drain():
+        while True:
+            await asyncio.sleep(SNAPSHOT_RESCAN_INTERVAL)
+            if not pending_market_ids:
+                continue
+            batch = pending_market_ids.copy()
+            pending_market_ids.clear()
+            try:
+                await pipeline.rescan_by_market_ids(batch)
+            except Exception:
+                logger.exception("snapshot_rescan_error", market_count=len(batch))
+
+    await asyncio.gather(_collect(), _drain())
 
 
 if __name__ == "__main__":

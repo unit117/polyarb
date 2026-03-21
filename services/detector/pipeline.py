@@ -247,6 +247,84 @@ class DetectionPipeline:
             logger.info("rescan_complete", **stats)
         return stats
 
+    async def rescan_by_market_ids(self, market_ids: set[int]) -> dict:
+        """Re-evaluate verified pairs involving specific markets with fresh prices.
+
+        Lightweight: no pgvector search, no LLM classification. Only recomputes
+        profit bounds for existing pairs where at least one market just got a
+        price update.
+        """
+        stats = {"opportunities": 0, "pairs_checked": 0}
+
+        async with self.session_factory() as session:
+            # Find verified pairs involving these markets that have no opportunity yet
+            result = await session.execute(
+                select(MarketPair)
+                .where(
+                    MarketPair.verified == True,  # noqa: E712
+                    ~MarketPair.id.in_(
+                        select(ArbitrageOpportunity.pair_id).distinct()
+                    ),
+                    (MarketPair.market_a_id.in_(market_ids))
+                    | (MarketPair.market_b_id.in_(market_ids)),
+                )
+            )
+            pairs = result.scalars().all()
+            stats["pairs_checked"] = len(pairs)
+
+            for pair in pairs:
+                constraint = pair.constraint_matrix
+                if not constraint:
+                    continue
+
+                prices_a = await _get_latest_prices(session, pair.market_a_id)
+                prices_b = await _get_latest_prices(session, pair.market_b_id)
+                if not prices_a or not prices_b:
+                    continue
+
+                outcomes_a = constraint.get("outcomes_a", [])
+                outcomes_b = constraint.get("outcomes_b", [])
+                correlation = constraint.get("correlation")
+
+                fresh_constraint = build_constraint_matrix(
+                    pair.dependency_type,
+                    outcomes_a,
+                    outcomes_b,
+                    prices_a,
+                    prices_b,
+                    correlation=correlation,
+                )
+                pair.constraint_matrix = fresh_constraint
+
+                profit = fresh_constraint.get("profit_bound", 0.0)
+                if profit > 0:
+                    opp = ArbitrageOpportunity(
+                        pair_id=pair.id,
+                        type="rebalancing",
+                        theoretical_profit=Decimal(str(profit)),
+                        status="detected",
+                    )
+                    session.add(opp)
+                    await session.flush()
+                    stats["opportunities"] += 1
+
+                    await publish(
+                        self.redis,
+                        CHANNEL_ARBITRAGE_FOUND,
+                        {
+                            "opportunity_id": opp.id,
+                            "pair_id": pair.id,
+                            "type": "rebalancing",
+                            "theoretical_profit": float(profit),
+                        },
+                    )
+
+            await session.commit()
+
+        if stats["opportunities"] > 0:
+            logger.info("snapshot_rescan_complete", **stats)
+        return stats
+
 
 def _market_to_dict(market: Market) -> dict:
     return {

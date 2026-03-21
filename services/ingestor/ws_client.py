@@ -288,6 +288,7 @@ class ClobWebSocket:
                 await publish(self._redis, CHANNEL_SNAPSHOT_CREATED, {
                     "count": len(rows),
                     "source": "websocket",
+                    "market_ids": [r["market_id"] for r in rows],
                 })
                 log.info("ws_snapshots_flushed", count=len(rows))
             except Exception:
@@ -382,6 +383,7 @@ class ClobWebSocket:
                 try:
                     await self._listen()
                 finally:
+                    self.connected = False
                     ping_task.cancel()
                     self._flush_task.cancel()
                     try:
