@@ -1,10 +1,11 @@
 """Simulator pipeline: executes paper trades for optimized opportunities."""
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import redis.asyncio as aioredis
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import (
@@ -453,9 +454,44 @@ class SimulatorPipeline:
             snap,
         )
 
+    async def _revert_stale_pending(self) -> None:
+        """Revert pending opportunities older than 5 minutes to optimized.
+
+        Safety valve for the rare case where the simulator's exception
+        handler fails to revert pending status (e.g., transient DB error).
+        Without this, the pair is permanently blocked by the unique index.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+        async with self.session_factory() as session:
+            result = await session.execute(
+                update(ArbitrageOpportunity)
+                .where(
+                    ArbitrageOpportunity.status == "pending",
+                    ArbitrageOpportunity.timestamp < cutoff,
+                )
+                .values(status="optimized")
+                .returning(ArbitrageOpportunity.id)
+            )
+            reverted = result.fetchall()
+            if reverted:
+                await session.commit()
+                logger.warning(
+                    "stale_pending_reverted",
+                    count=len(reverted),
+                    ids=[r[0] for r in reverted],
+                )
+
     async def process_pending(self) -> dict:
         """Simulate all optimized opportunities not yet simulated."""
         stats = {"processed": 0, "simulated": 0, "skipped": 0, "errors": 0}
+
+        # Safety valve: revert any pending opportunities older than 5 min.
+        # These are stranded from a failed execution whose DB revert also
+        # failed (e.g., transient DB error during exception handler).
+        try:
+            await self._revert_stale_pending()
+        except Exception:
+            logger.exception("stale_pending_revert_error")
 
         async with self.session_factory() as session:
             result = await session.execute(
