@@ -219,11 +219,13 @@ class DetectionPipeline:
 
                 profit = fresh_constraint.get("profit_bound", 0.0)
 
-                # Create opportunity even if profit is 0 — let the optimizer decide
+                if profit <= 0:
+                    continue
+
                 opp = ArbitrageOpportunity(
                     pair_id=pair.id,
                     type="rebalancing",
-                    theoretical_profit=Decimal(str(max(profit, 0.001))),
+                    theoretical_profit=Decimal(str(profit)),
                     status="detected",
                 )
                 session.add(opp)
@@ -252,19 +254,25 @@ class DetectionPipeline:
 
         Lightweight: no pgvector search, no LLM classification. Only recomputes
         profit bounds for existing pairs where at least one market just got a
-        price update.
+        price update. Skips pairs that already have an unprocessed opportunity
+        (detected/pending) to avoid duplicates.
         """
         stats = {"opportunities": 0, "pairs_checked": 0}
 
         async with self.session_factory() as session:
-            # Find verified pairs involving these markets that have no opportunity yet
+            # Exclude pairs with unprocessed opportunities (detected or pending).
+            # Pairs whose last opportunity was already simulated/expired are eligible
+            # for new opportunities as prices move.
+            unprocessed_pair_ids = (
+                select(ArbitrageOpportunity.pair_id)
+                .where(ArbitrageOpportunity.status.in_(["detected", "pending"]))
+                .distinct()
+            )
             result = await session.execute(
                 select(MarketPair)
                 .where(
                     MarketPair.verified == True,  # noqa: E712
-                    ~MarketPair.id.in_(
-                        select(ArbitrageOpportunity.pair_id).distinct()
-                    ),
+                    ~MarketPair.id.in_(unprocessed_pair_ids),
                     (MarketPair.market_a_id.in_(market_ids))
                     | (MarketPair.market_b_id.in_(market_ids)),
                 )
