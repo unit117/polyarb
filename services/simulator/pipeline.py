@@ -124,7 +124,6 @@ class SimulatorPipeline:
                         realized = (avg_entry - exit_price) * close_size
 
                     self.portfolio.realized_pnl += realized
-                    self.portfolio.mark_settled(is_winner=realized > 0)
 
                 if not result["executed"]:
                     continue
