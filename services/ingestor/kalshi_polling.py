@@ -205,54 +205,67 @@ class KalshiPoller:
             )
 
     async def check_resolved_markets(self) -> None:
-        """Check for settled Kalshi markets via the API.
+        """Check for settled Kalshi markets via batch API query.
 
-        Unlike Polymarket where we infer resolution from prices, Kalshi
-        markets have an explicit 'result' field when settled. We query
-        markets we've ingested that are still active and check if they've
-        been settled on the Kalshi side.
+        Fetches all settled markets from Kalshi in one paginated call,
+        then cross-references against our active Kalshi markets to find
+        newly resolved ones. This avoids per-market API calls that would
+        blow through the rate limit.
         """
+        try:
+            settled = await self._client.list_settled_markets()
+        except Exception:
+            log.exception("kalshi_settlement_fetch_error")
+            return
+
+        if not settled:
+            return
+
+        # Build lookup: ticker → result
+        settled_by_ticker = {}
+        for raw in settled:
+            ticker = raw.get("ticker")
+            result_val = raw.get("result")
+            if ticker and result_val:
+                settled_by_ticker[ticker] = result_val
+
+        if not settled_by_ticker:
+            return
+
+        # Find our active Kalshi markets that match settled tickers
         async with self._session_factory() as session:
             result = await session.execute(
                 select(Market).where(
                     Market.venue == "kalshi",
                     Market.active == True,  # noqa: E712
                     Market.resolved_outcome.is_(None),
+                    Market.polymarket_id.in_(list(settled_by_ticker.keys())),
                 )
             )
-            active_markets = result.scalars().all()
+            to_resolve = result.scalars().all()
 
-        for market in active_markets:
-            try:
-                data = await self._kalshi.get_market(market.polymarket_id)
-                if not data:
-                    continue
-                status = data.get("status", "")
-                result_val = data.get("result", "")
-                if status == "settled" and result_val:
-                    outcome = "Yes" if result_val == "yes" else "No"
-                    async with self._session_factory() as session:
-                        mkt = await session.get(Market, market.id)
-                        if mkt and not mkt.resolved_outcome:
-                            mkt.resolved_outcome = outcome
-                            mkt.resolved_at = datetime.now(timezone.utc)
-                            mkt.active = False
-                            await session.commit()
-                            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
-                                "market_id": market.id,
-                                "resolved_outcome": outcome,
-                                "source": "kalshi_api",
-                            })
-                            log.info(
-                                "kalshi_market_resolved",
-                                ticker=market.polymarket_id,
-                                outcome=outcome,
-                            )
-            except Exception:
-                log.exception(
-                    "kalshi_resolution_check_error",
+            for market in to_resolve:
+                result_val = settled_by_ticker[market.polymarket_id]
+                outcome = "Yes" if result_val == "yes" else "No"
+                market.resolved_outcome = outcome
+                market.resolved_at = datetime.now(timezone.utc)
+                market.active = False
+                log.info(
+                    "kalshi_market_resolved",
                     ticker=market.polymarket_id,
+                    outcome=outcome,
                 )
+
+            if to_resolve:
+                await session.commit()
+
+        # Publish events after commit
+        for market in to_resolve:
+            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
+                "market_id": market.id,
+                "resolved_outcome": market.resolved_outcome,
+                "source": "kalshi_api",
+            })
 
     async def poll_once(self) -> list[Market]:
         log.info("kalshi_poll_cycle_start")
