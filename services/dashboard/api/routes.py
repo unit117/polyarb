@@ -96,9 +96,9 @@ async def get_opportunities(limit: int = 200, offset: int = 0, status: str | Non
             .options(
                 joinedload(ArbitrageOpportunity.pair)
                 .load_only(MarketPair.id, MarketPair.dependency_type, MarketPair.confidence)
-                .joinedload(MarketPair.market_a).load_only(Market.id, Market.question),
+                .joinedload(MarketPair.market_a).load_only(Market.id, Market.question, Market.venue),
                 joinedload(ArbitrageOpportunity.pair)
-                .joinedload(MarketPair.market_b).load_only(Market.id, Market.question),
+                .joinedload(MarketPair.market_b).load_only(Market.id, Market.question, Market.venue),
             )
             .order_by(desc(ArbitrageOpportunity.timestamp))
             .offset(offset)
@@ -138,7 +138,9 @@ async def get_opportunities(limit: int = 200, offset: int = 0, status: str | Non
                 "dependency_type": pair.dependency_type,
                 "confidence": pair.confidence,
                 "market_a": pair.market_a.question[:80] if pair.market_a else None,
+                "market_a_venue": getattr(pair.market_a, "venue", "polymarket") if pair.market_a else None,
                 "market_b": pair.market_b.question[:80] if pair.market_b else None,
+                "market_b_venue": getattr(pair.market_b, "venue", "polymarket") if pair.market_b else None,
             } if pair else None,
         })
 
@@ -163,8 +165,8 @@ async def get_pairs(limit: int = 200, offset: int = 0):
             select(MarketPair, func.coalesce(opp_count_sq.c.opp_count, 0).label("opportunity_count"))
             .outerjoin(opp_count_sq, MarketPair.id == opp_count_sq.c.pair_id)
             .options(
-                joinedload(MarketPair.market_a).load_only(Market.id, Market.question),
-                joinedload(MarketPair.market_b).load_only(Market.id, Market.question),
+                joinedload(MarketPair.market_a).load_only(Market.id, Market.question, Market.venue),
+                joinedload(MarketPair.market_b).load_only(Market.id, Market.question, Market.venue),
             )
             .order_by(desc(MarketPair.detected_at))
             .offset(offset)
@@ -188,10 +190,12 @@ async def get_pairs(limit: int = 200, offset: int = 0):
             "market_a": {
                 "id": pair.market_a.id,
                 "question": pair.market_a.question[:100],
+                "venue": getattr(pair.market_a, "venue", "polymarket"),
             } if pair.market_a else None,
             "market_b": {
                 "id": pair.market_b.id,
                 "question": pair.market_b.question[:100],
+                "venue": getattr(pair.market_b, "venue", "polymarket"),
             } if pair.market_b else None,
             "opportunity_count": opp_count,
         })
@@ -239,6 +243,7 @@ async def get_trades(limit: int = 200, offset: int = 0, source: str | None = Non
             "executed_at": t.executed_at.isoformat() if t.executed_at else None,
             "status": t.status,
             "source": t.source,
+            "venue": t.venue or "polymarket",
         })
 
     return {"trades": items, "total": total, "offset": offset, "limit": limit}

@@ -120,6 +120,20 @@ def _check_structural(
         # Non-binary conditional pairs pass structural check but won't get constraints
         return True
 
+    if dependency_type == "cross_platform":
+        # Both must be binary and from different venues
+        outcomes_a = market_a.get("outcomes", [])
+        outcomes_b = market_b.get("outcomes", [])
+        venue_a = market_a.get("venue", "polymarket")
+        venue_b = market_b.get("venue", "polymarket")
+        if venue_a == venue_b:
+            reasons.append("cross_platform: same venue")
+            return False
+        if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+            reasons.append("cross_platform: non-binary markets")
+            return False
+        return True
+
     # Unknown type
     reasons.append(f"unknown dependency_type: {dependency_type}")
     return False
@@ -188,6 +202,17 @@ def _check_price_consistency(
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         if not (0.0 < p_a < 1.0) or not (0.0 < p_b < 1.0):
             reasons.append(f"conditional: prices out of range ({p_a:.2f}, {p_b:.2f})")
+            return False
+        return True
+
+    if dependency_type == "cross_platform":
+        # Both prices must be in a reasonable range (not at extremes)
+        p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
+        p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
+        if not (0.05 < p_a < 0.95) or not (0.05 < p_b < 0.95):
+            reasons.append(
+                f"cross_platform: prices at extreme ({p_a:.2f}, {p_b:.2f})"
+            )
             return False
         return True
 

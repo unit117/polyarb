@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish
 from shared.models import ArbitrageOpportunity, Market, MarketPair
-from services.detector.similarity import find_similar_pairs
+from shared.config import settings
+from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
 from services.detector.constraints import build_constraint_matrix
 from services.detector.verification import verify_pair
@@ -181,12 +182,155 @@ class DetectionPipeline:
         for channel, payload in deferred_events:
             await publish(self.redis, channel, payload)
 
+        # Cross-venue detection (Kalshi ↔ Polymarket) if enabled
+        if settings.kalshi_enabled:
+            cross_stats = await self._detect_cross_venue()
+            stats["cross_venue_candidates"] = cross_stats.get("candidates", 0)
+            stats["pairs_created"] += cross_stats.get("pairs_created", 0)
+            stats["opportunities"] += cross_stats.get("opportunities", 0)
+
         logger.info("detection_cycle_complete", **stats)
 
         # Also rescan existing pairs that now have prices
         rescan_stats = await self._rescan_existing_pairs()
         stats["rescanned"] = rescan_stats["opportunities"]
 
+        return stats
+
+    async def _detect_cross_venue(self) -> dict:
+        """Find and classify cross-venue pairs (Kalshi ↔ Polymarket).
+
+        Runs separately from intra-venue detection with its own session.
+        Uses a higher similarity threshold (0.92) for auto-classification.
+        """
+        stats = {"candidates": 0, "pairs_created": 0, "opportunities": 0}
+        deferred_events: list[tuple[str, dict]] = []
+
+        async with self.session_factory() as session:
+            candidates = await find_cross_venue_pairs(
+                session,
+                threshold=max(self.similarity_threshold, 0.82),
+                top_k=self.similarity_top_k,
+            )
+            stats["candidates"] = len(candidates)
+
+            if not candidates:
+                return stats
+
+            market_ids = set()
+            for c in candidates:
+                market_ids.add(c["market_a_id"])
+                market_ids.add(c["market_b_id"])
+
+            result = await session.execute(
+                select(Market).where(Market.id.in_(market_ids))
+            )
+            markets_by_id = {m.id: m for m in result.scalars().all()}
+
+            for candidate in candidates:
+                market_a = markets_by_id.get(candidate["market_a_id"])
+                market_b = markets_by_id.get(candidate["market_b_id"])
+                if not market_a or not market_b:
+                    continue
+
+                market_a_dict = _market_to_dict(market_a)
+                market_b_dict = _market_to_dict(market_b)
+                similarity = candidate["similarity"]
+
+                # High similarity → auto-classify as cross_platform
+                # Moderate similarity → use LLM to verify
+                if similarity >= 0.92:
+                    classification = {
+                        "dependency_type": "cross_platform",
+                        "confidence": 0.95,
+                        "reasoning": f"Cross-venue match (similarity={similarity:.3f})",
+                    }
+                else:
+                    classification = await classify_pair(
+                        self.openai_client,
+                        self.classifier_model,
+                        market_a_dict,
+                        market_b_dict,
+                    )
+
+                if classification["dependency_type"] == "none":
+                    continue
+
+                prices_a = await _get_latest_prices(session, market_a.id)
+                prices_b = await _get_latest_prices(session, market_b.id)
+
+                constraint = build_constraint_matrix(
+                    classification["dependency_type"],
+                    market_a_dict["outcomes"],
+                    market_b_dict["outcomes"],
+                    prices_a,
+                    prices_b,
+                    correlation=classification.get("correlation"),
+                )
+
+                verification = verify_pair(
+                    dependency_type=classification["dependency_type"],
+                    market_a=market_a_dict,
+                    market_b=market_b_dict,
+                    prices_a=prices_a,
+                    prices_b=prices_b,
+                    confidence=classification["confidence"],
+                    correlation=classification.get("correlation"),
+                )
+
+                pair = MarketPair(
+                    market_a_id=market_a.id,
+                    market_b_id=market_b.id,
+                    dependency_type=classification["dependency_type"],
+                    confidence=classification["confidence"],
+                    constraint_matrix=constraint,
+                    verified=verification["verified"],
+                )
+                session.add(pair)
+                await session.flush()
+                stats["pairs_created"] += 1
+
+                deferred_events.append((
+                    CHANNEL_PAIR_DETECTED,
+                    {
+                        "pair_id": pair.id,
+                        "market_a_id": market_a.id,
+                        "market_b_id": market_b.id,
+                        "dependency_type": classification["dependency_type"],
+                        "confidence": classification["confidence"],
+                    },
+                ))
+
+                profit = constraint.get("profit_bound", 0.0)
+                if profit > 0 and verification["verified"]:
+                    opp = ArbitrageOpportunity(
+                        pair_id=pair.id,
+                        type="rebalancing",
+                        theoretical_profit=Decimal(str(profit)),
+                        status="detected",
+                        dependency_type=pair.dependency_type,
+                    )
+                    session.add(opp)
+                    await session.flush()
+                    stats["opportunities"] += 1
+
+                    deferred_events.append((
+                        CHANNEL_ARBITRAGE_FOUND,
+                        {
+                            "opportunity_id": opp.id,
+                            "pair_id": pair.id,
+                            "type": "rebalancing",
+                            "theoretical_profit": float(profit),
+                        },
+                    ))
+
+            await session.commit()
+
+        for channel, payload in deferred_events:
+            await publish(self.redis, channel, payload)
+
+        if stats["pairs_created"] > 0:
+            logger.info("cross_venue_detection_complete", **stats)
         return stats
 
     async def _rescan_existing_pairs(self) -> dict:
@@ -443,6 +587,7 @@ def _market_to_dict(market: Market) -> dict:
         "question": market.question,
         "description": market.description,
         "outcomes": market.outcomes if isinstance(market.outcomes, list) else [],
+        "venue": getattr(market, "venue", "polymarket"),
     }
 
 

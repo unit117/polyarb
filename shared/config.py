@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     cb_max_consecutive_errors: int = 5
     cb_cooldown_seconds: int = 300  # 5-minute cooldown
 
+    # Kalshi settings
+    kalshi_enabled: bool = False
+    kalshi_api_key: str = ""
+    kalshi_api_secret: str = ""  # RSA private key (PEM) or path
+    kalshi_poll_interval_seconds: int = 120
+    kalshi_max_markets: int = 500
+    kalshi_rate_limit_rps: float = 1.5
+
     # Dashboard settings
     dashboard_port: int = 8080
 
@@ -102,6 +110,13 @@ def polymarket_fee(price: float, side: str) -> float:
     of direction. Maker orders pay 0%; we conservatively assume taker.
     """
     return price * (1.0 - price) * 0.015
+
+
+def venue_fee(venue: str, price: float, side: str = "BUY") -> float:
+    """Route fee calculation to the correct venue fee schedule."""
+    if venue == "kalshi":
+        return kalshi_fee(price)
+    return polymarket_fee(price, side)
 
 
 def kalshi_fee(price: float) -> float:

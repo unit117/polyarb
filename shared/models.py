@@ -29,7 +29,10 @@ class Market(Base):
     __tablename__ = "markets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    polymarket_id: Mapped[str] = mapped_column(String, unique=True, index=True)
+    polymarket_id: Mapped[str] = mapped_column(String, index=True)
+    venue: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="polymarket"
+    )
     event_id: Mapped[str | None] = mapped_column(String, nullable=True)
     question: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -53,6 +56,13 @@ class Market(Base):
 
     __table_args__ = (
         Index("ix_markets_active", "active", postgresql_where=(active == True)),  # noqa: E712
+        Index("ix_markets_venue", "venue"),
+        Index(
+            "uq_markets_venue_polymarket_id",
+            "venue",
+            "polymarket_id",
+            unique=True,
+        ),
     )
 
 
@@ -151,6 +161,9 @@ class PaperTrade(Base):
     )
     status: Mapped[str] = mapped_column(String, default="filled")
     source: Mapped[str] = mapped_column(String, server_default="paper")
+    venue: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, server_default="polymarket"
+    )
 
     opportunity: Mapped["ArbitrageOpportunity"] = relationship()
     market: Mapped["Market"] = relationship()

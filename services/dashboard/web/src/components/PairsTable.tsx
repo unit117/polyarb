@@ -89,9 +89,15 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
                   : "\u2014"}
               </td>
               <td className={s.tdMarket}>
+                {p.market_a?.venue && p.market_a.venue !== "polymarket" && (
+                  <span className={s.venueBadge}>{p.market_a.venue}</span>
+                )}
                 {p.market_a?.question || "\u2014"}
               </td>
               <td className={s.tdMarket}>
+                {p.market_b?.venue && p.market_b.venue !== "polymarket" && (
+                  <span className={s.venueBadge}>{p.market_b.venue}</span>
+                )}
                 {p.market_b?.question || "\u2014"}
               </td>
               <td className={s.td}>

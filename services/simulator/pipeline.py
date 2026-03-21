@@ -21,7 +21,7 @@ from shared.models import (
     PortfolioSnapshot,
     PriceSnapshot,
 )
-from shared.config import polymarket_fee
+from shared.config import venue_fee
 from shared.circuit_breaker import CircuitBreaker
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
@@ -70,6 +70,7 @@ class SimulatorPipeline:
                 return {"status": "no_trades"}
 
             opp.status = "pending"
+            opp.pending_at = datetime.now(timezone.utc)
             await session.commit()
 
         try:
@@ -151,7 +152,8 @@ class SimulatorPipeline:
                 size = base_size
                 fill = compute_vwap(order_book, trade["side"], size, midpoint)
 
-                fees = polymarket_fee(fill["vwap_price"], trade["side"]) * fill["filled_size"]
+                trade_venue = trade.get("venue", getattr(market, "venue", "polymarket"))
+                fees = venue_fee(trade_venue, fill["vwap_price"], trade["side"]) * fill["filled_size"]
 
                 # Circuit breaker gate
                 if self.circuit_breaker:
@@ -227,8 +229,10 @@ class SimulatorPipeline:
                     slippage=Decimal(str(fill["slippage"])),
                     fees=Decimal(str(fees)),
                     status="filled",
+                    venue=trade_venue,
                 )
                 session.add(paper_trade)
+                await session.flush()  # Assign PK before capturing trade_id
                 trades_executed += 1
 
                 deferred_trade_events.append({
@@ -462,6 +466,8 @@ class SimulatorPipeline:
         Safety valve for the rare case where the simulator's exception
         handler fails to revert pending status (e.g., transient DB error).
         Without this, the pair is permanently blocked by the unique index.
+        Uses pending_at (when the row entered pending) rather than timestamp
+        (opportunity creation time) to avoid sweeping mid-execution opps.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
         async with self.session_factory() as session:
@@ -469,7 +475,8 @@ class SimulatorPipeline:
                 update(ArbitrageOpportunity)
                 .where(
                     ArbitrageOpportunity.status == "pending",
-                    ArbitrageOpportunity.timestamp < cutoff,
+                    ArbitrageOpportunity.pending_at.isnot(None),
+                    ArbitrageOpportunity.pending_at < cutoff,
                 )
                 .values(status="optimized")
                 .returning(ArbitrageOpportunity.id)

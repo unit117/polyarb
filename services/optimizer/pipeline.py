@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish
-from shared.models import ArbitrageOpportunity, MarketPair, PriceSnapshot
+from shared.models import ArbitrageOpportunity, Market, MarketPair, PriceSnapshot
 from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
 
@@ -114,6 +114,12 @@ class OptimizerPipeline:
                 ip_timeout_ms=self.ip_timeout_ms,
             )
 
+            # Load market venues for fee routing
+            market_a = await session.get(Market, pair.market_a_id)
+            market_b = await session.get(Market, pair.market_b_id)
+            v_a = getattr(market_a, "venue", "polymarket") if market_a else "polymarket"
+            v_b = getattr(market_b, "venue", "polymarket") if market_b else "polymarket"
+
             # Compute trades
             theoretical_profit = float(constraint.get("profit_bound", 0.0))
             trade_info = compute_trades(
@@ -122,6 +128,8 @@ class OptimizerPipeline:
                 outcomes_b,
                 theoretical_profit=theoretical_profit,
                 min_edge=self.min_edge,
+                venue_a=v_a,
+                venue_b=v_b,
             )
 
             # Update opportunity

@@ -10,3 +10,4 @@ httpx>=0.27
 openai>=1.0
 pgvector>=0.3
 websockets>=12.0
+cryptography>=42.0

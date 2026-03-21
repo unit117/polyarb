@@ -13,7 +13,7 @@ import structlog
 
 logger = structlog.get_logger()
 
-DEPENDENCY_TYPES = ("implication", "partition", "mutual_exclusion", "conditional")
+DEPENDENCY_TYPES = ("implication", "partition", "mutual_exclusion", "conditional", "cross_platform")
 
 CLASSIFIER_SYSTEM_PROMPT = """You classify the logical dependency between two prediction markets.
 
@@ -330,9 +330,39 @@ def _check_over_under_markets(market_a: dict, market_b: dict) -> dict | None:
     }
 
 
+def _check_cross_platform(market_a: dict, market_b: dict) -> dict | None:
+    """Detect cross-platform pairs (different venues, same underlying question).
+
+    When venues differ and similarity is high enough to have been paired,
+    these are the same binary event priced on two exchanges — the most
+    direct form of arbitrage.
+    """
+    venue_a = market_a.get("venue", "polymarket")
+    venue_b = market_b.get("venue", "polymarket")
+
+    if venue_a == venue_b:
+        return None
+
+    # Both must be binary (Yes/No)
+    outcomes_a = market_a.get("outcomes", [])
+    outcomes_b = market_b.get("outcomes", [])
+    if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+        return None
+
+    return {
+        "dependency_type": "cross_platform",
+        "confidence": 0.95,
+        "reasoning": (
+            f"Cross-platform pair: {venue_a} vs {venue_b} — "
+            f"same event on different venues"
+        ),
+    }
+
+
 async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
     """Apply rule-based heuristics. Returns result dict or None if ambiguous."""
     for check in (
+        _check_cross_platform,
         _check_same_event,
         _check_outcome_subset,
         _check_crypto_time_intervals,
