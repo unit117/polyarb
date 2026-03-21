@@ -7,6 +7,12 @@ from shared.config import settings
 
 CHANNEL_MARKET_UPDATED = "polyarb:market_updated"
 CHANNEL_SNAPSHOT_CREATED = "polyarb:snapshot_created"
+CHANNEL_PAIR_DETECTED = "polyarb:pair_detected"
+CHANNEL_ARBITRAGE_FOUND = "polyarb:arbitrage_found"
+CHANNEL_OPTIMIZATION_COMPLETE = "polyarb:optimization_complete"
+CHANNEL_TRADE_EXECUTED = "polyarb:trade_executed"
+CHANNEL_PORTFOLIO_UPDATED = "polyarb:portfolio_updated"
+CHANNEL_MARKET_RESOLVED = "polyarb:market_resolved"
 
 
 async def get_redis() -> aioredis.Redis:

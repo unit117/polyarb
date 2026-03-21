@@ -1,0 +1,9 @@
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+psycopg2-binary>=2.9
+alembic>=1.13
+redis[hiredis]>=5.0
+pydantic>=2.0
+pydantic-settings>=2.0
+structlog>=24.0
+pgvector>=0.3

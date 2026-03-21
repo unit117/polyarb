@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import structlog
@@ -7,8 +7,13 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from shared.events import CHANNEL_MARKET_UPDATED, CHANNEL_SNAPSHOT_CREATED, publish
-from shared.models import Market, PriceSnapshot
+from shared.events import (
+    CHANNEL_MARKET_UPDATED,
+    CHANNEL_MARKET_RESOLVED,
+    CHANNEL_SNAPSHOT_CREATED,
+    publish,
+)
+from shared.models import Market, MarketPair, PriceSnapshot
 from services.ingestor.clob_client import ClobClient
 from services.ingestor.embedder import Embedder
 from services.ingestor.gamma_client import GammaClient, parse_stringified_json
@@ -34,6 +39,30 @@ def _parse_iso_date(value: str | None) -> datetime | None:
         return None
 
 
+RESOLUTION_THRESHOLD = 0.98  # price >= this suggests market resolved
+
+
+def _extract_winner(raw_market: dict) -> str | None:
+    """Extract winning outcome from a closed Gamma API market.
+
+    Polymarket sets the winning token's price to 1.0 after resolution.
+    """
+    outcomes = parse_stringified_json(raw_market.get("outcomes", "[]"))
+    # outcomePrices is a stringified JSON array like '["1","0"]'
+    prices = parse_stringified_json(raw_market.get("outcomePrices", "[]"))
+
+    if not outcomes or not prices or len(outcomes) != len(prices):
+        return None
+
+    for outcome, price in zip(outcomes, prices):
+        try:
+            if float(price) >= 0.99:
+                return outcome
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 class MarketPoller:
     def __init__(
         self,
@@ -45,6 +74,7 @@ class MarketPoller:
         poll_interval: int = 30,
         fetch_order_books: bool = False,
         max_snapshot_markets: int = 100,
+        resolution_price_threshold: float = RESOLUTION_THRESHOLD,
     ):
         self._gamma = gamma
         self._clob = clob
@@ -54,6 +84,7 @@ class MarketPoller:
         self._poll_interval = poll_interval
         self._fetch_order_books = fetch_order_books
         self._max_snapshot_markets = max_snapshot_markets
+        self._resolution_threshold = resolution_price_threshold
 
     async def sync_markets(self) -> list[Market]:
         log.info("sync_markets_start")
@@ -162,11 +193,24 @@ class MarketPoller:
         log.info("embeddings_done", count=len(need_embedding))
 
     async def snapshot_prices(self, markets: list[Market]) -> None:
-        # Only snapshot markets with token_ids, sorted by liquidity (top N)
-        eligible = [m for m in markets if m.token_ids]
-        eligible.sort(key=lambda m: m.liquidity or 0, reverse=True)
-        eligible = eligible[: self._max_snapshot_markets]
-        log.info("snapshots_start", eligible=len(eligible), total=len(markets))
+        # Top N by liquidity + any market that's part of a detected pair
+        markets_by_id = {m.id: m for m in markets if m.token_ids}
+
+        # Start with top N by liquidity
+        by_liquidity = sorted(markets_by_id.values(), key=lambda m: m.liquidity or 0, reverse=True)
+        eligible_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
+
+        # Add markets from detected pairs
+        async with self._session_factory() as session:
+            result = await session.execute(select(MarketPair.market_a_id, MarketPair.market_b_id))
+            for row in result.fetchall():
+                if row.market_a_id in markets_by_id:
+                    eligible_ids.add(row.market_a_id)
+                if row.market_b_id in markets_by_id:
+                    eligible_ids.add(row.market_b_id)
+
+        eligible = [markets_by_id[mid] for mid in eligible_ids if mid in markets_by_id]
+        log.info("snapshots_start", eligible=len(eligible), paired_extra=len(eligible_ids) - self._max_snapshot_markets, total=len(markets))
 
         snapshots_to_insert = []
         for market in eligible:
@@ -197,6 +241,30 @@ class MarketPoller:
                 )
                 await session.commit()
 
+        # Check for near-terminal prices (resolution inference)
+        for snap_data in snapshots_to_insert:
+            for outcome, price_str in snap_data["prices"].items():
+                try:
+                    price = float(price_str)
+                except (ValueError, TypeError):
+                    continue
+                if price >= self._resolution_threshold:
+                    market_id = snap_data["market_id"]
+                    # Mark as resolved in DB and publish event
+                    async with self._session_factory() as session:
+                        mkt = await session.get(Market, market_id)
+                        if mkt and not mkt.resolved_outcome:
+                            mkt.resolved_outcome = outcome
+                            mkt.resolved_at = datetime.now(timezone.utc)
+                            mkt.active = False
+                            await session.commit()
+                            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
+                                "market_id": market_id,
+                                "resolved_outcome": outcome,
+                                "source": "price_inference",
+                                "price": price,
+                            })
+
         log.info("snapshots_done", count=len(snapshots_to_insert))
         await publish(
             self._redis,
@@ -204,11 +272,54 @@ class MarketPoller:
             {"count": len(snapshots_to_insert)},
         )
 
+    async def check_resolved_markets(self) -> None:
+        """Fetch closed markets from Gamma API and mark resolved ones in DB."""
+        try:
+            closed_markets = await self._gamma.list_markets(active=False, closed=True)
+        except Exception:
+            log.exception("resolution_check_error")
+            return
+
+        resolved_count = 0
+        async with self._session_factory() as session:
+            for raw in closed_markets:
+                polymarket_id = str(raw.get("id", ""))
+                if not polymarket_id:
+                    continue
+
+                result = await session.execute(
+                    select(Market).where(Market.polymarket_id == polymarket_id)
+                )
+                market = result.scalar_one_or_none()
+                if not market or market.resolved_outcome:
+                    continue
+
+                # Determine winner: the outcome whose token price is ~1.0
+                winning_outcome = _extract_winner(raw)
+                if not winning_outcome:
+                    continue
+
+                market.resolved_outcome = winning_outcome
+                market.resolved_at = datetime.now(timezone.utc)
+                market.active = False
+                resolved_count += 1
+
+                await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
+                    "market_id": market.id,
+                    "resolved_outcome": winning_outcome,
+                    "source": "gamma_api",
+                })
+
+            if resolved_count > 0:
+                await session.commit()
+                log.info("resolution_check_done", resolved=resolved_count)
+
     async def poll_once(self) -> None:
         log.info("poll_cycle_start")
         markets = await self.sync_markets()
         await self.compute_embeddings(markets)
         await self.snapshot_prices(markets)
+        await self.check_resolved_markets()
         log.info("poll_cycle_done")
 
     async def run(self) -> None:
