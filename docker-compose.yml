@@ -9,11 +9,21 @@ services:
       - "5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c work_mem=32MB
+        -c maintenance_work_mem=256MB
+        -c effective_cache_size=512MB
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   redis:
     image: redis:7-alpine
@@ -24,6 +34,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   ingestor:
     build:
@@ -36,6 +50,135 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  detector:
+    build:
+      context: .
+      dockerfile: services/detector/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ingestor:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  optimizer:
+    build:
+      context: .
+      dockerfile: services/optimizer/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      detector:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  simulator:
+    build:
+      context: .
+      dockerfile: services/simulator/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      optimizer:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    env_file: .env
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Backtest one-shot services (isolated database) ───────────
+  # Step 1: create polyarb_backtest DB & copy markets/pairs from live
+  backtest-setup:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    env_file: .env
+    command: python -m scripts.backtest_setup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["backtest"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Step 2: backfill 30 days of historical prices into backtest DB
+  backfill:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    env_file: .env
+    environment:
+      POSTGRES_DB: polyarb_backtest
+    command: python -m scripts.backfill_history --days 30 --max-markets 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["backtest"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Step 3: run full pipeline replay over historical data
+  backtest:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    env_file: .env
+    environment:
+      POSTGRES_DB: polyarb_backtest
+    command: python -m scripts.backtest --days 30 --capital 10000 --output /app/backtest_report.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["backtest"]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
 volumes:
   pgdata:

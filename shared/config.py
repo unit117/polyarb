@@ -21,6 +21,47 @@ class Settings(BaseSettings):
     max_snapshot_markets: int = 100
     log_level: str = "INFO"
 
+    # Detector settings
+    similarity_threshold: float = 0.82
+    similarity_top_k: int = 20
+    detector_batch_size: int = 100
+    classifier_model: str = "gpt-4o-mini"
+    detection_interval_seconds: int = 60
+
+    # Optimizer settings
+    fw_max_iterations: int = 200
+    fw_gap_tolerance: float = 0.001
+    fw_ip_timeout_ms: int = 5000
+    optimizer_interval_seconds: int = 30
+    optimizer_min_edge: float = 0.03
+    optimizer_skip_conditional: bool = True
+
+    # Simulator settings
+    initial_capital: float = 10000.0
+    max_position_size: float = 100.0
+    fee_rate: float = 0.02
+    slippage_model: str = "vwap"
+    simulator_interval_seconds: int = 60
+
+    # Settlement settings
+    resolution_price_threshold: float = 0.98
+    settlement_interval_seconds: int = 120
+
+    # Dashboard settings
+    dashboard_port: int = 8080
+
+    # Live trading settings (Workstream 2)
+    live_trading_enabled: bool = False
+    live_trading_dry_run: bool = True
+    live_trading_api_key: str = ""
+    live_trading_private_key: str = ""
+    live_trading_chain_id: int = 137
+    live_trading_bankroll: float = 100.0
+    live_trading_max_position_size: float = 10.0
+    live_trading_scale_factor: float = 0.01
+    live_trading_min_edge: float = 0.03
+    live_trading_max_daily_loss_pct: float = 10.0
+
     @property
     def database_url(self) -> str:
         return (
