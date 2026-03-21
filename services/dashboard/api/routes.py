@@ -281,25 +281,30 @@ async def get_portfolio_history(hours: int = 24, source: str | None = None):
 
 @router.get("/metrics/timeseries")
 async def get_metrics_timeseries(hours: int = 24, source: str | None = None):
-    """Hourly aggregates: opportunities, trades, fees, profit."""
+    """Hourly aggregates keyed by event time, not current status.
+
+    Detections are counted by ArbitrageOpportunity.timestamp (when the opp
+    was created). Trades are counted by PaperTrade.executed_at. This avoids
+    the problem of an opp detected at 13:58 and simulated at 14:01 being
+    counted as 'simulated' in the 13:00 bucket.
+    """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     async with SessionFactory() as session:
-        # Hourly opportunity counts by status
-        hour_trunc = func.date_trunc("hour", ArbitrageOpportunity.timestamp)
-        opp_query = (
+        # Hourly detection counts (all opps, regardless of current status)
+        det_hour = func.date_trunc("hour", ArbitrageOpportunity.timestamp)
+        det_query = (
             select(
-                hour_trunc.label("hour"),
-                ArbitrageOpportunity.status,
-                func.count().label("count"),
+                det_hour.label("hour"),
+                func.count().label("detected"),
             )
             .where(ArbitrageOpportunity.timestamp >= since)
-            .group_by(hour_trunc, ArbitrageOpportunity.status)
-            .order_by(hour_trunc)
+            .group_by(det_hour)
+            .order_by(det_hour)
         )
-        opp_rows = (await session.execute(opp_query)).all()
+        det_rows = (await session.execute(det_query)).all()
 
-        # Hourly trade aggregates
+        # Hourly trade aggregates (keyed by execution time)
         trade_hour = func.date_trunc("hour", PaperTrade.executed_at)
         trade_query = (
             select(
@@ -315,37 +320,38 @@ async def get_metrics_timeseries(hours: int = 24, source: str | None = None):
         trade_query = trade_query.group_by(trade_hour).order_by(trade_hour)
         trade_rows = (await session.execute(trade_query)).all()
 
-    # Build hourly buckets for opportunities
-    opp_by_hour: dict[str, dict] = {}
-    for hour, status, count in opp_rows:
-        key = hour.isoformat()
-        if key not in opp_by_hour:
-            opp_by_hour[key] = {"hour": key, "detected": 0, "optimized": 0, "simulated": 0, "expired": 0, "skipped": 0}
-        if status in opp_by_hour[key]:
-            opp_by_hour[key][status] += count
-        else:
-            opp_by_hour[key][status] = count
+        # Hourly expiration counts (keyed by expired_at)
+        exp_hour = func.date_trunc("hour", ArbitrageOpportunity.expired_at)
+        exp_query = (
+            select(
+                exp_hour.label("hour"),
+                func.count().label("expired"),
+            )
+            .where(ArbitrageOpportunity.expired_at >= since)
+            .group_by(exp_hour)
+            .order_by(exp_hour)
+        )
+        exp_rows = (await session.execute(exp_query)).all()
 
-    # Build hourly buckets for trades
+    # Build hourly buckets
+    det_by_hour = {row.hour.isoformat(): row.detected for row in det_rows}
     trade_by_hour = {
         row.hour.isoformat(): {
-            "hour": row.hour.isoformat(),
             "trades": row.trades,
             "fees": float(row.fees),
             "volume": float(row.volume),
         }
         for row in trade_rows
     }
+    exp_by_hour = {row.hour.isoformat(): row.expired for row in exp_rows}
 
-    # Merge into unified timeseries
-    all_hours = sorted(set(opp_by_hour.keys()) | set(trade_by_hour.keys()))
+    all_hours = sorted(set(det_by_hour) | set(trade_by_hour) | set(exp_by_hour))
     timeseries = []
     for h in all_hours:
-        entry = {"hour": h}
-        if h in opp_by_hour:
-            entry.update(opp_by_hour[h])
+        entry: dict = {"hour": h, "detected": det_by_hour.get(h, 0)}
         if h in trade_by_hour:
             entry.update(trade_by_hour[h])
+        entry["expired"] = exp_by_hour.get(h, 0)
         timeseries.append(entry)
 
     return {"timeseries": timeseries, "hours": hours}
@@ -353,11 +359,21 @@ async def get_metrics_timeseries(hours: int = 24, source: str | None = None):
 
 @router.get("/metrics/funnel")
 async def get_opportunity_funnel(hours: int = 24):
-    """Opportunity funnel: detected → optimized → simulated → profitable."""
+    """Opportunity funnel: detected → optimized → simulated → traded.
+
+    Each stage is cumulative — an opp that reached 'simulated' also counts
+    as having been detected and optimized. Status values that imply having
+    passed through a stage:
+    - detected: everything (all opps start as detected)
+    - optimized: optimized, unconverged, pending, simulated, expired
+      (expired opps were active enough to have been optimized)
+    - simulated: simulated (successfully executed trades)
+    - traded: distinct opportunity_ids that have PaperTrade rows
+    """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     async with SessionFactory() as session:
-        # Count opportunities by status
+        # Count opportunities by current status
         result = await session.execute(
             select(
                 ArbitrageOpportunity.status,
@@ -368,21 +384,21 @@ async def get_opportunity_funnel(hours: int = 24):
         )
         status_counts = {row.status: row.count for row in result.all()}
 
-        # Count profitable trades (size > 0 trades from simulated opps)
-        profitable = await session.scalar(
+        # Count distinct opportunities that actually produced trades
+        # (keyed by trade execution time, not opp detection time)
+        traded = await session.scalar(
             select(func.count(func.distinct(PaperTrade.opportunity_id)))
             .where(
                 PaperTrade.executed_at >= since,
+                PaperTrade.opportunity_id.isnot(None),
                 PaperTrade.side.in_(["BUY", "SELL"]),
             )
         )
 
-    # Build funnel — each stage is cumulative (includes opps that passed through)
+    # Cumulative funnel: statuses that imply passing through each stage
+    passed_optimization = {"optimized", "unconverged", "pending", "simulated", "expired"}
     detected = sum(status_counts.values())
-    optimized = sum(
-        v for k, v in status_counts.items()
-        if k in ("optimized", "unconverged", "pending", "simulated")
-    )
+    optimized = sum(v for k, v in status_counts.items() if k in passed_optimization)
     simulated = status_counts.get("simulated", 0)
 
     return {
@@ -390,7 +406,7 @@ async def get_opportunity_funnel(hours: int = 24):
             "detected": detected,
             "optimized": optimized,
             "simulated": simulated,
-            "traded": profitable or 0,
+            "traded": traded or 0,
         },
         "status_breakdown": status_counts,
         "hours": hours,
@@ -504,8 +520,18 @@ async def get_opportunity_duration_stats(hours: int = 168):
 
 
 @router.get("/metrics/correlations")
-async def get_correlation_validation(min_snapshots: int = 10):
-    """Validate conditional pair correlations against empirical price data."""
+async def get_correlation_validation(
+    min_snapshots: int = 10,
+    downgrade: bool = False,
+):
+    """Validate conditional pair correlations against empirical price movements.
+
+    Computes Pearson correlation on price *returns* (changes), not levels,
+    to measure co-movement rather than spurious level correlation.
+
+    If downgrade=true, pairs with weak or contradicted correlations are
+    downgraded to dependency_type='none' and unverified.
+    """
     from statistics import correlation as pearson_correlation
 
     results = []
@@ -531,6 +557,10 @@ async def get_correlation_validation(min_snapshots: int = 10):
 
             aligned_a, aligned_b = _align_series(series_a, series_b)
 
+            # Compute returns (price changes) from aligned levels
+            returns_a = [aligned_a[i] - aligned_a[i - 1] for i in range(1, len(aligned_a))]
+            returns_b = [aligned_b[i] - aligned_b[i - 1] for i in range(1, len(aligned_b))]
+
             entry = {
                 "pair_id": pair.id,
                 "market_a": pair.market_a.question[:80] if pair.market_a else None,
@@ -541,9 +571,9 @@ async def get_correlation_validation(min_snapshots: int = 10):
                 "aligned_snapshots": len(aligned_a),
             }
 
-            if len(aligned_a) >= min_snapshots:
+            if len(returns_a) >= min_snapshots:
                 try:
-                    r = pearson_correlation(aligned_a, aligned_b)
+                    r = pearson_correlation(returns_a, returns_b)
                     entry["empirical_r"] = round(r, 4)
                     entry["empirical_direction"] = "positive" if r > 0 else "negative"
                     entry["matches"] = (
@@ -560,7 +590,16 @@ async def get_correlation_validation(min_snapshots: int = 10):
             else:
                 entry["assessment"] = "insufficient_data"
 
+            # Write back downgrade if requested
+            if downgrade and entry.get("assessment") in ("weak_correlation", "contradicted"):
+                pair.dependency_type = "none"
+                pair.verified = False
+                entry["downgraded"] = True
+
             results.append(entry)
+
+        if downgrade:
+            await session.commit()
 
     confirmed = sum(1 for r in results if r.get("assessment") == "confirmed")
     contradicted = sum(1 for r in results if r.get("assessment") == "contradicted")
@@ -597,26 +636,33 @@ def _align_series(
     series_a: list[tuple[datetime, float]],
     series_b: list[tuple[datetime, float]],
 ) -> tuple[list[float], list[float]]:
-    """Align two price series by nearest timestamp within 5 minutes."""
+    """Align two price series by nearest timestamp within 5 minutes.
+
+    Each series_b point is used at most once to prevent sample reuse.
+    """
     max_gap_secs = 300
     aligned_a, aligned_b = [], []
+    used_b: set[int] = set()
 
-    j = 0
     for ts_a, price_a in series_a:
         best_j, best_gap = None, None
-        while j < len(series_b):
-            gap = abs((series_b[j][0] - ts_a).total_seconds())
+        for j_candidate in range(len(series_b)):
+            if j_candidate in used_b:
+                continue
+            gap = abs((series_b[j_candidate][0] - ts_a).total_seconds())
+            if gap > max_gap_secs:
+                # If series_b is past ts_a + max_gap, stop scanning
+                if series_b[j_candidate][0] > ts_a and gap > max_gap_secs:
+                    break
+                continue
             if best_gap is None or gap < best_gap:
                 best_gap = gap
-                best_j = j
-            if series_b[j][0] > ts_a:
-                break
-            j += 1
-        j = max(0, (best_j or 0) - 1)
+                best_j = j_candidate
 
-        if best_j is not None and best_gap <= max_gap_secs:
+        if best_j is not None:
             aligned_a.append(price_a)
             aligned_b.append(series_b[best_j][1])
+            used_b.add(best_j)
 
     return aligned_a, aligned_b
 

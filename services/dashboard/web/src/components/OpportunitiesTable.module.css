@@ -128,6 +128,16 @@
   color: var(--color-orange);
 }
 
+.statusExpired {
+  background: rgba(136, 136, 136, 0.1);
+  color: var(--color-text-dim);
+}
+
+.statusSkipped {
+  background: rgba(136, 136, 136, 0.1);
+  color: var(--color-text-secondary);
+}
+
 .statusDefault {
   background: rgba(136, 136, 136, 0.1);
   color: var(--color-text-secondary);

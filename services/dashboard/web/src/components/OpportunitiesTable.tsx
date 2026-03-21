@@ -25,7 +25,7 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
   const sorted = useMemo(() => {
     const filtered = showUnprofitable
       ? opportunities
-      : opportunities.filter((o) => o.estimated_profit > 0);
+      : opportunities.filter((o) => o.estimated_profit > 0 && o.status !== "expired");
     if (pagination.offset === 0) {
       return [...filtered].sort(
         (a, b) => b.estimated_profit - a.estimated_profit,
@@ -174,6 +174,8 @@ function statusClass(status: string): string {
     case "optimized":   return s.statusOptimized;
     case "simulated":   return s.statusSimulated;
     case "unconverged": return s.statusUnconverged;
+    case "expired":     return s.statusExpired;
+    case "skipped":     return s.statusSkipped;
     default:            return s.statusDefault;
   }
 }

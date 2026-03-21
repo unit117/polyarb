@@ -1,0 +1,190 @@
+/* MetricsPanel */
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.section {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+
+.sectionTitle {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* Funnel */
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.funnelStage {
+  position: relative;
+}
+
+.funnelBar {
+  height: 32px;
+  background: linear-gradient(90deg, rgba(0, 230, 122, 0.15), rgba(0, 230, 122, 0.05));
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-green);
+  transition: width 0.5s ease;
+}
+
+.funnelLabel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  gap: var(--space-3);
+}
+
+.funnelName {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--color-text);
+}
+
+.funnelCount {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.funnelPct {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+.breakdown {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.breakdownTitle {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.breakdownItem {
+  background: rgba(136, 136, 136, 0.1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+/* Tables */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-light);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.row {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.row:hover {
+  background: var(--color-bg-hover);
+}
+
+.td {
+  padding: var(--space-2) var(--space-3);
+  white-space: nowrap;
+}
+
+.tdNum {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  text-align: center;
+  color: var(--color-text-dim);
+  padding: var(--space-8) var(--space-3);
+}
+
+/* Duration */
+.durationStats {
+  display: flex;
+  gap: var(--space-6);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.durationStats strong {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+
+.histogram {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.histBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.histLabel {
+  width: 60px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.histTrack {
+  flex: 1;
+  height: 16px;
+  background: rgba(136, 136, 136, 0.05);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.histFill {
+  height: 100%;
+  background: rgba(0, 230, 122, 0.3);
+  border-radius: var(--radius-sm);
+  transition: width 0.5s ease;
+}
+
+.histCount {
+  width: 40px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}

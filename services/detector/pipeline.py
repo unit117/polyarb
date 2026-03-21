@@ -359,6 +359,8 @@ class DetectionPipeline:
                     if profit <= 0 and not existing_opp.expired_at:
                         existing_opp.expired_at = datetime.now(timezone.utc)
                         existing_opp.theoretical_profit = Decimal("0")
+                        existing_opp.estimated_profit = Decimal("0")
+                        existing_opp.optimal_trades = None
                         existing_opp.status = "expired"
                         stats["expired"] = stats.get("expired", 0) + 1
                         logger.info(
