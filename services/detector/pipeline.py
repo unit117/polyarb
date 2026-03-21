@@ -38,9 +38,19 @@ class DetectionPipeline:
         self.batch_size = batch_size
         self.classifier_model = classifier_model
         self._rescan_lock = asyncio.Lock()
+        self._detection_lock = asyncio.Lock()
 
     async def run_once(self) -> dict:
-        """Execute one full detection cycle. Returns stats dict."""
+        """Execute one full detection cycle. Returns stats dict.
+
+        Serialized via _detection_lock so concurrent triggers (periodic +
+        market-sync event) don't duplicate classification work or collide
+        on the market_pairs unique index.
+        """
+        async with self._detection_lock:
+            return await self._run_once_inner()
+
+    async def _run_once_inner(self) -> dict:
         stats = {"candidates": 0, "pairs_created": 0, "opportunities": 0}
         deferred_events: list[tuple[str, dict]] = []
 

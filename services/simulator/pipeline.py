@@ -71,6 +71,30 @@ class SimulatorPipeline:
             opp.status = "pending"
             await session.commit()
 
+        try:
+            return await self._execute_pending(opportunity_id)
+        except Exception:
+            # Revert pending → optimized so the opportunity isn't stranded
+            logger.exception(
+                "pending_execution_failed",
+                opportunity_id=opportunity_id,
+            )
+            try:
+                async with self.session_factory() as session:
+                    opp = await session.get(
+                        ArbitrageOpportunity, opportunity_id
+                    )
+                    if opp and opp.status == "pending":
+                        opp.status = "optimized"
+                        await session.commit()
+            except Exception:
+                logger.exception(
+                    "pending_revert_failed",
+                    opportunity_id=opportunity_id,
+                )
+            raise
+
+    async def _execute_pending(self, opportunity_id: int) -> dict:
         async with self.session_factory() as session:
             opp = await session.get(ArbitrageOpportunity, opportunity_id)
             if not opp or opp.status != "pending":
@@ -78,6 +102,8 @@ class SimulatorPipeline:
 
             pair = await session.get(MarketPair, opp.pair_id)
             if not pair:
+                opp.status = "optimized"
+                await session.commit()
                 return {"status": "no_pair"}
 
             # Load markets for IDs
@@ -92,6 +118,8 @@ class SimulatorPipeline:
             # (binary market: you lose your full stake in the worst case).
             net_profit = opp.optimal_trades.get("estimated_profit", 0)
             if net_profit <= 0:
+                opp.status = "optimized"
+                await session.commit()
                 return {"status": "no_trades"}
             kelly_fraction = min(net_profit * 0.5, 1.0)
 
