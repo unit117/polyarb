@@ -164,8 +164,12 @@ class Portfolio:
         pnl = Decimal("0")
         for key, shares in self.positions.items():
             current = Decimal(str(current_prices.get(key, 0)))
-            cost = self.cost_basis.get(key, shares * Decimal("0.5"))
-            pnl += shares * current - cost
+            cost = self.cost_basis.get(key, abs(shares) * Decimal("0.5"))
+            if shares > 0:
+                pnl += shares * current - cost
+            else:
+                # Short: profit = credit received - cost to close
+                pnl += cost - abs(shares) * current
         return float(pnl)
 
     def positions_in_profit(self, current_prices: dict[str, float] | None = None) -> tuple[int, int]:
@@ -176,8 +180,13 @@ class Portfolio:
         in_profit = 0
         for key, shares in self.positions.items():
             current = Decimal(str(current_prices.get(key, 0)))
-            cost = self.cost_basis.get(key, shares * Decimal("0.5"))
-            if shares * current > cost:
+            cost = self.cost_basis.get(key, abs(shares) * Decimal("0.5"))
+            if shares > 0:
+                profitable = shares * current > cost
+            else:
+                # Short: profitable when cost to close < credit received
+                profitable = abs(shares) * current < cost
+            if profitable:
                 in_profit += 1
         return in_profit, total
 
