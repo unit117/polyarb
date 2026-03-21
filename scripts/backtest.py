@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 sys.path.insert(0, ".")
 
-from shared.config import settings
+from shared.config import settings, polymarket_fee
 from shared.db import SessionFactory, init_db
 from shared.models import (
     ArbitrageOpportunity,
@@ -172,7 +172,6 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
         outcomes_a,
         outcomes_b,
         theoretical_profit=theoretical_profit,
-        fee_rate=settings.fee_rate,
         min_edge=settings.optimizer_min_edge,
     )
 
@@ -199,7 +198,6 @@ async def simulate_opportunity(
     portfolio: Portfolio,
     as_of: datetime,
     max_position_size: float,
-    fee_rate: float,
 ) -> dict:
     """Execute paper trades for an optimized opportunity using prices as-of `as_of`."""
     opp = await session.get(ArbitrageOpportunity, opp_id)
@@ -230,7 +228,7 @@ async def simulate_opportunity(
         size = min(trade["edge"] * max_position_size, max_position_size)
         fill = compute_vwap(order_book, trade["side"], size, midpoint)
 
-        fees = fill["vwap_price"] * fill["filled_size"] * fee_rate
+        fees = polymarket_fee(fill["vwap_price"], trade["side"]) * fill["filled_size"]
 
         # Track rebalancing exit PnL before executing (match live pipeline)
         key = f"{market.id}:{trade['outcome']}"
@@ -411,7 +409,6 @@ async def run_backtest(
     days: int = 30,
     initial_capital: float = 10000.0,
     max_position_size: float = 100.0,
-    fee_rate: float = 0.02,
     clean: bool = True,
 ) -> list[dict]:
     """Run the full backtest and return daily results."""
@@ -455,7 +452,7 @@ async def run_backtest(
         pairs=len(pairs),
         initial_capital=initial_capital,
         max_position=max_position_size,
-        fee_rate=fee_rate,
+        fee_model="polymarket",
     )
 
     # ── Generate daily time steps ─────────────────────────────────
@@ -515,7 +512,7 @@ async def run_backtest(
                 try:
                     res = await simulate_opportunity(
                         session, opp_id, portfolio, as_of,
-                        max_position_size, fee_rate,
+                        max_position_size,
                     )
                     if res.get("trades_executed"):
                         total_trades += res["trades_executed"]
@@ -695,7 +692,6 @@ async def cli_main():
     parser.add_argument("--days", type=int, default=30, help="Days to backtest")
     parser.add_argument("--capital", type=float, default=10000.0, help="Initial capital")
     parser.add_argument("--max-position", type=float, default=100.0, help="Max position size")
-    parser.add_argument("--fee-rate", type=float, default=0.02, help="Fee rate")
     parser.add_argument("--output", type=str, default="backtest_report.json", help="Output JSON path")
     parser.add_argument("--no-clean", action="store_true", help="Don't clean previous results")
     args = parser.parse_args()
@@ -704,7 +700,6 @@ async def cli_main():
         days=args.days,
         initial_capital=args.capital,
         max_position_size=args.max_position,
-        fee_rate=args.fee_rate,
         clean=not args.no_clean,
     )
 

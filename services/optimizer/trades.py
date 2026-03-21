@@ -8,6 +8,7 @@ capture the arbitrage.
 import structlog
 import numpy as np
 
+from shared.config import polymarket_fee
 from services.optimizer.frank_wolfe import FWResult
 
 logger = structlog.get_logger()
@@ -22,7 +23,6 @@ def compute_trades(
     outcomes_a: list[str],
     outcomes_b: list[str],
     theoretical_profit: float = 0.0,
-    fee_rate: float = 0.02,
     min_edge: float = 0.03,
 ) -> dict:
     """Compute optimal trades from the FW result.
@@ -97,10 +97,10 @@ def compute_trades(
     edge_b = max((t["edge"] for t in trades if t["market"] == "B"), default=0.0)
     raw_edge = edge_a + edge_b
 
-    # Estimated fees: two legs (buy + sell), each at ~midpoint price
-    avg_price_a = float(np.mean(p_a)) if len(p_a) > 0 else 0.5
-    avg_price_b = float(np.mean(p_b)) if len(p_b) > 0 else 0.5
-    est_fees = (avg_price_a + avg_price_b) * fee_rate
+    # Estimated fees: per-leg using venue fee schedule at trade price
+    est_fees = sum(
+        polymarket_fee(t["market_price"], t["side"]) for t in trades
+    )
 
     estimated_profit = max(raw_edge - est_fees, 0.0)
 

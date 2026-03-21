@@ -24,7 +24,6 @@ class OptimizerPipeline:
         max_iterations: int,
         gap_tolerance: float,
         ip_timeout_ms: int,
-        fee_rate: float = 0.02,
         min_edge: float = 0.03,
         skip_conditional: bool = True,
     ):
@@ -33,7 +32,6 @@ class OptimizerPipeline:
         self.max_iterations = max_iterations
         self.gap_tolerance = gap_tolerance
         self.ip_timeout_ms = ip_timeout_ms
-        self.fee_rate = fee_rate
         self.min_edge = min_edge
         self.skip_conditional = skip_conditional
 
@@ -123,7 +121,6 @@ class OptimizerPipeline:
                 outcomes_a,
                 outcomes_b,
                 theoretical_profit=theoretical_profit,
-                fee_rate=self.fee_rate,
                 min_edge=self.min_edge,
             )
 

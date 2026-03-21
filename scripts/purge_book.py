@@ -30,7 +30,6 @@ async def main():
         redis=redis,
         portfolio=portfolio,
         max_position_size=settings.max_position_size,
-        fee_rate=settings.fee_rate,
     )
 
     result = await pipeline.purge_contaminated_positions()

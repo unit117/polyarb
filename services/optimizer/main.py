@@ -24,7 +24,6 @@ async def main() -> None:
         max_iterations=settings.fw_max_iterations,
         gap_tolerance=settings.fw_gap_tolerance,
         ip_timeout_ms=settings.fw_ip_timeout_ms,
-        fee_rate=settings.fee_rate,
         min_edge=settings.optimizer_min_edge,
         skip_conditional=settings.optimizer_skip_conditional,
     )
