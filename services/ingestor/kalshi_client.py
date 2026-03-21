@@ -33,8 +33,15 @@ class KalshiClient:
         rate_limit_rps: float = 1.5,
     ):
         self._api_key = api_key
+        key_data = private_key_pem
+        # If it looks like a file path rather than inline PEM, read the file
+        if not key_data.lstrip().startswith("-----"):
+            import os
+            path = os.path.expanduser(key_data.strip())
+            with open(path, "rb") as f:
+                key_data = f.read().decode()
         self._private_key = serialization.load_pem_private_key(
-            private_key_pem.encode() if isinstance(private_key_pem, str) else private_key_pem,
+            key_data.encode() if isinstance(key_data, str) else key_data,
             password=None,
         )
         self._client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
