@@ -71,18 +71,22 @@ def _check_outcome_subset(market_a: dict, market_b: dict) -> dict | None:
     return None
 
 
-# Matches "Bitcoin Up or Down — March 21, 3:15AM-3:30AM ET" style questions.
-# Captures: (asset, start_time, end_time)
+# Matches "Bitcoin Up or Down — March 21, 3:15AM-3:30AM ET" style questions
+# AND hourly format "HYPE Up or Down — March 21, 10PM ET".
+# Captures: (asset, start_time, end_time_or_None)
 _TIME_INTERVAL_RE = re.compile(
-    r"^(.+?)\s+Up or Down\b.*?(\d{1,2}:\d{2}[AP]M)\s*-\s*(\d{1,2}:\d{2}[AP]M)",
+    r"^(.+?)\s+Up or Down\b.*?(\d{1,2}(?::\d{2})?[AP]M)\s*(?:-\s*(\d{1,2}(?::\d{2})?[AP]M))?",
     re.IGNORECASE,
 )
 
-# Matches "PLTR above $128 on March 21?" or "BTC above $90,000 — March 21, 3:15AM-3:30AM ET"
+# Matches price-threshold markets with optional $ and flexible timestamps:
+#   "PLTR above $128 on March 21?"
+#   "BTC above $90,000 — March 21, 3:15AM-3:30AM ET"
+#   "Ethereum above 2,205 on March 21, 5AM ET"
 # Captures: (asset, threshold, optional start_time, optional end_time)
 _PRICE_THRESHOLD_RE = re.compile(
-    r"^(.+?)\s+(?:above|below|over|under)\s+\$([0-9,]+(?:\.\d+)?)"
-    r"(?:.*?(\d{1,2}:\d{2}[AP]M)\s*-\s*(\d{1,2}:\d{2}[AP]M))?",
+    r"^(.+?)\s+(?:above|below|over|under)\s+\$?([0-9,]+(?:\.\d+)?)"
+    r"(?:.*?(\d{1,2}(?::\d{2})?[AP]M)\s*(?:-\s*(\d{1,2}(?::\d{2})?[AP]M))?)?",
     re.IGNORECASE,
 )
 
@@ -108,8 +112,11 @@ def _check_crypto_time_intervals(market_a: dict, market_b: dict) -> dict | None:
 
     m_a, m_b = m_a_updown, m_b_updown
 
-    asset_a, start_a, end_a = m_a.group(1).strip(), m_a.group(2), m_a.group(3)
-    asset_b, start_b, end_b = m_b.group(1).strip(), m_b.group(2), m_b.group(3)
+    asset_a, start_a = m_a.group(1).strip(), m_a.group(2)
+    asset_b, start_b = m_b.group(1).strip(), m_b.group(2)
+    # end_time is None for hourly format ("10PM ET")
+    end_a = m_a.group(3) or start_a
+    end_b = m_b.group(3) or start_b
 
     # Different assets — not the same pattern, let LLM decide
     if asset_a.lower() != asset_b.lower():
@@ -117,17 +124,20 @@ def _check_crypto_time_intervals(market_a: dict, market_b: dict) -> dict | None:
 
     # Same asset, same time window → genuine mutual exclusion (up vs down)
     if start_a == start_b and end_a == end_b:
+        window = f"{start_a}-{end_a}" if start_a != end_a else start_a
         return {
             "dependency_type": "mutual_exclusion",
             "confidence": 0.95,
-            "reasoning": f"Same asset '{asset_a}', same time window {start_a}-{end_a} — up/down are mutually exclusive",
+            "reasoning": f"Same asset '{asset_a}', same time window {window} — up/down are mutually exclusive",
         }
 
     # Same asset, different time window → independent
+    window_a = f"{start_a}-{end_a}" if start_a != end_a else start_a
+    window_b = f"{start_b}-{end_b}" if start_b != end_b else start_b
     return {
         "dependency_type": "none",
         "confidence": 0.95,
-        "reasoning": f"Same asset '{asset_a}', different time windows ({start_a}-{end_a} vs {start_b}-{end_b}) — independent events",
+        "reasoning": f"Same asset '{asset_a}', different time windows ({window_a} vs {window_b}) — independent events",
     }
 
 
@@ -159,19 +169,24 @@ def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | Non
     threshold_a = float(m_a.group(2).replace(",", ""))
     threshold_b = float(m_b.group(2).replace(",", ""))
 
-    start_a, end_a = m_a.group(3), m_a.group(4)
-    start_b, end_b = m_b.group(3), m_b.group(4)
+    start_a = m_a.group(3)
+    start_b = m_b.group(3)
+    # end_time is None for single-timestamp format ("5AM ET")
+    end_a = m_a.group(4) or start_a
+    end_b = m_b.group(4) or start_b
 
-    # Both have time intervals — check if same window
+    # Both have timestamps — check if same window
     if start_a and start_b:
         if start_a != start_b or end_a != end_b:
             # Different time windows → independent regardless of threshold
+            window_a = f"{start_a}-{end_a}" if start_a != end_a else start_a
+            window_b = f"{start_b}-{end_b}" if start_b != end_b else start_b
             return {
                 "dependency_type": "none",
                 "confidence": 0.95,
                 "reasoning": (
                     f"Same asset '{m_a.group(1).strip()}', different time windows "
-                    f"({start_a}-{end_a} vs {start_b}-{end_b}) — independent events"
+                    f"({window_a} vs {window_b}) — independent events"
                 ),
             }
 
@@ -264,6 +279,57 @@ def _check_ranking_markets(market_a: dict, market_b: dict) -> dict | None:
     }
 
 
+# Matches sports O/U lines: "O/U 2.5", "Over/Under 1.5", "O/U 190.5"
+# Captures: (line_value,)
+_OVER_UNDER_RE = re.compile(
+    r"(?:O/U|Over/Under|Over Under)\s+(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _check_over_under_markets(market_a: dict, market_b: dict) -> dict | None:
+    """Detect sports Over/Under lines on the same match.
+
+    O/U 1.5 and O/U 2.5 on the same match form an implication chain:
+    if the total is over 2.5, it is necessarily over 1.5.
+    Same line on same match = same market (no dependency to classify).
+    """
+    q_a = market_a.get("question", "")
+    q_b = market_b.get("question", "")
+
+    m_a = _OVER_UNDER_RE.search(q_a)
+    m_b = _OVER_UNDER_RE.search(q_b)
+
+    if not m_a or not m_b:
+        return None
+
+    line_a = float(m_a.group(1))
+    line_b = float(m_b.group(1))
+
+    if line_a == line_b:
+        return None  # Same line — let other checks handle it
+
+    # Strip the O/U portion and compare the rest to ensure same match
+    subject_a = _OVER_UNDER_RE.sub("", q_a).strip().lower()
+    subject_b = _OVER_UNDER_RE.sub("", q_b).strip().lower()
+
+    if subject_a != subject_b:
+        return None
+
+    higher = max(line_a, line_b)
+    lower = min(line_a, line_b)
+
+    return {
+        "dependency_type": "implication",
+        "confidence": 0.95,
+        "correlation": "positive",
+        "reasoning": (
+            f"Over {lower} is implied by Over {higher} — "
+            f"nested O/U lines form an implication chain"
+        ),
+    }
+
+
 async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
     """Apply rule-based heuristics. Returns result dict or None if ambiguous."""
     for check in (
@@ -272,6 +338,7 @@ async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
         _check_crypto_time_intervals,
         _check_price_threshold_markets,
         _check_ranking_markets,
+        _check_over_under_markets,
     ):
         result = check(market_a, market_b)
         if result:
@@ -318,6 +385,21 @@ Market B:
         if result.get("dependency_type") not in (*DEPENDENCY_TYPES, "none"):
             logger.warning("llm_invalid_type", raw=raw)
             return {"dependency_type": "none", "confidence": 0.0, "reasoning": raw}
+
+        # Conditional without correlation is useless — downgrade to none
+        if (
+            result.get("dependency_type") == "conditional"
+            and result.get("correlation") not in ("positive", "negative")
+        ):
+            logger.warning(
+                "llm_conditional_missing_correlation",
+                raw=raw,
+            )
+            result["dependency_type"] = "none"
+            result["confidence"] = 0.0
+            result["reasoning"] = (
+                f"Downgraded from conditional: missing correlation. Original: {raw}"
+            )
 
         logger.info(
             "llm_classification",

@@ -40,6 +40,7 @@ async def _restore_portfolio() -> Portfolio:
         portfolio.cash = Decimal(str(latest.cash))
         portfolio.realized_pnl = Decimal(str(latest.realized_pnl))
         portfolio.total_trades = latest.total_trades
+        portfolio.settled_trades = latest.settled_trades or 0
         portfolio.winning_trades = latest.winning_trades
 
         # Restore positions from snapshot
