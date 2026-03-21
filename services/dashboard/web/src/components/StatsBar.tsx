@@ -67,6 +67,11 @@ const StatsBar = React.memo(function StatsBar({ stats, onStatClick }: Props) {
               : "No positions yet"
         }
         small
+        title={
+          realizedWinRate
+            ? `Based on ${p!.winning_trades}/${p!.settled_trades} settled arb loops`
+            : "Counts only fully settled arbitrage loops, not open positions"
+        }
       />
     </div>
   );
@@ -115,16 +120,19 @@ function Stat({
   value,
   onClick,
   small,
+  title,
 }: {
   label: string;
   value: string;
   onClick?: () => void;
   small?: boolean;
+  title?: string;
 }) {
   return (
     <div
       className={`${s.stat} ${onClick ? s.clickable : ""}`}
       onClick={onClick}
+      title={title}
     >
       <div className={s.label}>{label}</div>
       <div className={`${s.value} ${small ? s.valueSmall : ""}`}>

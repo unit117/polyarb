@@ -31,16 +31,16 @@ const PnlChart = React.memo(function PnlChart({
           minute: "2-digit",
         }),
         value: d.total_value,
-        pnl: d.unrealized_pnl ?? d.total_value - initialCapital,
+        pnl: initialCapital + (d.unrealized_pnl ?? d.total_value - initialCapital),
       })),
     [history, initialCapital],
   );
 
   const [yMin, yMax] = useMemo(() => {
     if (chartData.length === 0) return [0, 0];
-    const values = chartData.map((d) => d.value);
-    const min = Math.min(...values, initialCapital);
-    const max = Math.max(...values, initialCapital);
+    const allValues = chartData.flatMap((d) => [d.value, d.pnl]);
+    const min = Math.min(...allValues, initialCapital);
+    const max = Math.max(...allValues, initialCapital);
     const range = max - min || 100;
     const padding = range * 0.15;
     return [
@@ -140,7 +140,8 @@ function CustomTooltip({
   if (!active || !payload || payload.length === 0) return null;
 
   const value = payload[0]?.value ?? 0;
-  const pnl = value - initialCapital;
+  const pnlLine = payload[1]?.value ?? initialCapital;
+  const pnl = pnlLine - initialCapital;
   const isPositive = pnl >= 0;
   const sign = isPositive ? "+" : "";
 
@@ -153,7 +154,7 @@ function CustomTooltip({
         </span>
       </div>
       <div className={s.tooltipRow}>
-        <span className={s.tooltipLabel}>PnL:</span>
+        <span className={s.tooltipLabel}>Unreal. PnL:</span>
         <span className={isPositive ? s.tooltipValuePositive : s.tooltipValueNegative}>
           {sign}${pnl.toFixed(2)} ({sign}
           {((pnl / initialCapital) * 100).toFixed(2)}%)

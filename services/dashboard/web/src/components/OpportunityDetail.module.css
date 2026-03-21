@@ -4,7 +4,11 @@
   inset: 0;
   background: var(--color-bg-overlay);
   z-index: 100;
-  animation: fadeIn 150ms ease;
+  animation: fadeIn 150ms ease forwards;
+}
+
+.overlayClosing {
+  animation: fadeOut 200ms ease forwards;
 }
 
 .panel {
@@ -19,7 +23,16 @@
   z-index: 101;
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
-  animation: slideInRight 250ms ease;
+  animation: slideInRight 250ms ease forwards;
+}
+
+.panelClosing {
+  animation: slideOutRight 200ms ease forwards;
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 .header {

@@ -94,15 +94,17 @@
   color: var(--color-red);
 }
 
-/* Trend arrow */
+/* Trend arrow — brighter than the number text for at-a-glance readability */
 .trendUp {
-  color: var(--color-green);
+  color: var(--color-green-bright);
   font-size: 10px;
   margin-left: 4px;
+  filter: brightness(1.2);
 }
 
 .trendDown {
   color: var(--color-red);
   font-size: 10px;
   margin-left: 4px;
+  filter: brightness(1.3);
 }
