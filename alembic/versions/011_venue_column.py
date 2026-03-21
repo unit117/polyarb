@@ -33,12 +33,13 @@ def upgrade() -> None:
     )
     op.create_index("ix_markets_venue", "markets", ["venue"])
 
-    # Widen unique constraint: polymarket_id alone → (venue, polymarket_id)
-    op.drop_constraint("ix_markets_polymarket_id", "markets", type_="unique")
-    op.create_unique_constraint(
-        "uq_markets_venue_polymarket_id",
+    # Widen unique index: polymarket_id alone → (venue, polymarket_id)
+    op.drop_index("ix_markets_polymarket_id", table_name="markets")
+    op.create_index(
+        "ix_markets_venue_polymarket_id",
         "markets",
         ["venue", "polymarket_id"],
+        unique=True,
     )
 
     # --- paper_trades ---
@@ -55,7 +56,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("paper_trades", "venue")
-    op.drop_constraint("uq_markets_venue_polymarket_id", "markets", type_="unique")
+    op.drop_index("ix_markets_venue_polymarket_id", table_name="markets")
     op.create_index("ix_markets_polymarket_id", "markets", ["polymarket_id"], unique=True)
     op.drop_index("ix_markets_venue", table_name="markets")
     op.drop_column("markets", "venue")
