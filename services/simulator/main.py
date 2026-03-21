@@ -53,8 +53,8 @@ async def _restore_portfolio() -> Portfolio:
         )
         for t in trades.scalars().all():
             key = f"{t.market_id}:{t.outcome}"
-            if t.side == "SETTLE":
-                # Settlement trades already closed the position
+            if t.side in ("SETTLE", "PURGE"):
+                # Settlement/purge trades already closed the position
                 portfolio.cost_basis.pop(key, None)
             elif t.side == "BUY":
                 portfolio.cost_basis[key] = portfolio.cost_basis.get(

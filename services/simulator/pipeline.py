@@ -241,6 +241,72 @@ class SimulatorPipeline:
 
         return stats
 
+    async def purge_contaminated_positions(self) -> dict:
+        """One-time cleanup: close ALL open positions at current market prices.
+
+        Used after fixing classification bugs to give the portfolio a clean start.
+        Records PURGE trades for auditability, then resets counters.
+        """
+        if not self.portfolio.positions:
+            return {"purged": 0, "pnl_realized": 0.0}
+
+        current_prices = await self._get_current_prices()
+        stats = {"purged": 0, "pnl_realized": 0.0, "positions_before": len(self.portfolio.positions)}
+
+        async with self.session_factory() as session:
+            for key in list(self.portfolio.positions.keys()):
+                parts = key.split(":")
+                if len(parts) != 2:
+                    continue
+
+                market_id = int(parts[0])
+                outcome = parts[1]
+
+                # Use current market price, fall back to 0.5 if unknown
+                price = current_prices.get(key, 0.5)
+                shares = self.portfolio.positions[key]
+
+                close_result = self.portfolio.close_position(key, price)
+                if not close_result["closed"]:
+                    continue
+
+                stats["purged"] += 1
+                stats["pnl_realized"] += close_result["pnl"]
+
+                # Record a PURGE trade for audit trail
+                paper_trade = PaperTrade(
+                    opportunity_id=None,
+                    market_id=market_id,
+                    outcome=outcome,
+                    side="PURGE",
+                    size=Decimal(str(close_result["shares"])),
+                    entry_price=Decimal(str(price)),
+                    vwap_price=Decimal(str(price)),
+                    slippage=Decimal("0"),
+                    fees=Decimal("0"),
+                    status="purged",
+                )
+                session.add(paper_trade)
+
+            await session.commit()
+
+        # Reset win/loss counters so post-fix metrics are clean
+        self.portfolio.total_trades = 0
+        self.portfolio.winning_trades = 0
+        self.portfolio.realized_pnl = Decimal("0")
+
+        # Snapshot the clean state
+        await self.snapshot_portfolio()
+
+        logger.info(
+            "contamination_purge_complete",
+            positions_closed=stats["purged"],
+            pnl_realized=stats["pnl_realized"],
+            cash_after=float(self.portfolio.cash),
+        )
+
+        return stats
+
     async def _get_current_prices(self) -> dict[str, float]:
         """Fetch latest prices for all open positions."""
         prices: dict[str, float] = {}
