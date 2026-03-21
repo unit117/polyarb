@@ -56,8 +56,10 @@ class ClobWebSocket:
         self._subscribed_tokens: set[str] = set()
         self._token_map: dict[str, tuple[int, str]] = {}  # token_id -> (market_id, outcome)
         self._pending_snapshots: dict[int, dict] = {}  # market_id -> {prices, midpoints}
+        self._last_known_prices: dict[int, dict] = {}  # market_id -> {outcome: price} full state
         self._flush_task: asyncio.Task | None = None
         self._running = False
+        self.connected = False  # Exposed for graceful degradation
 
     async def _build_token_map(self) -> None:
         """Build token_id -> (market_id, outcome_name) lookup from DB."""
@@ -201,8 +203,28 @@ class ClobWebSocket:
             except Exception:
                 break
 
+    async def _seed_last_known_prices(self, market_ids: list[int]) -> None:
+        """Load the latest complete snapshot for each market from DB."""
+        if not market_ids:
+            return
+        async with self._session_factory() as session:
+            for market_id in market_ids:
+                result = await session.execute(
+                    select(PriceSnapshot.prices)
+                    .where(PriceSnapshot.market_id == market_id)
+                    .order_by(PriceSnapshot.timestamp.desc())
+                    .limit(1)
+                )
+                row = result.scalar_one_or_none()
+                if row:
+                    self._last_known_prices[market_id] = dict(row)
+
     async def _flush_snapshots(self) -> None:
-        """Periodically flush buffered price updates to DB."""
+        """Periodically flush buffered price updates to DB.
+
+        Merges WS partial updates with last known complete prices so every
+        snapshot row contains ALL outcomes, not just the one that changed.
+        """
         while self._running:
             await asyncio.sleep(self._buffer_seconds)
             if not self._pending_snapshots:
@@ -211,12 +233,27 @@ class ClobWebSocket:
             snapshots = self._pending_snapshots.copy()
             self._pending_snapshots.clear()
 
+            # Seed last known prices for markets we haven't seen yet
+            unseeded = [mid for mid in snapshots if mid not in self._last_known_prices]
+            if unseeded:
+                try:
+                    await self._seed_last_known_prices(unseeded)
+                except Exception:
+                    log.exception("ws_seed_prices_error")
+
             rows = []
             for market_id, data in snapshots.items():
+                # Start from last known complete state, overlay WS updates
+                merged = dict(self._last_known_prices.get(market_id, {}))
+                merged.update(data["prices"])
+
+                # Update last known state for next flush
+                self._last_known_prices[market_id] = merged
+
                 rows.append({
                     "market_id": market_id,
-                    "prices": data["prices"],
-                    "midpoints": data["midpoints"],
+                    "prices": merged,
+                    "midpoints": merged,
                     "order_book": None,
                 })
 
@@ -226,13 +263,14 @@ class ClobWebSocket:
                     await session.commit()
 
                 # Check for resolution
-                for market_id, data in snapshots.items():
-                    for outcome, price_str in data["prices"].items():
+                for row_data in rows:
+                    for outcome, price_str in row_data["prices"].items():
                         try:
                             price = float(price_str)
                         except (ValueError, TypeError):
                             continue
                         if price >= self._resolution_threshold:
+                            market_id = row_data["market_id"]
                             async with self._session_factory() as session:
                                 mkt = await session.get(Market, market_id)
                                 if mkt and not mkt.resolved_outcome:
@@ -335,6 +373,7 @@ class ClobWebSocket:
                 log.info("ws_connecting", url=self._ws_url, tokens=len(initial_token_ids))
                 await self._connect(initial_token_ids)
                 consecutive_failures = 0
+                self.connected = True
 
                 # Start ping and flush loops alongside the listener
                 self._flush_task = asyncio.create_task(self._flush_snapshots())
@@ -355,6 +394,7 @@ class ClobWebSocket:
                         pass
 
             except Exception as e:
+                self.connected = False
                 consecutive_failures += 1
                 delay = min(
                     self._reconnect_base * (2 ** consecutive_failures) + random.uniform(0, 1),

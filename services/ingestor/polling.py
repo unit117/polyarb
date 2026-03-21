@@ -370,4 +370,11 @@ class MarketPoller:
                 await self.poll_once()
             except Exception:
                 log.exception("poll_cycle_error")
-            await asyncio.sleep(self._poll_interval)
+
+            # Graceful degradation: if WS is down, poll at 30s instead of 300s
+            if self._ws_client is not None and not self._ws_client.connected:
+                interval = 30
+                log.warning("poll_ws_down_fast_mode", interval=interval)
+            else:
+                interval = self._poll_interval
+            await asyncio.sleep(interval)
