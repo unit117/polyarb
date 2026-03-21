@@ -61,12 +61,17 @@ async def _restore_portfolio() -> Portfolio:
                 portfolio.cost_basis[key] = portfolio.cost_basis.get(
                     key, Decimal("0")
                 ) + Decimal(str(t.size)) * Decimal(str(t.vwap_price))
-            elif t.side == "SELL" and key in portfolio.cost_basis:
-                # Proportionally reduce cost basis
+            elif t.side == "SELL":
                 pos = portfolio.positions.get(key, Decimal("0")) + Decimal(str(t.size))
-                if pos > 0:
+                if pos > 0 and key in portfolio.cost_basis:
+                    # Closing/reducing a long — reduce cost basis proportionally
                     avg = portfolio.cost_basis[key] / pos
                     portfolio.cost_basis[key] -= Decimal(str(t.size)) * avg
+                elif pos <= 0:
+                    # Opening/increasing a short — cost basis tracks credit received
+                    portfolio.cost_basis[key] = portfolio.cost_basis.get(
+                        key, Decimal("0")
+                    ) + Decimal(str(t.size)) * Decimal(str(t.vwap_price))
 
         # Clean up cost basis for positions that no longer exist
         for key in list(portfolio.cost_basis.keys()):
