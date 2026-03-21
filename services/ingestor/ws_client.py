@@ -209,11 +209,22 @@ class ClobWebSocket:
             except Exception:
                 break
 
+    def _get_market_outcomes(self, market_id: int) -> set[str]:
+        """Derive expected outcome names for a market from _token_map."""
+        outcomes = set()
+        for _token_id, (mid, outcome) in self._token_map.items():
+            if mid == market_id:
+                outcomes.add(outcome)
+        return outcomes
+
     async def _seed_last_known_prices(self, market_ids: list[int]) -> None:
         """Load the latest complete snapshot for each market from DB.
 
-        If we're in a post-reconnect window, records the seeded outcomes
-        so we can track when each market has been fully refreshed by WS.
+        Records seeded outcomes in _reconnect_pending so we can track
+        when each market has been fully refreshed by WS.  Markets with
+        no prior DB snapshot are also marked pending (using outcomes
+        from _token_map) to prevent partial WS-only snapshots from
+        reaching the DB before all outcomes have been seen.
         """
         if not market_ids:
             return
@@ -230,8 +241,14 @@ class ClobWebSocket:
                     prices = dict(row)
                     self._last_known_prices[market_id] = prices
                     # Track DB-seeded outcomes that need WS refresh
-                    if self._reconnect_pending is not None:
-                        self._reconnect_pending[market_id] = set(prices.keys())
+                    self._reconnect_pending[market_id] = set(prices.keys())
+                else:
+                    # No DB snapshot yet — mark all known outcomes as
+                    # pending so partial WS data doesn't create an
+                    # incomplete snapshot that readers treat as complete.
+                    expected = self._get_market_outcomes(market_id)
+                    if expected:
+                        self._reconnect_pending[market_id] = expected
 
     async def _flush_snapshots(self) -> None:
         """Periodically flush buffered price updates to DB.
