@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter
-from sqlalchemy import func, select, desc
+from sqlalchemy import case, cast, func, select, desc, Float
 from sqlalchemy.orm import joinedload, load_only
 
 from shared.config import settings
@@ -14,6 +14,7 @@ from shared.models import (
     MarketPair,
     PaperTrade,
     PortfolioSnapshot,
+    PriceSnapshot,
 )
 
 router = APIRouter()
@@ -117,9 +118,15 @@ async def get_opportunities(limit: int = 200, offset: int = 0, status: str | Non
     items = []
     for opp in opps:
         pair = opp.pair
+        # Compute duration if expired
+        duration_seconds = None
+        if opp.expired_at and opp.timestamp:
+            duration_seconds = (opp.expired_at - opp.timestamp).total_seconds()
         items.append({
             "id": opp.id,
             "timestamp": opp.timestamp.isoformat() if opp.timestamp else None,
+            "expired_at": opp.expired_at.isoformat() if opp.expired_at else None,
+            "duration_seconds": duration_seconds,
             "status": opp.status,
             "type": opp.type,
             "theoretical_profit": float(opp.theoretical_profit) if opp.theoretical_profit else 0,
@@ -267,6 +274,351 @@ async def get_portfolio_history(hours: int = 24, source: str | None = None):
             for s in snapshots
         ]
     }
+
+
+# --- Observability Endpoints ---
+
+
+@router.get("/metrics/timeseries")
+async def get_metrics_timeseries(hours: int = 24, source: str | None = None):
+    """Hourly aggregates: opportunities, trades, fees, profit."""
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    async with SessionFactory() as session:
+        # Hourly opportunity counts by status
+        hour_trunc = func.date_trunc("hour", ArbitrageOpportunity.timestamp)
+        opp_query = (
+            select(
+                hour_trunc.label("hour"),
+                ArbitrageOpportunity.status,
+                func.count().label("count"),
+            )
+            .where(ArbitrageOpportunity.timestamp >= since)
+            .group_by(hour_trunc, ArbitrageOpportunity.status)
+            .order_by(hour_trunc)
+        )
+        opp_rows = (await session.execute(opp_query)).all()
+
+        # Hourly trade aggregates
+        trade_hour = func.date_trunc("hour", PaperTrade.executed_at)
+        trade_query = (
+            select(
+                trade_hour.label("hour"),
+                func.count().label("trades"),
+                func.coalesce(func.sum(PaperTrade.fees), 0).label("fees"),
+                func.coalesce(func.sum(PaperTrade.size), 0).label("volume"),
+            )
+            .where(PaperTrade.executed_at >= since)
+        )
+        if source:
+            trade_query = trade_query.where(PaperTrade.source == source)
+        trade_query = trade_query.group_by(trade_hour).order_by(trade_hour)
+        trade_rows = (await session.execute(trade_query)).all()
+
+    # Build hourly buckets for opportunities
+    opp_by_hour: dict[str, dict] = {}
+    for hour, status, count in opp_rows:
+        key = hour.isoformat()
+        if key not in opp_by_hour:
+            opp_by_hour[key] = {"hour": key, "detected": 0, "optimized": 0, "simulated": 0, "expired": 0, "skipped": 0}
+        if status in opp_by_hour[key]:
+            opp_by_hour[key][status] += count
+        else:
+            opp_by_hour[key][status] = count
+
+    # Build hourly buckets for trades
+    trade_by_hour = {
+        row.hour.isoformat(): {
+            "hour": row.hour.isoformat(),
+            "trades": row.trades,
+            "fees": float(row.fees),
+            "volume": float(row.volume),
+        }
+        for row in trade_rows
+    }
+
+    # Merge into unified timeseries
+    all_hours = sorted(set(opp_by_hour.keys()) | set(trade_by_hour.keys()))
+    timeseries = []
+    for h in all_hours:
+        entry = {"hour": h}
+        if h in opp_by_hour:
+            entry.update(opp_by_hour[h])
+        if h in trade_by_hour:
+            entry.update(trade_by_hour[h])
+        timeseries.append(entry)
+
+    return {"timeseries": timeseries, "hours": hours}
+
+
+@router.get("/metrics/funnel")
+async def get_opportunity_funnel(hours: int = 24):
+    """Opportunity funnel: detected → optimized → simulated → profitable."""
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    async with SessionFactory() as session:
+        # Count opportunities by status
+        result = await session.execute(
+            select(
+                ArbitrageOpportunity.status,
+                func.count().label("count"),
+            )
+            .where(ArbitrageOpportunity.timestamp >= since)
+            .group_by(ArbitrageOpportunity.status)
+        )
+        status_counts = {row.status: row.count for row in result.all()}
+
+        # Count profitable trades (size > 0 trades from simulated opps)
+        profitable = await session.scalar(
+            select(func.count(func.distinct(PaperTrade.opportunity_id)))
+            .where(
+                PaperTrade.executed_at >= since,
+                PaperTrade.side.in_(["BUY", "SELL"]),
+            )
+        )
+
+    # Build funnel — each stage is cumulative (includes opps that passed through)
+    detected = sum(status_counts.values())
+    optimized = sum(
+        v for k, v in status_counts.items()
+        if k in ("optimized", "unconverged", "pending", "simulated")
+    )
+    simulated = status_counts.get("simulated", 0)
+
+    return {
+        "funnel": {
+            "detected": detected,
+            "optimized": optimized,
+            "simulated": simulated,
+            "traded": profitable or 0,
+        },
+        "status_breakdown": status_counts,
+        "hours": hours,
+    }
+
+
+@router.get("/metrics/by-dependency-type")
+async def get_metrics_by_dependency_type(hours: int = 24):
+    """Per-dependency-type hit rates and profitability."""
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    async with SessionFactory() as session:
+        # Opportunities per dependency type with hit rate
+        result = await session.execute(
+            select(
+                MarketPair.dependency_type,
+                func.count(ArbitrageOpportunity.id).label("total_opps"),
+                func.sum(
+                    case((ArbitrageOpportunity.status == "simulated", 1), else_=0)
+                ).label("simulated"),
+                func.avg(
+                    cast(ArbitrageOpportunity.theoretical_profit, Float)
+                ).label("avg_theoretical_profit"),
+                func.avg(
+                    cast(ArbitrageOpportunity.estimated_profit, Float)
+                ).label("avg_estimated_profit"),
+            )
+            .join(MarketPair, ArbitrageOpportunity.pair_id == MarketPair.id)
+            .where(ArbitrageOpportunity.timestamp >= since)
+            .group_by(MarketPair.dependency_type)
+        )
+        rows = result.all()
+
+    return {
+        "by_dependency_type": [
+            {
+                "dependency_type": row.dependency_type,
+                "total_opportunities": row.total_opps,
+                "simulated": row.simulated,
+                "hit_rate": round(row.simulated / row.total_opps, 3) if row.total_opps else 0,
+                "avg_theoretical_profit": round(float(row.avg_theoretical_profit or 0), 4),
+                "avg_estimated_profit": round(float(row.avg_estimated_profit or 0), 4),
+            }
+            for row in rows
+        ],
+        "hours": hours,
+    }
+
+
+@router.get("/metrics/duration")
+async def get_opportunity_duration_stats(hours: int = 168):
+    """Opportunity duration histogram — how long opportunities stay profitable."""
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    async with SessionFactory() as session:
+        # Get all expired opportunities with duration
+        result = await session.execute(
+            select(
+                ArbitrageOpportunity.id,
+                ArbitrageOpportunity.timestamp,
+                ArbitrageOpportunity.expired_at,
+                MarketPair.dependency_type,
+            )
+            .join(MarketPair, ArbitrageOpportunity.pair_id == MarketPair.id)
+            .where(
+                ArbitrageOpportunity.timestamp >= since,
+                ArbitrageOpportunity.expired_at.isnot(None),
+            )
+        )
+        rows = result.all()
+
+    durations = []
+    for row in rows:
+        secs = (row.expired_at - row.timestamp).total_seconds()
+        durations.append({
+            "opportunity_id": row.id,
+            "dependency_type": row.dependency_type,
+            "duration_seconds": round(secs, 1),
+        })
+
+    # Build histogram buckets
+    buckets = {"<1s": 0, "1-10s": 0, "10-60s": 0, "1-5m": 0, "5-30m": 0, "30m-2h": 0, ">2h": 0}
+    for d in durations:
+        s = d["duration_seconds"]
+        if s < 1:
+            buckets["<1s"] += 1
+        elif s < 10:
+            buckets["1-10s"] += 1
+        elif s < 60:
+            buckets["10-60s"] += 1
+        elif s < 300:
+            buckets["1-5m"] += 1
+        elif s < 1800:
+            buckets["5-30m"] += 1
+        elif s < 7200:
+            buckets["30m-2h"] += 1
+        else:
+            buckets[">2h"] += 1
+
+    total = len(durations)
+    avg_duration = sum(d["duration_seconds"] for d in durations) / total if total else 0
+    median_duration = sorted(d["duration_seconds"] for d in durations)[total // 2] if total else 0
+
+    return {
+        "total_expired": total,
+        "avg_duration_seconds": round(avg_duration, 1),
+        "median_duration_seconds": round(median_duration, 1),
+        "histogram": buckets,
+        "hours": hours,
+    }
+
+
+@router.get("/metrics/correlations")
+async def get_correlation_validation(min_snapshots: int = 10):
+    """Validate conditional pair correlations against empirical price data."""
+    from statistics import correlation as pearson_correlation
+
+    results = []
+
+    async with SessionFactory() as session:
+        pair_result = await session.execute(
+            select(MarketPair)
+            .where(MarketPair.dependency_type == "conditional")
+            .options(
+                joinedload(MarketPair.market_a).load_only(Market.id, Market.question),
+                joinedload(MarketPair.market_b).load_only(Market.id, Market.question),
+            )
+        )
+        pairs = pair_result.unique().scalars().all()
+
+        for pair in pairs:
+            constraint = pair.constraint_matrix or {}
+            predicted = constraint.get("correlation")
+
+            # Get Yes price series for both markets
+            series_a = await _get_yes_prices(session, pair.market_a_id)
+            series_b = await _get_yes_prices(session, pair.market_b_id)
+
+            aligned_a, aligned_b = _align_series(series_a, series_b)
+
+            entry = {
+                "pair_id": pair.id,
+                "market_a": pair.market_a.question[:80] if pair.market_a else None,
+                "market_b": pair.market_b.question[:80] if pair.market_b else None,
+                "predicted_correlation": predicted,
+                "snapshots_a": len(series_a),
+                "snapshots_b": len(series_b),
+                "aligned_snapshots": len(aligned_a),
+            }
+
+            if len(aligned_a) >= min_snapshots:
+                try:
+                    r = pearson_correlation(aligned_a, aligned_b)
+                    entry["empirical_r"] = round(r, 4)
+                    entry["empirical_direction"] = "positive" if r > 0 else "negative"
+                    entry["matches"] = (
+                        entry["empirical_direction"] == predicted if predicted else None
+                    )
+                    if abs(r) < 0.1:
+                        entry["assessment"] = "weak_correlation"
+                    elif entry["matches"]:
+                        entry["assessment"] = "confirmed"
+                    else:
+                        entry["assessment"] = "contradicted"
+                except Exception:
+                    entry["assessment"] = "error"
+            else:
+                entry["assessment"] = "insufficient_data"
+
+            results.append(entry)
+
+    confirmed = sum(1 for r in results if r.get("assessment") == "confirmed")
+    contradicted = sum(1 for r in results if r.get("assessment") == "contradicted")
+    weak = sum(1 for r in results if r.get("assessment") == "weak_correlation")
+
+    return {
+        "pairs": results,
+        "summary": {
+            "total": len(results),
+            "confirmed": confirmed,
+            "contradicted": contradicted,
+            "weak": weak,
+            "insufficient_data": len(results) - confirmed - contradicted - weak,
+        },
+    }
+
+
+async def _get_yes_prices(session, market_id: int) -> list[tuple[datetime, float]]:
+    """Get chronological Yes prices for a market."""
+    result = await session.execute(
+        select(PriceSnapshot.timestamp, PriceSnapshot.prices)
+        .where(PriceSnapshot.market_id == market_id)
+        .order_by(PriceSnapshot.timestamp.asc())
+    )
+    series = []
+    for ts, prices in result.all():
+        yes_price = prices.get("Yes") if prices else None
+        if yes_price is not None:
+            series.append((ts, float(yes_price)))
+    return series
+
+
+def _align_series(
+    series_a: list[tuple[datetime, float]],
+    series_b: list[tuple[datetime, float]],
+) -> tuple[list[float], list[float]]:
+    """Align two price series by nearest timestamp within 5 minutes."""
+    max_gap_secs = 300
+    aligned_a, aligned_b = [], []
+
+    j = 0
+    for ts_a, price_a in series_a:
+        best_j, best_gap = None, None
+        while j < len(series_b):
+            gap = abs((series_b[j][0] - ts_a).total_seconds())
+            if best_gap is None or gap < best_gap:
+                best_gap = gap
+                best_j = j
+            if series_b[j][0] > ts_a:
+                break
+            j += 1
+        j = max(0, (best_j or 0) - 1)
+
+        if best_j is not None and best_gap <= max_gap_secs:
+            aligned_a.append(price_a)
+            aligned_b.append(series_b[best_j][1])
+
+    return aligned_a, aligned_b
 
 
 # --- Live Trading Endpoints ---

@@ -1,6 +1,7 @@
 """Detection pipeline: similarity → classification → constraint generation."""
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import openai
@@ -353,6 +354,23 @@ class DetectionPipeline:
                     # Don't touch pending opps — simulator is mid-execution
                     if existing_opp.status == "pending":
                         continue
+
+                    # Mark expired when profit disappears (duration tracking)
+                    if profit <= 0 and not existing_opp.expired_at:
+                        existing_opp.expired_at = datetime.now(timezone.utc)
+                        existing_opp.theoretical_profit = Decimal("0")
+                        existing_opp.status = "expired"
+                        stats["expired"] = stats.get("expired", 0) + 1
+                        logger.info(
+                            "opportunity_expired",
+                            opportunity_id=existing_opp.id,
+                            pair_id=pair.id,
+                            duration_seconds=(
+                                existing_opp.expired_at - existing_opp.timestamp
+                            ).total_seconds(),
+                        )
+                        continue
+
                     # Refresh the existing opportunity with current profit
                     existing_opp.theoretical_profit = Decimal(
                         str(max(profit, 0))
