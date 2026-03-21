@@ -5,6 +5,22 @@ import redis.asyncio as aioredis
 
 from shared.config import settings
 
+# Channel payload schemas (all payloads are JSON dicts):
+#
+# MARKET_UPDATED:        {action: "sync", count: int}
+# SNAPSHOT_CREATED:      {count: int, source?: "websocket", market_ids?: [int]}
+#                        - source/market_ids present only from WS path
+#                        - polling path omits them (triggers full detection instead)
+# PAIR_DETECTED:         {pair_id, market_a_id, market_b_id, dependency_type, confidence}
+# ARBITRAGE_FOUND:       {opportunity_id, pair_id, type, theoretical_profit}
+# OPTIMIZATION_COMPLETE: {opportunity_id, pair_id, status, iterations, bregman_gap,
+#                         estimated_profit, n_trades, converged}
+# TRADE_EXECUTED:        {trade_id, opportunity_id, market_id, outcome, side,
+#                         size, vwap_price, slippage}
+# PORTFOLIO_UPDATED:     {cash, positions, total_value, realized_pnl, unrealized_pnl,
+#                         total_trades, settled_trades, winning_trades}
+# MARKET_RESOLVED:       {market_id, resolved_outcome, source, price?}
+
 CHANNEL_MARKET_UPDATED = "polyarb:market_updated"
 CHANNEL_SNAPSHOT_CREATED = "polyarb:snapshot_created"
 CHANNEL_PAIR_DETECTED = "polyarb:pair_detected"
