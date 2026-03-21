@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-03-21 (4) — Rescan Verification Gate, Top-N Classifier, Partition Matrix Fix
+
+### Bug Fixes
+
+**8. Rescan bypasses verification gate (detector/pipeline.py) — CRITICAL**
+- `_rescan_existing_pairs` created opportunities for ALL pairs without checking `pair.verified`, causing 85% of trades (3,109 of 3,675) to execute on unverified pairs.
+- Added `if not pair.verified: continue` gate in the rescan loop.
+
+**10. Top-N implication misclassification (detector/classifier.py) — MEDIUM**
+- "Top 10" vs "Top 20" pairs were classified as `mutual_exclusion` by the LLM. Finishing Top 10 implies finishing Top 20 — this is `implication`.
+- Added `_check_ranking_markets()` rule-based classifier with `_RANKING_RE` regex. Matches same-subject "Top/Bottom N" patterns and classifies as implication.
+
+**11. Stale constraint matrices (scripts/rebuild_constraints.py) — HIGH**
+- Pairs classified before bug fixes had incorrect constraint matrices that persisted in the DB.
+- Added `scripts/rebuild_constraints.py` one-time script that re-classifies all pairs via rule-based checks and rebuilds constraint matrices with fixed logic.
+- Run result: 2,050 pairs rebuilt, 206 reclassified, 482 marked unverified.
+
+**12. Partition matrix no-op for binary markets (detector/constraints.py) — MEDIUM**
+- `_partition_matrix` returned all-ones `[[1,1],[1,1]]` for binary markets, giving the optimizer no constraint signal.
+- Fixed to return `[[0,1],[1,0]]` — both Yes can't be true simultaneously, and both No can't be true simultaneously.
+- Multi-outcome partitions now correctly mark different shared outcomes as infeasible.
+
+### Files Changed
+
+- `services/detector/pipeline.py` — verification gate in `_rescan_existing_pairs`
+- `services/detector/classifier.py` — `_RANKING_RE`, `_check_ranking_markets()`
+- `services/detector/constraints.py` — `_partition_matrix()` binary market fix
+- `scripts/rebuild_constraints.py` — NEW: one-time constraint matrix rebuild script
+
+### Post-Deploy Action Required
+
+```bash
+docker compose run --rm backtest python -m scripts.rebuild_constraints
+```
+
+---
+
 ## 2026-03-21 (3) — Price-Threshold Classifier, Regex Gap, Portfolio Purge
 
 ### Bug Fixes
