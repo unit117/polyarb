@@ -106,7 +106,12 @@ def compute_trades(
         for t in trades
     )
 
-    estimated_profit = max(raw_edge - est_fees, 0.0)
+    # Estimated slippage cost: conservative 0.5% per leg (matches VWAP
+    # midpoint fallback).  Without order book data at optimization time
+    # this is the best proxy for execution cost.
+    est_slippage = sum(t["market_price"] * 0.005 for t in trades)
+
+    estimated_profit = max(raw_edge - est_fees - est_slippage, 0.0)
 
     return {
         "trades": trades,

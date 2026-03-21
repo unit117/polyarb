@@ -104,8 +104,8 @@ class DetectionPipeline:
                     continue
 
                 # Get latest prices for profit computation
-                prices_a = await _get_latest_prices(session, market_a.id)
-                prices_b = await _get_latest_prices(session, market_b.id)
+                prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
 
                 # Build constraint matrix
                 constraint = build_constraint_matrix(
@@ -258,8 +258,8 @@ class DetectionPipeline:
                 if classification["dependency_type"] == "none":
                     continue
 
-                prices_a = await _get_latest_prices(session, market_a.id)
-                prices_b = await _get_latest_prices(session, market_b.id)
+                prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
 
                 constraint = build_constraint_matrix(
                     classification["dependency_type"],
@@ -603,15 +603,20 @@ def _market_to_dict(market: Market) -> dict:
     }
 
 
-async def _get_latest_prices(session, market_id: int) -> dict | None:
+async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
     """Fetch the most recent price snapshot for a market."""
+    from datetime import timedelta
     from shared.models import PriceSnapshot
 
-    result = await session.execute(
+    query = (
         select(PriceSnapshot)
         .where(PriceSnapshot.market_id == market_id)
         .order_by(PriceSnapshot.timestamp.desc())
         .limit(1)
     )
+    if max_age_seconds > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        query = query.where(PriceSnapshot.timestamp >= cutoff)
+    result = await session.execute(query)
     snapshot = result.scalar_one_or_none()
     return snapshot.prices if snapshot else None

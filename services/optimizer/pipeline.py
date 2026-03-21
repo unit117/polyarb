@@ -8,6 +8,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from shared.config import settings
 from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish
 from shared.models import ArbitrageOpportunity, Market, MarketPair, PriceSnapshot
 from services.optimizer.frank_wolfe import optimize
@@ -85,9 +86,10 @@ class OptimizerPipeline:
                     )
                     return {"status": "skipped", "reason": "conditional_unconstrained"}
 
-            # Fetch latest prices
-            prices_a = await _get_latest_prices(session, pair.market_a_id)
-            prices_b = await _get_latest_prices(session, pair.market_b_id)
+            # Fetch latest prices (reject stale snapshots)
+            max_age = settings.max_snapshot_age_seconds
+            prices_a = await _get_latest_prices(session, pair.market_a_id, max_age)
+            prices_b = await _get_latest_prices(session, pair.market_b_id, max_age)
 
             if prices_a is None or prices_b is None:
                 logger.warning("missing_prices", pair_id=pair.id)
@@ -204,12 +206,18 @@ class OptimizerPipeline:
         return stats
 
 
-async def _get_latest_prices(session, market_id: int) -> dict | None:
-    result = await session.execute(
+async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
+    from datetime import datetime, timedelta, timezone
+
+    query = (
         select(PriceSnapshot)
         .where(PriceSnapshot.market_id == market_id)
         .order_by(PriceSnapshot.timestamp.desc())
         .limit(1)
     )
+    if max_age_seconds > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        query = query.where(PriceSnapshot.timestamp >= cutoff)
+    result = await session.execute(query)
     snapshot = result.scalar_one_or_none()
     return snapshot.prices if snapshot else None

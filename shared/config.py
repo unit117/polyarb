@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     postgres_user: str = "polyarb"
     postgres_password: str = "polyarb_dev"
@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     max_position_size: float = 100.0
     slippage_model: str = "vwap"
     simulator_interval_seconds: int = 60
+    max_snapshot_age_seconds: int = 120  # Reject price snapshots older than this
 
     # Settlement settings
     resolution_price_threshold: float = 0.98
