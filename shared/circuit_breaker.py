@@ -120,25 +120,38 @@ class CircuitBreaker:
             )
             return False, "max_daily_loss"
 
-        # Check max position per market — but allow trades that reduce exposure
+        # Check max position per market.
+        # Compute what exposure will be AFTER the trade to correctly handle
+        # trades that partially close and partially open (e.g. BUY 150
+        # against a short of 100 → closes 100, opens 50 new long).
         key = f"{market_id}:{outcome}"
         existing = float(portfolio.positions.get(key, 0))
-        is_reducing = (
-            (trade_side == "SELL" and existing > 0)
-            or (trade_side == "BUY" and existing < 0)
-        )
-        if not is_reducing:
-            market_exposure = sum(
-                abs(float(shares))
-                for k, shares in portfolio.positions.items()
-                if k.startswith(f"{market_id}:")
-            )
-            if market_exposure + trade_size > self.max_position_per_market:
+
+        if trade_side == "BUY":
+            post_position = existing + trade_size
+        else:
+            post_position = existing - trade_size
+
+        # Only check the cap if post-trade exposure is larger than current
+        if abs(post_position) > abs(existing):
+            # Sum all outcome positions for this market after the trade
+            post_market_exposure = 0.0
+            for k, shares in portfolio.positions.items():
+                if not k.startswith(f"{market_id}:"):
+                    continue
+                if k == key:
+                    post_market_exposure += abs(post_position)
+                else:
+                    post_market_exposure += abs(float(shares))
+            # If key wasn't in positions yet, add it
+            if key not in portfolio.positions:
+                post_market_exposure += abs(post_position)
+
+            if post_market_exposure > self.max_position_per_market:
                 await self._trip(
                     "max_position_per_market",
                     market_id=market_id,
-                    current_exposure=market_exposure,
-                    trade_size=trade_size,
+                    post_market_exposure=post_market_exposure,
                     limit=self.max_position_per_market,
                 )
                 return False, "max_position_per_market"
