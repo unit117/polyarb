@@ -125,7 +125,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 384M
 
   # ── Backtest one-shot services (isolated database) ───────────
   # Step 1: create polyarb_backtest DB & copy markets/pairs from live
