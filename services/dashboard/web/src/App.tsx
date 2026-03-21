@@ -4,12 +4,13 @@ import OpportunitiesTable from "./components/OpportunitiesTable.tsx";
 import TradesTable from "./components/TradesTable.tsx";
 import PnlChart from "./components/PnlChart.tsx";
 import PairsTable from "./components/PairsTable.tsx";
+import MetricsPanel from "./components/MetricsPanel.tsx";
 import OpportunityDetail from "./components/OpportunityDetail.tsx";
 import { useDashboardData } from "./hooks/useDashboardData.ts";
 import type { TradingMode } from "./hooks/useDashboardData.ts";
 import s from "./App.module.css";
 
-type Tab = "opportunities" | "trades" | "pairs";
+type Tab = "opportunities" | "trades" | "pairs" | "metrics";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("opportunities");
@@ -58,7 +59,7 @@ export default function App() {
       <PnlChart history={history} />
 
       <nav className={s.tabs}>
-        {(["opportunities", "trades", "pairs"] as Tab[]).map((t) => (
+        {(["opportunities", "trades", "pairs", "metrics"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -95,6 +96,7 @@ export default function App() {
             loading={loadingMore.pairs}
           />
         )}
+        {tab === "metrics" && <MetricsPanel />}
       </main>
 
       {selectedOpp && (

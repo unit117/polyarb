@@ -1,8 +1,9 @@
 """Validate LLM-predicted conditional pair correlations against empirical price data.
 
-For each conditional pair, computes rolling Pearson correlation from PriceSnapshot
-history and compares against the classifier's predicted direction. Pairs where
-empirical data contradicts the prediction are downgraded to dependency_type='none'.
+For each conditional pair, computes Pearson correlation on price *returns*
+(changes between consecutive aligned snapshots) and compares against the
+classifier's predicted direction. Pairs where empirical data contradicts
+the prediction are downgraded to dependency_type='none'.
 
 Usage:
     python -m scripts.validate_correlations [--dry-run] [--min-snapshots 10]
@@ -10,7 +11,6 @@ Usage:
 
 import argparse
 import asyncio
-import sys
 from statistics import correlation as pearson_correlation
 
 import structlog
@@ -78,24 +78,28 @@ async def validate_conditional_pairs(
                 })
                 continue
 
-            # Align timestamps: find overlapping time points
+            # Align timestamps: find overlapping time points (no sample reuse)
             prices_a, prices_b = _align_price_series(snaps_a, snaps_b)
 
-            if len(prices_a) < min_snapshots:
+            # Compute returns (price changes) from aligned levels
+            returns_a = [prices_a[i] - prices_a[i - 1] for i in range(1, len(prices_a))]
+            returns_b = [prices_b[i] - prices_b[i - 1] for i in range(1, len(prices_b))]
+
+            if len(returns_a) < min_snapshots:
                 results.append({
                     "pair_id": pair.id,
                     "market_a_id": pair.market_a_id,
                     "market_b_id": pair.market_b_id,
                     "status": "skip",
                     "reason": "insufficient_aligned_snapshots",
-                    "aligned_count": len(prices_a),
+                    "aligned_count": len(returns_a),
                     "min_required": min_snapshots,
                 })
                 continue
 
-            # Compute empirical correlation
+            # Compute empirical correlation on returns
             try:
-                empirical_r = pearson_correlation(prices_a, prices_b)
+                empirical_r = pearson_correlation(returns_a, returns_b)
             except Exception as e:
                 results.append({
                     "pair_id": pair.id,
@@ -182,34 +186,34 @@ def _align_price_series(
 ) -> tuple[list[float], list[float]]:
     """Align two price series by nearest timestamp within 5 minutes.
 
+    Each series_b point is used at most once to prevent sample reuse.
     Returns two lists of aligned prices.
     """
-    from datetime import timedelta
-
-    max_gap = timedelta(minutes=5)
+    max_gap_secs = 300
     prices_a = []
     prices_b = []
+    used_b: set[int] = set()
 
-    j = 0
     for point_a in series_a:
         ts_a = point_a["timestamp"]
-        # Find nearest point in series_b
         best_j = None
         best_gap = None
-        while j < len(series_b):
+        for j in range(len(series_b)):
+            if j in used_b:
+                continue
             gap = abs((series_b[j]["timestamp"] - ts_a).total_seconds())
+            if gap > max_gap_secs:
+                if series_b[j]["timestamp"] > ts_a and gap > max_gap_secs:
+                    break
+                continue
             if best_gap is None or gap < best_gap:
                 best_gap = gap
                 best_j = j
-            if series_b[j]["timestamp"] > ts_a:
-                break
-            j += 1
-        # Don't advance j — reuse for next point_a overlap
-        j = max(0, (best_j or 0) - 1)
 
-        if best_j is not None and best_gap <= max_gap.total_seconds():
+        if best_j is not None:
             prices_a.append(point_a["price"])
             prices_b.append(series_b[best_j]["price"])
+            used_b.add(best_j)
 
     return prices_a, prices_b
 
