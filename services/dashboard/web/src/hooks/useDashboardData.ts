@@ -128,6 +128,7 @@ export function useDashboardData(): DashboardData {
     setHistory([]);
     setTrades([]);
     setTradesPag({ total: 0, offset: 0, limit: PAGE_SIZE, hasMore: false });
+    loadedCountRef.current.trades = PAGE_SIZE;
   }, []);
 
   const sourceParam = `source=${mode}`;
@@ -142,29 +143,37 @@ export function useDashboardData(): DashboardData {
       .catch(console.error);
   }, [sourceParam]);
 
+  // Track how many items are currently loaded so WS refreshes
+  // re-fetch the full loaded range, not just the first page.
+  // This prevents losing items beyond page 1 (and closing an open detail drawer).
+  const loadedCountRef = useRef({ opportunities: PAGE_SIZE, trades: PAGE_SIZE, pairs: PAGE_SIZE });
+
   const fetchOpportunities = useCallback(() => {
-    apiFetch<{ opportunities: Opportunity[]; total: number; offset: number; limit: number }>(`/opportunities?limit=${PAGE_SIZE}&offset=0`)
+    const limit = loadedCountRef.current.opportunities;
+    apiFetch<{ opportunities: Opportunity[]; total: number; offset: number; limit: number }>(`/opportunities?limit=${limit}&offset=0`)
       .then((r) => {
         setOpportunities(r.opportunities);
-        setOppPag(makePagination(r.total, r.offset, r.limit));
+        setOppPag(makePagination(r.total, 0, limit));
       })
       .catch(console.error);
   }, []);
 
   const fetchTrades = useCallback(() => {
-    apiFetch<{ trades: Trade[]; total: number; offset: number; limit: number }>(`/trades?limit=${PAGE_SIZE}&offset=0&${sourceParam}`)
+    const limit = loadedCountRef.current.trades;
+    apiFetch<{ trades: Trade[]; total: number; offset: number; limit: number }>(`/trades?limit=${limit}&offset=0&${sourceParam}`)
       .then((r) => {
         setTrades(r.trades);
-        setTradesPag(makePagination(r.total, r.offset, r.limit));
+        setTradesPag(makePagination(r.total, 0, limit));
       })
       .catch(console.error);
   }, [sourceParam]);
 
   const fetchPairs = useCallback(() => {
-    apiFetch<{ pairs: Pair[]; total: number; offset: number; limit: number }>(`/pairs?limit=${PAGE_SIZE}&offset=0`)
+    const limit = loadedCountRef.current.pairs;
+    apiFetch<{ pairs: Pair[]; total: number; offset: number; limit: number }>(`/pairs?limit=${limit}&offset=0`)
       .then((r) => {
         setPairs(r.pairs);
-        setPairsPag(makePagination(r.total, r.offset, r.limit));
+        setPairsPag(makePagination(r.total, 0, limit));
       })
       .catch(console.error);
   }, []);
@@ -174,7 +183,11 @@ export function useDashboardData(): DashboardData {
     setLoadingMore((prev) => ({ ...prev, opportunities: true }));
     apiFetch<{ opportunities: Opportunity[]; total: number; offset: number; limit: number }>(`/opportunities?limit=${PAGE_SIZE}&offset=${nextOffset}`)
       .then((r) => {
-        setOpportunities((prev) => [...prev, ...r.opportunities]);
+        setOpportunities((prev) => {
+          const merged = [...prev, ...r.opportunities];
+          loadedCountRef.current.opportunities = merged.length;
+          return merged;
+        });
         setOppPag(makePagination(r.total, nextOffset, r.limit));
         setLoadingMore((prev) => ({ ...prev, opportunities: false }));
       })
@@ -189,7 +202,11 @@ export function useDashboardData(): DashboardData {
     setLoadingMore((prev) => ({ ...prev, trades: true }));
     apiFetch<{ trades: Trade[]; total: number; offset: number; limit: number }>(`/trades?limit=${PAGE_SIZE}&offset=${nextOffset}&${sourceParam}`)
       .then((r) => {
-        setTrades((prev) => [...prev, ...r.trades]);
+        setTrades((prev) => {
+          const merged = [...prev, ...r.trades];
+          loadedCountRef.current.trades = merged.length;
+          return merged;
+        });
         setTradesPag(makePagination(r.total, nextOffset, r.limit));
         setLoadingMore((prev) => ({ ...prev, trades: false }));
       })
@@ -204,7 +221,11 @@ export function useDashboardData(): DashboardData {
     setLoadingMore((prev) => ({ ...prev, pairs: true }));
     apiFetch<{ pairs: Pair[]; total: number; offset: number; limit: number }>(`/pairs?limit=${PAGE_SIZE}&offset=${nextOffset}`)
       .then((r) => {
-        setPairs((prev) => [...prev, ...r.pairs]);
+        setPairs((prev) => {
+          const merged = [...prev, ...r.pairs];
+          loadedCountRef.current.pairs = merged.length;
+          return merged;
+        });
         setPairsPag(makePagination(r.total, nextOffset, r.limit));
         setLoadingMore((prev) => ({ ...prev, pairs: false }));
       })
