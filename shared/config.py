@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     resolution_price_threshold: float = 0.98
     settlement_interval_seconds: int = 120
 
+    # Circuit breaker settings
+    cb_max_daily_loss: float = 500.0
+    cb_max_position_per_market: float = 200.0
+    cb_max_drawdown_pct: float = 10.0
+    cb_max_consecutive_errors: int = 5
+    cb_cooldown_seconds: int = 300  # 5-minute cooldown
+
     # Dashboard settings
     dashboard_port: int = 8080
 
@@ -80,15 +87,12 @@ settings = Settings()
 
 
 def polymarket_fee(price: float, side: str) -> float:
-    """Polymarket fee: 0% maker, ~1.5% taker on potential profit.
+    """Polymarket taker fee: price * (1 - price) * 0.015.
 
-    Taker fee = price * (1 - price) * 0.015, capped so fee <= price.
-    Maker orders pay nothing; we conservatively assume taker for now.
+    The formula is symmetric — the same for BUY and SELL because Polymarket
+    charges on the probability of payout, which is price*(1-price) regardless
+    of direction. Maker orders pay 0%; we conservatively assume taker.
     """
-    if side == "SELL":
-        # Selling at `price` — profit potential is `price` itself
-        return price * (1.0 - price) * 0.015
-    # Buying at `price` — profit potential is (1 - price)
     return price * (1.0 - price) * 0.015
 
 

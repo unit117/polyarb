@@ -21,6 +21,7 @@ from shared.models import (
     PriceSnapshot,
 )
 from shared.config import polymarket_fee
+from shared.circuit_breaker import CircuitBreaker
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
 
@@ -34,14 +35,26 @@ class SimulatorPipeline:
         redis: aioredis.Redis,
         portfolio: Portfolio,
         max_position_size: float,
+        circuit_breaker: CircuitBreaker | None = None,
     ):
         self.session_factory = session_factory
         self.redis = redis
         self.portfolio = portfolio
         self.max_position_size = max_position_size
+        self.circuit_breaker = circuit_breaker
+        self._in_flight: set[int] = set()  # opportunity_ids currently being processed
 
     async def simulate_opportunity(self, opportunity_id: int) -> dict:
         """Simulate executing trades for an optimized opportunity."""
+        if opportunity_id in self._in_flight:
+            return {"status": "skipped", "reason": "in_flight"}
+        self._in_flight.add(opportunity_id)
+        try:
+            return await self._simulate_opportunity_inner(opportunity_id)
+        finally:
+            self._in_flight.discard(opportunity_id)
+
+    async def _simulate_opportunity_inner(self, opportunity_id: int) -> dict:
         async with self.session_factory() as session:
             opp = await session.get(ArbitrageOpportunity, opportunity_id)
             if not opp:
@@ -64,14 +77,23 @@ class SimulatorPipeline:
             trades_executed = 0
             total_pnl = Decimal("0")
 
-            # Compute base position size from net estimated profit.
-            # A 0.10 net profit (after fees) → full max_position_size.
-            # Scale linearly below that, with a floor of 0.
+            # Half-Kelly position sizing using the optimizer's edge estimate.
+            # kelly_fraction = (edge / max_loss) * 0.5, where max_loss ≈ 1
+            # (binary market: you lose your full stake in the worst case).
             net_profit = opp.optimal_trades.get("estimated_profit", 0)
             if net_profit <= 0:
                 return {"status": "no_trades"}
-            profit_ratio = min(net_profit / 0.10, 1.0)
-            base_size = profit_ratio * self.max_position_size
+            kelly_fraction = min(net_profit * 0.5, 1.0)
+
+            # Scale down when portfolio is in drawdown
+            total_value = self.portfolio.total_value()
+            drawdown = 1.0 - (total_value / float(self.portfolio.initial_capital))
+            if drawdown > 0.05:
+                # Linear scale-down: at 5% drawdown → 100%, at 10%+ → 50%
+                drawdown_scale = max(0.5, 1.0 - (drawdown - 0.05) / 0.10)
+                kelly_fraction *= drawdown_scale
+
+            base_size = kelly_fraction * self.max_position_size
 
             for trade in opp.optimal_trades["trades"]:
                 market = market_a if trade["market"] == "A" else market_b
@@ -87,6 +109,20 @@ class SimulatorPipeline:
                 fill = compute_vwap(order_book, trade["side"], size, midpoint)
 
                 fees = polymarket_fee(fill["vwap_price"], trade["side"]) * fill["filled_size"]
+
+                # Circuit breaker gate
+                if self.circuit_breaker:
+                    allowed, reason = await self.circuit_breaker.pre_trade_check(
+                        self.portfolio, market.id, fill["filled_size"]
+                    )
+                    if not allowed:
+                        logger.warning(
+                            "trade_blocked_by_circuit_breaker",
+                            opportunity_id=opp.id,
+                            market_id=market.id,
+                            reason=reason,
+                        )
+                        continue
 
                 # Track rebalancing exit PNL before executing
                 key = f"{market.id}:{trade['outcome']}"
@@ -161,6 +197,10 @@ class SimulatorPipeline:
             # Update opportunity status
             opp.status = "simulated"
             await session.commit()
+
+            # Record success/loss on circuit breaker
+            if self.circuit_breaker and trades_executed > 0:
+                self.circuit_breaker.record_success()
 
             logger.info(
                 "simulation_complete",
@@ -379,6 +419,8 @@ class SimulatorPipeline:
             except Exception:
                 logger.exception("simulation_error", opportunity_id=opp_id)
                 stats["errors"] += 1
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_error()
 
         # Snapshot portfolio after batch
         if stats["simulated"] > 0:
