@@ -118,6 +118,7 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
             theoretical_profit=Decimal(str(profit)),
             status="detected",
             timestamp=as_of,
+            dependency_type=pair.dependency_type,
         )
         session.add(opp)
         await session.flush()

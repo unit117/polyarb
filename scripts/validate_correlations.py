@@ -136,6 +136,10 @@ async def validate_conditional_pairs(
             if result.get("action") == "downgrade" and not dry_run:
                 pair.dependency_type = "none"
                 pair.verified = False
+                if pair.constraint_matrix:
+                    updated_cm = dict(pair.constraint_matrix)
+                    updated_cm["type"] = "none"
+                    pair.constraint_matrix = updated_cm
                 logger.warning(
                     "conditional_pair_downgraded",
                     pair_id=pair.id,
