@@ -254,25 +254,29 @@ class DetectionPipeline:
 
         Lightweight: no pgvector search, no LLM classification. Only recomputes
         profit bounds for existing pairs where at least one market just got a
-        price update. Skips pairs that already have an unprocessed opportunity
-        (detected/pending) to avoid duplicates.
+        price update. Skips pairs that already have an in-flight opportunity
+        to avoid duplicates.
         """
         stats = {"opportunities": 0, "pairs_checked": 0}
 
         async with self.session_factory() as session:
-            # Exclude pairs with unprocessed opportunities (detected or pending).
-            # Pairs whose last opportunity was already simulated/expired are eligible
-            # for new opportunities as prices move.
-            unprocessed_pair_ids = (
+            # Exclude pairs with in-flight opportunities at any pipeline stage.
+            # Terminal statuses (simulated, skipped) mean the opportunity is done
+            # and the pair is eligible for fresh detection as prices move.
+            in_flight_pair_ids = (
                 select(ArbitrageOpportunity.pair_id)
-                .where(ArbitrageOpportunity.status.in_(["detected", "pending"]))
+                .where(
+                    ArbitrageOpportunity.status.in_(
+                        ["detected", "pending", "optimized", "unconverged"]
+                    )
+                )
                 .distinct()
             )
             result = await session.execute(
                 select(MarketPair)
                 .where(
                     MarketPair.verified == True,  # noqa: E712
-                    ~MarketPair.id.in_(unprocessed_pair_ids),
+                    ~MarketPair.id.in_(in_flight_pair_ids),
                     (MarketPair.market_a_id.in_(market_ids))
                     | (MarketPair.market_b_id.in_(market_ids)),
                 )
