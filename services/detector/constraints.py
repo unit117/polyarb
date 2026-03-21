@@ -77,23 +77,30 @@ def _implication_matrix(n_a: int, n_b: int) -> list[list[int]]:
 
 
 def _partition_matrix(outcomes_a: list[str], outcomes_b: list[str]) -> list[list[int]]:
-    """Markets partition the same space: at most one outcome across both can be true."""
+    """Markets partition the same space: at most one outcome across both can be true.
+
+    For binary markets (2x2): both "Yes" can't be true simultaneously and both
+    "No" can't be true simultaneously (exactly one event in the partition occurs).
+    For multi-outcome: different shared outcomes can't both resolve Yes.
+    """
     n_a = len(outcomes_a)
     n_b = len(outcomes_b)
-    # Shared outcomes can't both resolve Yes
+
+    # Binary partition: exactly one of the two markets resolves Yes
+    if n_a == 2 and n_b == 2:
+        return [
+            [0, 1],  # A=Yes + B=Yes infeasible; A=Yes + B=No feasible
+            [1, 0],  # A=No + B=Yes feasible; A=No + B=No infeasible
+        ]
+
+    # Multi-outcome: different shared outcomes can't both be true
     shared = set(outcomes_a) & set(outcomes_b)
     matrix = [[1] * n_b for _ in range(n_a)]
     for i, oa in enumerate(outcomes_a):
         for j, ob in enumerate(outcomes_b):
             if oa in shared and ob in shared and oa != ob:
-                # Different shared outcomes — both can't be true
-                pass  # stays 1, both could be in the event
-            if oa == ob and oa in shared:
-                # Same outcome in both — feasible (it's the same event)
-                matrix[i][j] = 1
-    # For partition: exactly one outcome is true across the combined space
-    # This is more nuanced; mark all as feasible for now and let
-    # the optimizer enforce the sum-to-one constraint
+                # Different shared outcomes — both can't be true in a partition
+                matrix[i][j] = 0
     return matrix
 
 
