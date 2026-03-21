@@ -188,6 +188,33 @@ class KalshiClient:
             return self._normalize_market(market)
         return None
 
+    async def list_settled_markets(self, limit: int = 200) -> list[dict]:
+        """Fetch recently settled markets with raw status/result fields.
+
+        Returns raw Kalshi dicts (not normalized) so callers can read
+        the 'status', 'result', and 'ticker' fields for resolution.
+        """
+        all_markets: list[dict] = []
+        cursor: str | None = None
+
+        while True:
+            params: dict = {"limit": limit, "status": "settled"}
+            if cursor:
+                params["cursor"] = cursor
+
+            data = await self._request("GET", "/markets", params=params)
+            if not data or not isinstance(data, dict):
+                break
+
+            markets = data.get("markets", [])
+            all_markets.extend(markets)
+            cursor = data.get("cursor")
+
+            if not cursor or len(markets) < limit:
+                break
+
+        return all_markets
+
     async def get_orderbook(self, ticker: str, depth: int = 10) -> dict | None:
         """Fetch order book for a market ticker."""
         data = await self._request(
