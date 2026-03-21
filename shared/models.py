@@ -120,6 +120,8 @@ class ArbitrageOpportunity(Base):
     fw_iterations: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bregman_gap: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String, default="detected")
+    pending_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    expired_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
 
     pair: Mapped["MarketPair"] = relationship(back_populates="opportunities")
 
