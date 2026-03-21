@@ -85,6 +85,25 @@ class MarketPoller:
         self._fetch_order_books = fetch_order_books
         self._max_snapshot_markets = max_snapshot_markets
         self._resolution_threshold = resolution_price_threshold
+        self._ws_client = None
+
+    def set_ws_client(self, ws_client) -> None:
+        self._ws_client = ws_client
+
+    def get_eligible_token_ids(self, markets: list[Market]) -> list[str]:
+        """Return token IDs for markets eligible for price streaming."""
+        markets_by_id = {m.id: m for m in markets if m.token_ids}
+        by_liquidity = sorted(markets_by_id.values(), key=lambda m: m.liquidity or 0, reverse=True)
+        eligible_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
+
+        # Include paired markets (same logic as snapshot_prices)
+        # Can't query DB synchronously here, so collect all token_ids from top + paired
+        token_ids = []
+        for mid in eligible_ids:
+            m = markets_by_id.get(mid)
+            if m and m.token_ids:
+                token_ids.extend(str(t) for t in m.token_ids)
+        return token_ids
 
     async def sync_markets(self) -> list[Market]:
         log.info("sync_markets_start")
@@ -314,13 +333,35 @@ class MarketPoller:
                 await session.commit()
                 log.info("resolution_check_done", resolved=resolved_count)
 
-    async def poll_once(self) -> None:
+    async def poll_once(self) -> list[Market]:
         log.info("poll_cycle_start")
         markets = await self.sync_markets()
         await self.compute_embeddings(markets)
         await self.snapshot_prices(markets)
         await self.check_resolved_markets()
+
+        # Update WS subscriptions with current eligible markets
+        if self._ws_client is not None:
+            try:
+                await self._ws_client._build_token_map()
+                eligible = set(self.get_eligible_token_ids(markets))
+                # Also add paired market tokens
+                async with self._session_factory() as session:
+                    result = await session.execute(
+                        select(MarketPair.market_a_id, MarketPair.market_b_id)
+                    )
+                    markets_by_id = {m.id: m for m in markets if m.token_ids}
+                    for row in result.fetchall():
+                        for mid in (row.market_a_id, row.market_b_id):
+                            m = markets_by_id.get(mid)
+                            if m and m.token_ids:
+                                eligible.update(str(t) for t in m.token_ids)
+                await self._ws_client.update_subscriptions(eligible)
+            except Exception:
+                log.exception("ws_subscription_update_error")
+
         log.info("poll_cycle_done")
+        return markets
 
     async def run(self) -> None:
         log.info("poller_start", interval=self._poll_interval)
