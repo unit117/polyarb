@@ -85,8 +85,11 @@ class SimulatorPipeline:
                 return {"status": "no_trades"}
             kelly_fraction = min(net_profit * 0.5, 1.0)
 
+            # Fetch current prices so drawdown includes position value
+            current_prices = await self._get_current_prices()
+
             # Scale down when portfolio is in drawdown
-            total_value = self.portfolio.total_value()
+            total_value = self.portfolio.total_value(current_prices)
             drawdown = 1.0 - (total_value / float(self.portfolio.initial_capital))
             if drawdown > 0.05:
                 # Linear scale-down: at 5% drawdown → 100%, at 10%+ → 50%
@@ -113,7 +116,12 @@ class SimulatorPipeline:
                 # Circuit breaker gate
                 if self.circuit_breaker:
                     allowed, reason = await self.circuit_breaker.pre_trade_check(
-                        self.portfolio, market.id, fill["filled_size"]
+                        self.portfolio,
+                        market.id,
+                        fill["filled_size"],
+                        trade_side=trade["side"],
+                        outcome=trade["outcome"],
+                        current_prices=current_prices,
                     )
                     if not allowed:
                         logger.warning(
@@ -159,6 +167,10 @@ class SimulatorPipeline:
                         realized = (avg_entry - exit_price) * close_size
 
                     self.portfolio.realized_pnl += realized
+
+                    # Feed realized losses into circuit breaker daily tracker
+                    if self.circuit_breaker and realized < 0:
+                        self.circuit_breaker.record_loss(float(abs(realized)))
 
                 if not result["executed"]:
                     continue
@@ -255,6 +267,10 @@ class SimulatorPipeline:
 
                     stats["settled"] += 1
                     stats["pnl_realized"] += close_result["pnl"]
+
+                    # Feed settlement losses into circuit breaker
+                    if self.circuit_breaker and close_result["pnl"] < 0:
+                        self.circuit_breaker.record_loss(abs(close_result["pnl"]))
 
                     paper_trade = PaperTrade(
                         opportunity_id=None,
