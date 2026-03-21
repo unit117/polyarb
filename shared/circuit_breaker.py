@@ -93,6 +93,9 @@ class CircuitBreaker:
         portfolio,
         market_id: int,
         trade_size: float,
+        trade_side: str,
+        outcome: str,
+        current_prices: dict[str, float] | None = None,
     ) -> tuple[bool, str]:
         """Run all checks before executing a trade.
 
@@ -117,24 +120,31 @@ class CircuitBreaker:
             )
             return False, "max_daily_loss"
 
-        # Check max position per market
-        market_exposure = sum(
-            abs(float(shares))
-            for key, shares in portfolio.positions.items()
-            if key.startswith(f"{market_id}:")
+        # Check max position per market — but allow trades that reduce exposure
+        key = f"{market_id}:{outcome}"
+        existing = float(portfolio.positions.get(key, 0))
+        is_reducing = (
+            (trade_side == "SELL" and existing > 0)
+            or (trade_side == "BUY" and existing < 0)
         )
-        if market_exposure + trade_size > self.max_position_per_market:
-            await self._trip(
-                "max_position_per_market",
-                market_id=market_id,
-                current_exposure=market_exposure,
-                trade_size=trade_size,
-                limit=self.max_position_per_market,
+        if not is_reducing:
+            market_exposure = sum(
+                abs(float(shares))
+                for k, shares in portfolio.positions.items()
+                if k.startswith(f"{market_id}:")
             )
-            return False, "max_position_per_market"
+            if market_exposure + trade_size > self.max_position_per_market:
+                await self._trip(
+                    "max_position_per_market",
+                    market_id=market_id,
+                    current_exposure=market_exposure,
+                    trade_size=trade_size,
+                    limit=self.max_position_per_market,
+                )
+                return False, "max_position_per_market"
 
-        # Check max drawdown
-        total_value = portfolio.total_value()
+        # Check max drawdown (include position value via current_prices)
+        total_value = portfolio.total_value(current_prices)
         initial = float(portfolio.initial_capital)
         drawdown_pct = ((initial - total_value) / initial) * 100.0
         if drawdown_pct >= self.max_drawdown_pct:
