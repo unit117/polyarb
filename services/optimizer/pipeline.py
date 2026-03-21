@@ -69,13 +69,23 @@ class OptimizerPipeline:
                 logger.warning("invalid_constraint_matrix", pair_id=pair.id)
                 return {"status": "invalid_constraints"}
 
-            # Skip conditional pairs — the constraint matrix is unconstrained
-            # (all-ones), so FW produces noise-level edges that lose money on fees
-            if self.skip_conditional and dep_type == "conditional":
-                opp.status = "skipped"
-                await session.commit()
-                logger.info("skipping_conditional_pair", opportunity_id=opportunity_id)
-                return {"status": "skipped", "reason": "conditional_unconstrained"}
+            # Skip conditional pairs whose matrix is still all-ones (no
+            # correlation info or non-binary), or when skip_conditional is forced
+            if dep_type == "conditional":
+                is_unconstrained = all(
+                    feasibility[i][j] == 1
+                    for i in range(len(feasibility))
+                    for j in range(len(feasibility[0]))
+                ) if feasibility else True
+                if self.skip_conditional or is_unconstrained:
+                    opp.status = "skipped"
+                    await session.commit()
+                    logger.info(
+                        "skipping_conditional_pair",
+                        opportunity_id=opportunity_id,
+                        reason="forced" if self.skip_conditional else "unconstrained",
+                    )
+                    return {"status": "skipped", "reason": "conditional_unconstrained"}
 
             # Fetch latest prices
             prices_a = await _get_latest_prices(session, pair.market_a_id)

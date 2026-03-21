@@ -20,14 +20,17 @@ CLASSIFIER_SYSTEM_PROMPT = """You classify the logical dependency between two pr
 Given two markets with their questions, descriptions, and outcomes, determine:
 1. dependency_type: one of "implication", "partition", "mutual_exclusion", "conditional", or "none"
 2. confidence: float 0-1
+3. correlation: "positive" or "negative" (REQUIRED when dependency_type is "conditional")
 
 Definitions:
 - implication: If market A resolves Yes, market B must resolve a specific way (or vice versa)
 - partition: Markets A and B together form an exhaustive partition of the same event space
 - mutual_exclusion: Markets A and B cannot both resolve Yes simultaneously
 - conditional: Market A's outcome probabilities are logically constrained by market B's outcome
+  - positive correlation: A=Yes makes B=Yes more likely (e.g., "Win Iowa" → "Win Election")
+  - negative correlation: A=Yes makes B=Yes less likely (e.g., "Team A wins" → "Team B wins")
 
-Respond ONLY with valid JSON: {"dependency_type": "...", "confidence": 0.XX, "reasoning": "..."}"""
+Respond ONLY with valid JSON: {"dependency_type": "...", "confidence": 0.XX, "correlation": "positive"|"negative"|null, "reasoning": "..."}"""
 
 
 def _check_same_event(market_a: dict, market_b: dict) -> dict | None:

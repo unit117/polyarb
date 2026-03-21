@@ -15,6 +15,7 @@ def build_constraint_matrix(
     outcomes_b: list[str],
     prices_a: dict | None = None,
     prices_b: dict | None = None,
+    correlation: str | None = None,
 ) -> dict:
     """Build a constraint matrix for a market pair.
 
@@ -24,6 +25,7 @@ def build_constraint_matrix(
     - matrix: a len(outcomes_a) x len(outcomes_b) binary feasibility matrix
       where 1 = feasible joint outcome, 0 = infeasible
     - profit_bound: theoretical profit if prices violate constraints
+    - correlation: "positive" or "negative" for conditional pairs
     """
     n_a = len(outcomes_a)
     n_b = len(outcomes_b)
@@ -35,12 +37,15 @@ def build_constraint_matrix(
     elif dependency_type == "mutual_exclusion":
         matrix = _mutual_exclusion_matrix(n_a, n_b)
     elif dependency_type == "conditional":
-        matrix = _conditional_matrix(n_a, n_b)
+        matrix = _conditional_matrix(
+            n_a, n_b, outcomes_a, outcomes_b, prices_a, prices_b, correlation
+        )
     else:
         matrix = _unconstrained_matrix(n_a, n_b)
 
     profit_bound = _compute_profit_bound(
-        dependency_type, matrix, outcomes_a, outcomes_b, prices_a, prices_b
+        dependency_type, matrix, outcomes_a, outcomes_b, prices_a, prices_b,
+        correlation,
     )
 
     result = {
@@ -49,6 +54,7 @@ def build_constraint_matrix(
         "outcomes_b": outcomes_b,
         "matrix": matrix,
         "profit_bound": profit_bound,
+        "correlation": correlation,
     }
 
     logger.info(
@@ -56,6 +62,7 @@ def build_constraint_matrix(
         dep_type=dependency_type,
         shape=f"{n_a}x{n_b}",
         profit_bound=profit_bound,
+        correlation=correlation,
     )
     return result
 
@@ -98,13 +105,77 @@ def _mutual_exclusion_matrix(n_a: int, n_b: int) -> list[list[int]]:
     return matrix
 
 
-def _conditional_matrix(n_a: int, n_b: int) -> list[list[int]]:
-    """All joint outcomes are feasible but probabilities are constrained.
+def _conditional_matrix(
+    n_a: int,
+    n_b: int,
+    outcomes_a: list[str] | None = None,
+    outcomes_b: list[str] | None = None,
+    prices_a: dict | None = None,
+    prices_b: dict | None = None,
+    correlation: str | None = None,
+) -> list[list[int]]:
+    """Derive feasibility constraints for conditional pairs.
 
-    The actual constraint is on probability values, not on feasibility.
-    We pass through all-ones and attach metadata for the optimizer.
+    For binary conditional pairs, uses the correlation direction and current
+    prices to mark anti-correlated joint outcomes as infeasible:
+
+    - Positive correlation (A=Yes makes B=Yes more likely):
+      Mark (Yes, No) infeasible when |p_a - p_b| is large — prices should
+      move together, so a big divergence implies one side is mispriced.
+      Also mark (No, Yes) infeasible symmetrically.
+
+    - Negative correlation (A=Yes makes B=Yes less likely):
+      Equivalent to mutual_exclusion — mark (Yes, Yes) infeasible.
+
+    For non-binary markets or missing data, falls back to unconstrained.
     """
-    return [[1] * n_b for _ in range(n_a)]
+    matrix = [[1] * n_b for _ in range(n_a)]
+
+    # Can only derive constraints for binary pairs with prices + correlation
+    if n_a != 2 or n_b != 2:
+        return matrix
+    if not prices_a or not prices_b or not outcomes_a or not outcomes_b:
+        return matrix
+    if not correlation:
+        return matrix
+
+    def _f(v) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    p_a = _f(prices_a.get(outcomes_a[0], 0))  # P(A=Yes)
+    p_b = _f(prices_b.get(outcomes_b[0], 0))  # P(B=Yes)
+
+    if correlation == "negative":
+        # Negative correlation ≈ mutual exclusion: (Yes, Yes) is infeasible
+        matrix[0][0] = 0
+        return matrix
+
+    # Positive correlation: A and B should move together.
+    # Use a divergence threshold — if prices diverge significantly,
+    # the anti-correlated cells become infeasible.
+    DIVERGENCE_THRESHOLD = 0.15
+
+    if p_a - p_b > DIVERGENCE_THRESHOLD:
+        # A is much more likely than B, but they're positively correlated.
+        # (Yes, No) shouldn't happen — if A=Yes, B should also be Yes.
+        matrix[0][1] = 0
+    elif p_b - p_a > DIVERGENCE_THRESHOLD:
+        # B is much more likely than A.
+        # (No, Yes) shouldn't happen — if B=Yes, A should also be Yes.
+        matrix[1][0] = 0
+
+    # If both prices are high (sum > 1.15), they can't both be false
+    if p_a + p_b > 1.15:
+        matrix[1][1] = 0
+
+    # If both prices are low (sum < 0.85), they can't both be true
+    if p_a + p_b < 0.85:
+        matrix[0][0] = 0
+
+    return matrix
 
 
 def _unconstrained_matrix(n_a: int, n_b: int) -> list[list[int]]:
@@ -118,6 +189,7 @@ def _compute_profit_bound(
     outcomes_b: list[str],
     prices_a: dict | None,
     prices_b: dict | None,
+    correlation: str | None = None,
 ) -> float:
     """Compute a theoretical profit bound from price inconsistency.
 
@@ -152,5 +224,32 @@ def _compute_profit_bound(
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         excess = (p_a + p_b) - 1.0
         return round(excess, 6) if excess > 0.001 else 0.0
+
+    if dependency_type == "conditional":
+        if not outcomes_a or not outcomes_b:
+            return 0.0
+        p_a = _f(prices_a.get(outcomes_a[0], 0))
+        p_b = _f(prices_b.get(outcomes_b[0], 0))
+
+        if correlation == "negative":
+            # Same as mutual exclusion
+            excess = (p_a + p_b) - 1.0
+            return round(excess, 6) if excess > 0.001 else 0.0
+
+        if correlation == "positive":
+            profit = 0.0
+            # Prices diverge beyond threshold — one side is mispriced
+            divergence = abs(p_a - p_b) - 0.15
+            if divergence > 0.001:
+                profit = max(profit, round(divergence, 6))
+            # Both high but can't both be false
+            if p_a + p_b > 1.15:
+                profit = max(profit, round(p_a + p_b - 1.15, 6))
+            # Both low but can't both be true
+            if p_a + p_b < 0.85:
+                profit = max(profit, round(0.85 - p_a - p_b, 6))
+            return profit
+
+        return 0.0
 
     return 0.0

@@ -65,6 +65,15 @@ class SimulatorPipeline:
             trades_executed = 0
             total_pnl = Decimal("0")
 
+            # Compute base position size from net estimated profit.
+            # A 0.10 net profit (after fees) → full max_position_size.
+            # Scale linearly below that, with a floor of 0.
+            net_profit = opp.optimal_trades.get("estimated_profit", 0)
+            if net_profit <= 0:
+                return {"status": "no_trades"}
+            profit_ratio = min(net_profit / 0.10, 1.0)
+            base_size = profit_ratio * self.max_position_size
+
             for trade in opp.optimal_trades["trades"]:
                 market = market_a if trade["market"] == "A" else market_b
                 if not market:
@@ -75,8 +84,7 @@ class SimulatorPipeline:
                 order_book = snapshot.order_book if snapshot else None
                 midpoint = trade.get("market_price", 0.5)
 
-                # Size proportional to edge (price delta 0-1), capped at max_position_size
-                size = min(trade["edge"] * self.max_position_size, self.max_position_size)
+                size = base_size
                 fill = compute_vwap(order_book, trade["side"], size, midpoint)
 
                 fees = fill["vwap_price"] * fill["filled_size"] * self.fee_rate
