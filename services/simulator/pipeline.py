@@ -206,8 +206,11 @@ class SimulatorPipeline:
                     },
                 )
 
-            # Update opportunity status
-            opp.status = "simulated"
+            # Only mark simulated if at least one trade executed;
+            # leave as optimized/unconverged so it can be retried after
+            # a circuit breaker cooldown clears.
+            if trades_executed > 0:
+                opp.status = "simulated"
             await session.commit()
 
             # Record success/loss on circuit breaker
