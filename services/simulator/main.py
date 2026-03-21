@@ -5,6 +5,7 @@ import structlog
 from sqlalchemy import select, desc, func
 
 from shared.config import settings
+from shared.circuit_breaker import CircuitBreaker
 from shared.db import SessionFactory, init_db
 from shared.events import (
     get_redis,
@@ -103,11 +104,21 @@ async def main() -> None:
     redis = await get_redis()
     portfolio = await _restore_portfolio()
 
+    cb = CircuitBreaker(
+        redis=redis,
+        max_daily_loss=settings.cb_max_daily_loss,
+        max_position_per_market=settings.cb_max_position_per_market,
+        max_drawdown_pct=settings.cb_max_drawdown_pct,
+        max_consecutive_errors=settings.cb_max_consecutive_errors,
+        cooldown_seconds=settings.cb_cooldown_seconds,
+    )
+
     pipeline = SimulatorPipeline(
         session_factory=SessionFactory,
         redis=redis,
         portfolio=portfolio,
         max_position_size=settings.max_position_size,
+        circuit_breaker=cb,
     )
 
     logger.info(
@@ -116,6 +127,7 @@ async def main() -> None:
         max_position=settings.max_position_size,
         restored_cash=float(portfolio.cash),
         restored_positions=len(portfolio.positions),
+        circuit_breaker="enabled",
     )
 
     # Create an initial snapshot with current prices after restore
@@ -140,6 +152,8 @@ async def _periodic_loop(pipeline: SimulatorPipeline, interval: int) -> None:
             await pipeline.process_pending()
         except Exception:
             logger.exception("periodic_simulation_error")
+            if pipeline.circuit_breaker:
+                pipeline.circuit_breaker.record_error()
         await asyncio.sleep(interval)
 
 
@@ -163,6 +177,8 @@ async def _event_loop(pipeline: SimulatorPipeline, redis) -> None:
                 await pipeline.snapshot_portfolio()
             except Exception:
                 logger.exception("event_simulation_error", opportunity_id=opp_id)
+                if pipeline.circuit_breaker:
+                    pipeline.circuit_breaker.record_error()
 
 
 async def _settlement_loop(pipeline: SimulatorPipeline, interval: int) -> None:
