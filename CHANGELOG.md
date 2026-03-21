@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-03-21 (3) — Price-Threshold Classifier, Regex Gap, Portfolio Purge
+
+### Bug Fixes
+
+**7. Price-threshold misclassification (detector/classifier.py) — HIGH**
+- LLM was classifying price-threshold market pairs like "PLTR above $128" vs "PLTR above $134" as `mutual_exclusion`. These are actually `implication` — if price is above $134, it's necessarily above $128.
+- Added `_check_price_threshold_markets()` rule-based classifier with `_PRICE_THRESHOLD_RE` regex matching "above/below/over/under $X" patterns.
+- Handles same-asset different-threshold (implication), same-asset different-time-window (independent), and mixed-direction (defers to LLM).
+- Enhanced LLM system prompt with price-threshold domain knowledge as a safety net.
+
+**8. Regex gap for "above $X" time-interval patterns (detector/classifier.py) — MEDIUM**
+- `_TIME_INTERVAL_RE` only matched "Up or Down" patterns, missing price-threshold markets with time intervals like "BTC above $90,000 — March 21, 3:15AM-3:30AM".
+- New `_PRICE_THRESHOLD_RE` captures optional time windows, so same-asset-different-date pairs are correctly classified as independent.
+
+**9. Pre-fix data contamination (simulator/pipeline.py, main.py) — HIGH**
+- 95% of trades (1,025 of 1,082 opps) were executed during pre-fix period with inflated profit estimates, no pair verification, and wrong position sizing.
+- Added `purge_contaminated_positions()` method: closes all open positions at current market prices, records `PURGE` trades for auditability, resets win/loss counters.
+- Added `scripts/purge_positions.py` one-time cleanup script.
+- Updated `_restore_portfolio()` to handle PURGE trades in cost basis replay.
+
+### Files Changed
+
+- `services/detector/classifier.py` — `_PRICE_THRESHOLD_RE`, `_check_price_threshold_markets()`, LLM prompt update
+- `services/simulator/pipeline.py` — `purge_contaminated_positions()` method
+- `services/simulator/main.py` — PURGE trade handling in portfolio restore
+- `scripts/purge_positions.py` — NEW: one-time portfolio purge script
+
+### Post-Deploy Action Required
+
+```bash
+docker compose run --rm simulator python -m scripts.purge_positions
+```
+
+---
+
 ## 2026-03-21 (2) — Conditional Constraints, Pair Verification, Position Sizing
 
 ### Bug Fixes
