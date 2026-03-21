@@ -99,7 +99,7 @@ class KalshiPoller:
                 batch = rows[i : i + BATCH_SIZE]
                 stmt = insert(Market).values(batch)
                 stmt = stmt.on_conflict_do_update(
-                    constraint="uq_markets_venue_polymarket_id",
+                    index_elements=["venue", "polymarket_id"],
                     set_={
                         "question": stmt.excluded.question,
                         "description": stmt.excluded.description,

@@ -58,7 +58,7 @@ class Market(Base):
         Index("ix_markets_active", "active", postgresql_where=(active == True)),  # noqa: E712
         Index("ix_markets_venue", "venue"),
         Index(
-            "uq_markets_venue_polymarket_id",
+            "ix_markets_venue_polymarket_id",
             "venue",
             "polymarket_id",
             unique=True,
