@@ -67,6 +67,7 @@ async def get_stats(source: str | None = None):
             "unrealized_pnl": unrealized,
             "total_pnl": unrealized + realized,
             "total_trades": latest_portfolio.total_trades,
+            "settled_trades": latest_portfolio.settled_trades or 0,
             "winning_trades": latest_portfolio.winning_trades,
             "total_positions": len(latest_portfolio.positions) if latest_portfolio.positions else 0,
         }

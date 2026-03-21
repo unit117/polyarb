@@ -172,11 +172,13 @@ def _check_price_consistency(
         return True
 
     if dependency_type == "mutual_exclusion":
-        # P(A) + P(B) should be ≤ 1 + tolerance
+        # P(A) + P(B) should be ≤ 1 + tolerance.  Real ME pairs sum to ~1.0;
+        # the arb is in small violations.  1.20 catches genuine ME while
+        # rejecting independent pairs that happen to look binary.
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if p_a + p_b > 1.50:
-            reasons.append(f"mutual_exclusion: P(A)+P(B)={p_a+p_b:.2f}, extreme violation")
+        if p_a + p_b > 1.20:
+            reasons.append(f"mutual_exclusion: P(A)+P(B)={p_a+p_b:.2f} > 1.20")
             return False
         return True
 

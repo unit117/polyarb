@@ -166,6 +166,7 @@ class PortfolioSnapshot(Base):
     realized_pnl: Mapped[Decimal] = mapped_column(Numeric)
     unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric)
     total_trades: Mapped[int] = mapped_column(Integer)
+    settled_trades: Mapped[int] = mapped_column(Integer, server_default="0")
     winning_trades: Mapped[int] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String, server_default="paper")
 

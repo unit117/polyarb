@@ -124,8 +124,7 @@ class SimulatorPipeline:
                         realized = (avg_entry - exit_price) * close_size
 
                     self.portfolio.realized_pnl += realized
-                    if realized > 0:
-                        self.portfolio.mark_winner()
+                    self.portfolio.mark_settled(is_winner=realized > 0)
 
                 if not result["executed"]:
                     continue
@@ -292,6 +291,7 @@ class SimulatorPipeline:
 
         # Reset win/loss counters so post-fix metrics are clean
         self.portfolio.total_trades = 0
+        self.portfolio.settled_trades = 0
         self.portfolio.winning_trades = 0
         self.portfolio.realized_pnl = Decimal("0")
 
@@ -345,6 +345,7 @@ class SimulatorPipeline:
                 realized_pnl=Decimal(str(snap["realized_pnl"])),
                 unrealized_pnl=Decimal(str(snap["unrealized_pnl"])),
                 total_trades=snap["total_trades"],
+                settled_trades=snap["settled_trades"],
                 winning_trades=snap["winning_trades"],
             )
             session.add(ps)

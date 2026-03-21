@@ -16,6 +16,7 @@ export interface Stats {
     unrealized_pnl: number;
     total_pnl: number;
     total_trades: number;
+    settled_trades: number;
     winning_trades: number;
     total_positions: number;
   } | null;

@@ -5,9 +5,16 @@ prices p to determine which outcomes are mispriced and what trades would
 capture the arbitrage.
 """
 
+import structlog
 import numpy as np
 
 from services.optimizer.frank_wolfe import FWResult
+
+logger = structlog.get_logger()
+
+# Edges above this are almost certainly misclassified pairs, not real arb.
+# A 20¢ edge on a liquid Polymarket binary is implausible.
+MAX_EDGE = 0.20
 
 
 def compute_trades(
@@ -37,38 +44,55 @@ def compute_trades(
 
     trades = []
 
-    # Market A trades — only include the best edge per market (BUY the
-    # underpriced outcome), not both sides of a binary complement.
-    for i, outcome in enumerate(outcomes_a):
-        edge = float(q_a[i] - p_a[i])
-        if abs(edge) > min_edge:
-            trades.append({
-                "market": "A",
-                "outcome": outcome,
-                "outcome_index": i,
-                "side": "BUY" if edge > 0 else "SELL",
-                "edge": round(abs(edge), 6),
-                "market_price": round(float(p_a[i]), 6),
-                "fair_price": round(float(q_a[i]), 6),
-            })
+    # For each market, collect all candidate legs then keep only the
+    # best-edge leg.  In binary markets BUY Yes and SELL No are mirrors
+    # of the same mispricing — executing both pays double fees for the
+    # same edge.
+    for market_label, outcomes, q_vec, p_vec in [
+        ("A", outcomes_a, q_a, p_a),
+        ("B", outcomes_b, q_b, p_b),
+    ]:
+        candidates = []
+        for i, outcome in enumerate(outcomes):
+            edge = float(q_vec[i] - p_vec[i])
+            if abs(edge) > min_edge:
+                candidates.append({
+                    "market": market_label,
+                    "outcome": outcome,
+                    "outcome_index": i,
+                    "side": "BUY" if edge > 0 else "SELL",
+                    "edge": round(abs(edge), 6),
+                    "market_price": round(float(p_vec[i]), 6),
+                    "fair_price": round(float(q_vec[i]), 6),
+                })
+        if candidates:
+            # Keep only the single best leg per market
+            trades.append(max(candidates, key=lambda t: t["edge"]))
 
-    # Market B trades
-    for j, outcome in enumerate(outcomes_b):
-        edge = float(q_b[j] - p_b[j])
-        if abs(edge) > min_edge:
-            trades.append({
-                "market": "B",
-                "outcome": outcome,
-                "outcome_index": j,
-                "side": "BUY" if edge > 0 else "SELL",
-                "edge": round(abs(edge), 6),
-                "market_price": round(float(p_b[j]), 6),
-                "fair_price": round(float(q_b[j]), 6),
-            })
+    # Sanity cap: edges above MAX_EDGE are almost certainly misclassified
+    # pairs, not real arbitrage.  Drop the entire opportunity.
+    for t in trades:
+        if t["edge"] > MAX_EDGE:
+            logger.warning(
+                "edge_sanity_cap_triggered",
+                market=t["market"],
+                outcome=t["outcome"],
+                edge=t["edge"],
+            )
+            return {
+                "trades": [],
+                "estimated_profit": 0.0,
+                "theoretical_profit": round(theoretical_profit, 6),
+                "market_a_prices": {
+                    "current": [round(float(x), 6) for x in p_a],
+                    "optimal": [round(float(x), 6) for x in q_a],
+                },
+                "market_b_prices": {
+                    "current": [round(float(x), 6) for x in p_b],
+                    "optimal": [round(float(x), 6) for x in q_b],
+                },
+            }
 
-    # For binary markets, each market contributes two edges that are
-    # mirror images (BUY Yes = SELL No). Only count the max edge per
-    # market to avoid double-counting the same mispricing.
     edge_a = max((t["edge"] for t in trades if t["market"] == "A"), default=0.0)
     edge_b = max((t["edge"] for t in trades if t["market"] == "B"), default=0.0)
     raw_edge = edge_a + edge_b

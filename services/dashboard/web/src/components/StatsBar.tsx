@@ -22,8 +22,8 @@ const StatsBar = React.memo(function StatsBar({ stats, onStatClick }: Props) {
 
   // Realized win rate: nothing has resolved yet
   const realizedWinRate =
-    p && p.winning_trades > 0
-      ? `${((p.winning_trades / p.total_trades) * 100).toFixed(1)}%`
+    p && p.settled_trades > 0
+      ? `${((p.winning_trades / p.settled_trades) * 100).toFixed(1)}%`
       : null;
 
   return (

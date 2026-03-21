@@ -18,6 +18,7 @@ class Portfolio:
         self.realized_pnl = Decimal("0")
         self.total_trades = 0
         self.winning_trades = 0
+        self.settled_trades = 0
 
     def execute_trade(
         self,
@@ -57,19 +58,20 @@ class Portfolio:
             proceeds = sell_size * price_d - fees_d
             self.cash += proceeds
 
-            # Reduce cost basis proportionally
-            if key in self.cost_basis and current > 0:
-                avg_entry = self.cost_basis[key] / current
-                self.cost_basis[key] -= sell_size * avg_entry
+            if current > 0:
+                # Closing/reducing a long — reduce cost basis proportionally
+                if key in self.cost_basis:
+                    avg_entry = self.cost_basis[key] / current
+                    self.cost_basis[key] -= sell_size * avg_entry
 
-            if key in self.positions:
-                self.positions[key] -= sell_size
+                self.positions[key] = current - sell_size
                 if self.positions[key] <= 0:
                     del self.positions[key]
                     self.cost_basis.pop(key, None)
             else:
-                # Short position
-                self.positions[key] = self.positions.get(key, Decimal("0")) - sell_size
+                # Opening/increasing a short — cost basis tracks credit received
+                self.positions[key] = current - sell_size
+                self.cost_basis[key] = self.cost_basis.get(key, Decimal("0")) + sell_size * price_d
 
         self.total_trades += 1
 
@@ -102,11 +104,20 @@ class Portfolio:
 
         shares = self.positions[key]
         cost = self.cost_basis.get(key, Decimal("0"))
-        payout = shares * Decimal(str(settlement_price))
-        pnl = payout - cost
 
-        self.cash += payout
+        if shares > 0:
+            # Long: payout = shares * price, pnl = payout - cost
+            payout = shares * Decimal(str(settlement_price))
+            pnl = payout - cost
+            self.cash += payout
+        else:
+            # Short: obligation = |shares| * price, pnl = credit_received - obligation
+            obligation = abs(shares) * Decimal(str(settlement_price))
+            pnl = cost - obligation
+            self.cash -= obligation
+
         self.realized_pnl += pnl
+        self.settled_trades += 1
 
         if pnl > 0:
             self.winning_trades += 1
@@ -131,8 +142,11 @@ class Portfolio:
             "is_winner": pnl > 0,
         }
 
-    def mark_winner(self) -> None:
-        self.winning_trades += 1
+    def mark_settled(self, is_winner: bool = False) -> None:
+        """Record a settled/closed trade for win-rate tracking."""
+        self.settled_trades += 1
+        if is_winner:
+            self.winning_trades += 1
 
     def total_value(self, current_prices: dict[str, float] | None = None) -> float:
         """Compute total portfolio value (cash + positions at market)."""
@@ -179,6 +193,7 @@ class Portfolio:
             "realized_pnl": float(self.realized_pnl),
             "unrealized_pnl": upnl,
             "total_trades": self.total_trades,
+            "settled_trades": self.settled_trades,
             "winning_trades": self.winning_trades,
             "positions_in_profit": in_profit,
             "total_positions": total_pos,
