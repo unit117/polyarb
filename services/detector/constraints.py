@@ -30,6 +30,16 @@ def build_constraint_matrix(
     n_a = len(outcomes_a)
     n_b = len(outcomes_b)
 
+    # Guard: binary matrix logic assumes outcomes[0]="Yes", outcomes[1]="No"
+    for label, outcomes in [("a", outcomes_a), ("b", outcomes_b)]:
+        if len(outcomes) == 2 and outcomes[0] != "Yes":
+            logger.warning(
+                "unexpected_outcome_order",
+                market=label,
+                outcomes=outcomes,
+                msg="Expected outcomes[0]='Yes'; constraint matrix may be inverted",
+            )
+
     if dependency_type == "implication":
         matrix = _implication_matrix(n_a, n_b)
     elif dependency_type == "partition":
