@@ -21,7 +21,7 @@ from shared.models import (
     PortfolioSnapshot,
     PriceSnapshot,
 )
-from shared.config import venue_fee
+from shared.config import settings, venue_fee
 from shared.circuit_breaker import CircuitBreaker
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
@@ -139,14 +139,31 @@ class SimulatorPipeline:
 
             base_size = kelly_fraction * self.max_position_size
 
+            # --- Pass 1: validate all legs (VWAP, edge, breaker) ---
+            # Arb requires both legs; if any leg fails, skip the whole
+            # opportunity to avoid one-sided exposure.
+            validated_legs: list[dict] = []
+            all_legs_valid = True
+
             for trade in opp.optimal_trades["trades"]:
                 market = market_a if trade["market"] == "A" else market_b
                 if not market:
-                    continue
+                    all_legs_valid = False
+                    break
 
-                # Get order book for VWAP
-                snapshot = await _get_latest_snapshot(session, market.id)
-                order_book = snapshot.order_book if snapshot else None
+                # Get order book for VWAP — skip if snapshot is stale
+                snapshot = await _get_latest_snapshot(
+                    session, market.id, settings.max_snapshot_age_seconds
+                )
+                if not snapshot:
+                    logger.info(
+                        "stale_snapshot_skipped",
+                        opportunity_id=opp.id,
+                        market_id=market.id,
+                    )
+                    all_legs_valid = False
+                    break
+                order_book = snapshot.order_book
                 midpoint = trade.get("market_price", 0.5)
 
                 size = base_size
@@ -154,6 +171,27 @@ class SimulatorPipeline:
 
                 trade_venue = trade.get("venue", getattr(market, "venue", "polymarket"))
                 fees = venue_fee(trade_venue, fill["vwap_price"], trade["side"]) * fill["filled_size"]
+
+                # Post-VWAP edge validation: check the edge survived slippage.
+                fair_price = trade.get("fair_price", 0.0)
+                if fair_price > 0:
+                    if trade["side"] == "BUY":
+                        post_vwap_edge = fair_price - fill["vwap_price"]
+                    else:
+                        post_vwap_edge = fill["vwap_price"] - (1.0 - fair_price)
+                    per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade["side"])
+                    if post_vwap_edge - per_share_fee <= 0:
+                        logger.info(
+                            "edge_killed_by_slippage",
+                            opportunity_id=opp.id,
+                            market_id=market.id,
+                            fair_price=fair_price,
+                            vwap_price=fill["vwap_price"],
+                            post_vwap_edge=round(post_vwap_edge, 6),
+                            fee=round(per_share_fee, 6),
+                        )
+                        all_legs_valid = False
+                        break
 
                 # Circuit breaker gate
                 if self.circuit_breaker:
@@ -172,7 +210,41 @@ class SimulatorPipeline:
                             market_id=market.id,
                             reason=reason,
                         )
-                        continue
+                        all_legs_valid = False
+                        break
+
+                validated_legs.append({
+                    "trade": trade,
+                    "market": market,
+                    "fill": fill,
+                    "fees": fees,
+                    "trade_venue": trade_venue,
+                    "midpoint": midpoint,
+                })
+
+            if not all_legs_valid or not validated_legs:
+                opp.status = "optimized"
+                await session.commit()
+                logger.info(
+                    "simulation_complete",
+                    opportunity_id=opp.id,
+                    trades_executed=0,
+                    cash_remaining=float(self.portfolio.cash),
+                )
+                return {
+                    "status": "blocked",
+                    "trades_executed": 0,
+                    "cash_remaining": float(self.portfolio.cash),
+                }
+
+            # --- Pass 2: execute all validated legs ---
+            for leg in validated_legs:
+                trade = leg["trade"]
+                market = leg["market"]
+                fill = leg["fill"]
+                fees = leg["fees"]
+                trade_venue = leg["trade_venue"]
+                midpoint = leg["midpoint"]
 
                 # Track rebalancing exit PNL before executing
                 key = f"{market.id}:{trade['outcome']}"
@@ -535,11 +607,15 @@ class SimulatorPipeline:
         return stats
 
 
-async def _get_latest_snapshot(session, market_id: int):
-    result = await session.execute(
+async def _get_latest_snapshot(session, market_id: int, max_age_seconds: int = 0):
+    query = (
         select(PriceSnapshot)
         .where(PriceSnapshot.market_id == market_id)
         .order_by(PriceSnapshot.timestamp.desc())
         .limit(1)
     )
+    if max_age_seconds > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        query = query.where(PriceSnapshot.timestamp >= cutoff)
+    result = await session.execute(query)
     return result.scalar_one_or_none()
