@@ -256,35 +256,48 @@ class DetectionPipeline:
 
         Lightweight: no pgvector search, no LLM classification. Only recomputes
         profit bounds for existing pairs where at least one market just got a
-        price update. Skips pairs that already have an in-flight opportunity
-        to avoid duplicates.
+        price update.
+
+        Two behaviours depending on whether the pair has an in-flight opportunity:
+        - No in-flight opp: create a new detected opportunity if profit > 0.
+        - Has optimized/unconverged opp (blocked by breaker, waiting for retry):
+          refresh the pair's constraint matrix and reset the opp to detected so
+          the optimizer re-plans with current prices instead of stale trades.
+        - Has detected opp: just refresh the constraint matrix (optimizer hasn't
+          run yet, it will read the updated matrix).
         """
-        stats = {"opportunities": 0, "pairs_checked": 0}
+        stats = {"opportunities": 0, "pairs_checked": 0, "refreshed": 0}
 
         async with self._rescan_lock, self.session_factory() as session:
-            # Exclude pairs with in-flight opportunities at any pipeline stage.
-            # Terminal statuses (simulated, skipped) mean the opportunity is done
-            # and the pair is eligible for fresh detection as prices move.
-            in_flight_pair_ids = (
-                select(ArbitrageOpportunity.pair_id)
-                .where(
-                    ArbitrageOpportunity.status.in_(
-                        ["detected", "pending", "optimized", "unconverged"]
-                    )
-                )
-                .distinct()
-            )
+            # Fetch all verified pairs affected by these market IDs
             result = await session.execute(
                 select(MarketPair)
                 .where(
                     MarketPair.verified == True,  # noqa: E712
-                    ~MarketPair.id.in_(in_flight_pair_ids),
                     (MarketPair.market_a_id.in_(market_ids))
                     | (MarketPair.market_b_id.in_(market_ids)),
                 )
             )
             pairs = result.scalars().all()
             stats["pairs_checked"] = len(pairs)
+
+            # Load in-flight opportunities for these pairs in one query
+            pair_ids = [p.id for p in pairs]
+            if pair_ids:
+                opp_result = await session.execute(
+                    select(ArbitrageOpportunity)
+                    .where(
+                        ArbitrageOpportunity.pair_id.in_(pair_ids),
+                        ArbitrageOpportunity.status.in_(
+                            ["detected", "pending", "optimized", "unconverged"]
+                        ),
+                    )
+                )
+                in_flight_opps = {
+                    opp.pair_id: opp for opp in opp_result.scalars().all()
+                }
+            else:
+                in_flight_opps = {}
 
             for pair in pairs:
                 constraint = pair.constraint_matrix
@@ -309,9 +322,24 @@ class DetectionPipeline:
                     correlation=correlation,
                 )
                 pair.constraint_matrix = fresh_constraint
-
                 profit = fresh_constraint.get("profit_bound", 0.0)
-                if profit > 0:
+
+                existing_opp = in_flight_opps.get(pair.id)
+                if existing_opp:
+                    # Refresh the existing opportunity with current profit
+                    existing_opp.theoretical_profit = Decimal(
+                        str(max(profit, 0))
+                    )
+                    # Reset optimized/unconverged back to detected so the
+                    # optimizer re-plans with fresh prices instead of stale
+                    # trades that may execute against moved markets.
+                    if existing_opp.status in ("optimized", "unconverged"):
+                        existing_opp.status = "detected"
+                        existing_opp.optimal_trades = None
+                        existing_opp.fw_iterations = None
+                        existing_opp.bregman_gap = None
+                    stats["refreshed"] += 1
+                elif profit > 0:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",
@@ -335,7 +363,7 @@ class DetectionPipeline:
 
             await session.commit()
 
-        if stats["opportunities"] > 0:
+        if stats["opportunities"] > 0 or stats["refreshed"] > 0:
             logger.info("snapshot_rescan_complete", **stats)
         return stats
 
