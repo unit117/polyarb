@@ -16,6 +16,8 @@ def build_constraint_matrix(
     prices_a: dict | None = None,
     prices_b: dict | None = None,
     correlation: str | None = None,
+    venue_a: str = "polymarket",
+    venue_b: str = "polymarket",
 ) -> dict:
     """Build a constraint matrix for a market pair.
 
@@ -57,7 +59,7 @@ def build_constraint_matrix(
 
     profit_bound = _compute_profit_bound(
         dependency_type, matrix, outcomes_a, outcomes_b, prices_a, prices_b,
-        correlation,
+        correlation, venue_a=venue_a, venue_b=venue_b,
     )
 
     result = {
@@ -223,6 +225,8 @@ def _compute_profit_bound(
     prices_a: dict | None,
     prices_b: dict | None,
     correlation: str | None = None,
+    venue_a: str = "polymarket",
+    venue_b: str = "polymarket",
 ) -> float:
     """Compute a theoretical profit bound from price inconsistency.
 
@@ -239,18 +243,16 @@ def _compute_profit_bound(
             return 0.0
 
     if dependency_type == "cross_platform":
-        # Cross-platform arb: buy cheap Yes, sell expensive Yes (or vice versa).
-        # Profit = price spread minus both venue fees.
+        # Cross-platform arb: buy cheap Yes on one venue, sell expensive Yes
+        # on the other. Profit = spread minus fees on both venues.
         from shared.config import venue_fee
 
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         spread = abs(p_a - p_b)
-        # Determine venues from the constraint metadata (fallback to polymarket)
-        venue_a = "polymarket"
-        venue_b = "kalshi"
-        fee_a = venue_fee(venue_a, min(p_a, p_b), "BUY")
-        fee_b = venue_fee(venue_b, max(p_a, p_b), "BUY")
+        # Fee on the buy leg (cheaper side) and the sell leg (dearer side)
+        fee_a = venue_fee(venue_a, p_a, "BUY")
+        fee_b = venue_fee(venue_b, p_b, "BUY")
         net = spread - fee_a - fee_b
         return round(net, 6) if net > 0.001 else 0.0
 

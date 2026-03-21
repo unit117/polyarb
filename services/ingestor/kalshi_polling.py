@@ -21,7 +21,6 @@ from services.ingestor.kalshi_client import KalshiClient
 
 log = structlog.get_logger()
 
-RESOLUTION_THRESHOLD = 0.98
 
 
 def _safe_decimal(value) -> Decimal | None:
@@ -188,28 +187,10 @@ class KalshiPoller:
                 await session.execute(insert(PriceSnapshot), snapshots_to_insert)
                 await session.commit()
 
-        # Resolution detection
-        for snap_data in snapshots_to_insert:
-            for outcome, price_val in snap_data["prices"].items():
-                try:
-                    price = float(price_val)
-                except (ValueError, TypeError):
-                    continue
-                if price >= RESOLUTION_THRESHOLD:
-                    market_id = snap_data["market_id"]
-                    async with self._session_factory() as session:
-                        mkt = await session.get(Market, market_id)
-                        if mkt and not mkt.resolved_outcome:
-                            mkt.resolved_outcome = outcome
-                            mkt.resolved_at = datetime.now(timezone.utc)
-                            mkt.active = False
-                            await session.commit()
-                            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
-                                "market_id": market_id,
-                                "resolved_outcome": outcome,
-                                "source": "kalshi_price_inference",
-                                "price": price,
-                            })
+        # NOTE: No price-based resolution detection for Kalshi.
+        # Kalshi markets routinely trade at 98-99c before official resolution.
+        # Resolution is handled by check_resolved_markets() which queries
+        # the Kalshi API for explicitly settled markets.
 
         log.info("kalshi_snapshots_done", count=len(snapshots_to_insert))
         if snapshots_to_insert:
@@ -223,11 +204,62 @@ class KalshiPoller:
                 },
             )
 
+    async def check_resolved_markets(self) -> None:
+        """Check for settled Kalshi markets via the API.
+
+        Unlike Polymarket where we infer resolution from prices, Kalshi
+        markets have an explicit 'result' field when settled. We query
+        markets we've ingested that are still active and check if they've
+        been settled on the Kalshi side.
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(Market).where(
+                    Market.venue == "kalshi",
+                    Market.active == True,  # noqa: E712
+                    Market.resolved_outcome.is_(None),
+                )
+            )
+            active_markets = result.scalars().all()
+
+        for market in active_markets:
+            try:
+                data = await self._kalshi.get_market(market.polymarket_id)
+                if not data:
+                    continue
+                status = data.get("status", "")
+                result_val = data.get("result", "")
+                if status == "settled" and result_val:
+                    outcome = "Yes" if result_val == "yes" else "No"
+                    async with self._session_factory() as session:
+                        mkt = await session.get(Market, market.id)
+                        if mkt and not mkt.resolved_outcome:
+                            mkt.resolved_outcome = outcome
+                            mkt.resolved_at = datetime.now(timezone.utc)
+                            mkt.active = False
+                            await session.commit()
+                            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
+                                "market_id": market.id,
+                                "resolved_outcome": outcome,
+                                "source": "kalshi_api",
+                            })
+                            log.info(
+                                "kalshi_market_resolved",
+                                ticker=market.polymarket_id,
+                                outcome=outcome,
+                            )
+            except Exception:
+                log.exception(
+                    "kalshi_resolution_check_error",
+                    ticker=market.polymarket_id,
+                )
+
     async def poll_once(self) -> list[Market]:
         log.info("kalshi_poll_cycle_start")
         markets = await self.sync_markets()
         await self.compute_embeddings(markets)
         await self.snapshot_prices(markets)
+        await self.check_resolved_markets()
         log.info("kalshi_poll_cycle_done")
         return markets
 

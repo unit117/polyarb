@@ -115,6 +115,8 @@ class DetectionPipeline:
                     prices_a,
                     prices_b,
                     correlation=classification.get("correlation"),
+                    venue_a=market_a_dict.get("venue", "polymarket"),
+                    venue_b=market_b_dict.get("venue", "polymarket"),
                 )
 
                 # Verify pair before persisting
@@ -266,6 +268,8 @@ class DetectionPipeline:
                     prices_a,
                     prices_b,
                     correlation=classification.get("correlation"),
+                    venue_a=market_a_dict.get("venue", "polymarket"),
+                    venue_b=market_b_dict.get("venue", "polymarket"),
                 )
 
                 verification = verify_pair(
@@ -372,9 +376,13 @@ class DetectionPipeline:
                 # Recompute profit bound with actual prices
                 from services.detector.constraints import build_constraint_matrix
                 correlation = constraint.get("correlation")
+                market_a_obj = await session.get(Market, pair.market_a_id)
+                market_b_obj = await session.get(Market, pair.market_b_id)
                 fresh_constraint = build_constraint_matrix(
                     pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b,
                     correlation=correlation,
+                    venue_a=getattr(market_a_obj, "venue", "polymarket"),
+                    venue_b=getattr(market_b_obj, "venue", "polymarket"),
                 )
 
                 # Update stored constraint with fresh profit data
@@ -484,6 +492,8 @@ class DetectionPipeline:
                 outcomes_b = constraint.get("outcomes_b", [])
                 correlation = constraint.get("correlation")
 
+                market_a_obj = await session.get(Market, pair.market_a_id)
+                market_b_obj = await session.get(Market, pair.market_b_id)
                 fresh_constraint = build_constraint_matrix(
                     pair.dependency_type,
                     outcomes_a,
@@ -491,6 +501,8 @@ class DetectionPipeline:
                     prices_a,
                     prices_b,
                     correlation=correlation,
+                    venue_a=getattr(market_a_obj, "venue", "polymarket"),
+                    venue_b=getattr(market_b_obj, "venue", "polymarket"),
                 )
                 pair.constraint_matrix = fresh_constraint
                 profit = fresh_constraint.get("profit_bound", 0.0)
