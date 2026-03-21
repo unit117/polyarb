@@ -30,6 +30,13 @@ Definitions:
   - positive correlation: A=Yes makes B=Yes more likely (e.g., "Win Iowa" → "Win Election")
   - negative correlation: A=Yes makes B=Yes less likely (e.g., "Team A wins" → "Team B wins")
 
+CRITICAL — price-threshold markets:
+- "X above $A" and "X above $B" where A > B: this is IMPLICATION, not mutual_exclusion.
+  If X is above $134, it is necessarily also above $128. Both CAN resolve Yes simultaneously.
+- "X above $A" and "X above $B" on DIFFERENT dates or time windows: these are INDEPENDENT (none).
+  The price can be above $128 on Monday and below $128 on Tuesday.
+- Only use mutual_exclusion when the events truly cannot BOTH happen (e.g., "Team A wins" vs "Team B wins" in the same game).
+
 Respond ONLY with valid JSON: {"dependency_type": "...", "confidence": 0.XX, "correlation": "positive"|"negative"|null, "reasoning": "..."}"""
 
 
@@ -71,21 +78,35 @@ _TIME_INTERVAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches "PLTR above $128 on March 21?" or "BTC above $90,000 — March 21, 3:15AM-3:30AM ET"
+# Captures: (asset, threshold, optional start_time, optional end_time)
+_PRICE_THRESHOLD_RE = re.compile(
+    r"^(.+?)\s+(?:above|below|over|under)\s+\$([0-9,]+(?:\.\d+)?)"
+    r"(?:.*?(\d{1,2}:\d{2}[AP]M)\s*-\s*(\d{1,2}:\d{2}[AP]M))?",
+    re.IGNORECASE,
+)
+
 
 def _check_crypto_time_intervals(market_a: dict, market_b: dict) -> dict | None:
     """Detect crypto time-interval markets on the same asset with different windows.
 
     Adjacent (non-overlapping) time windows are independent — the price can go up
     in both intervals. Only the *same* window would be mutual exclusion (up vs down).
+    Handles both "Up or Down" and "above $X" patterns.
     """
     q_a = market_a.get("question", "")
     q_b = market_b.get("question", "")
 
-    m_a = _TIME_INTERVAL_RE.search(q_a)
-    m_b = _TIME_INTERVAL_RE.search(q_b)
+    # Try "Up or Down" pattern first, then fall back to price-threshold pattern
+    m_a_updown = _TIME_INTERVAL_RE.search(q_a)
+    m_b_updown = _TIME_INTERVAL_RE.search(q_b)
 
-    if not m_a or not m_b:
+    # Only use this function for "Up or Down" patterns; price-threshold pairs
+    # are handled by _check_price_threshold_markets instead.
+    if not m_a_updown or not m_b_updown:
         return None
+
+    m_a, m_b = m_a_updown, m_b_updown
 
     asset_a, start_a, end_a = m_a.group(1).strip(), m_a.group(2), m_a.group(3)
     asset_b, start_b, end_b = m_b.group(1).strip(), m_b.group(2), m_b.group(3)
@@ -110,9 +131,98 @@ def _check_crypto_time_intervals(market_a: dict, market_b: dict) -> dict | None:
     }
 
 
+def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | None:
+    """Detect price-threshold markets on the same asset.
+
+    "PLTR above $128" and "PLTR above $134" form an implication chain:
+    if the higher threshold resolves Yes, the lower threshold must also resolve Yes.
+
+    If they have time intervals and the intervals differ, they are independent
+    (same as crypto time-interval logic).
+    """
+    q_a = market_a.get("question", "")
+    q_b = market_b.get("question", "")
+
+    m_a = _PRICE_THRESHOLD_RE.search(q_a)
+    m_b = _PRICE_THRESHOLD_RE.search(q_b)
+
+    if not m_a or not m_b:
+        return None
+
+    asset_a = m_a.group(1).strip().lower()
+    asset_b = m_b.group(1).strip().lower()
+
+    # Different assets — not the same pattern
+    if asset_a != asset_b:
+        return None
+
+    threshold_a = float(m_a.group(2).replace(",", ""))
+    threshold_b = float(m_b.group(2).replace(",", ""))
+
+    start_a, end_a = m_a.group(3), m_a.group(4)
+    start_b, end_b = m_b.group(3), m_b.group(4)
+
+    # Both have time intervals — check if same window
+    if start_a and start_b:
+        if start_a != start_b or end_a != end_b:
+            # Different time windows → independent regardless of threshold
+            return {
+                "dependency_type": "none",
+                "confidence": 0.95,
+                "reasoning": (
+                    f"Same asset '{m_a.group(1).strip()}', different time windows "
+                    f"({start_a}-{end_a} vs {start_b}-{end_b}) — independent events"
+                ),
+            }
+
+    # Same asset, same time window (or no time window) — compare thresholds
+    if threshold_a == threshold_b:
+        # Same threshold, same window — these are the same market
+        return None
+
+    # Different thresholds: higher "above" implies lower "above"
+    # Detect direction from the question
+    dir_a = "above" if re.search(r"\b(?:above|over)\b", q_a, re.IGNORECASE) else "below"
+    dir_b = "above" if re.search(r"\b(?:above|over)\b", q_b, re.IGNORECASE) else "below"
+
+    if dir_a != dir_b:
+        # "above $128" vs "below $134" — not a simple implication, let LLM decide
+        return None
+
+    if dir_a == "above":
+        higher = max(threshold_a, threshold_b)
+        lower = min(threshold_a, threshold_b)
+        return {
+            "dependency_type": "implication",
+            "confidence": 0.95,
+            "correlation": "positive",
+            "reasoning": (
+                f"'{m_a.group(1).strip()}' above ${higher} implies above ${lower} — "
+                f"nested price thresholds form an implication chain"
+            ),
+        }
+    else:  # below
+        higher = max(threshold_a, threshold_b)
+        lower = min(threshold_a, threshold_b)
+        return {
+            "dependency_type": "implication",
+            "confidence": 0.95,
+            "correlation": "positive",
+            "reasoning": (
+                f"'{m_a.group(1).strip()}' below ${lower} implies below ${higher} — "
+                f"nested price thresholds form an implication chain"
+            ),
+        }
+
+
 async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
     """Apply rule-based heuristics. Returns result dict or None if ambiguous."""
-    for check in (_check_same_event, _check_outcome_subset, _check_crypto_time_intervals):
+    for check in (
+        _check_same_event,
+        _check_outcome_subset,
+        _check_crypto_time_intervals,
+        _check_price_threshold_markets,
+    ):
         result = check(market_a, market_b)
         if result:
             logger.info(
