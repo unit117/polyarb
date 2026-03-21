@@ -20,14 +20,19 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
 }: Props) {
   const [showUnprofitable, setShowUnprofitable] = useState(false);
 
+  // Sort only the initial page; after "Load More" appends, preserve order
+  // so newly loaded items don't jump around mid-scroll.
   const sorted = useMemo(() => {
     const filtered = showUnprofitable
       ? opportunities
       : opportunities.filter((o) => o.estimated_profit > 0);
-    return [...filtered].sort(
-      (a, b) => b.estimated_profit - a.estimated_profit,
-    );
-  }, [opportunities, showUnprofitable]);
+    if (pagination.offset === 0) {
+      return [...filtered].sort(
+        (a, b) => b.estimated_profit - a.estimated_profit,
+      );
+    }
+    return filtered;
+  }, [opportunities, showUnprofitable, pagination.offset]);
 
   const hiddenCount = opportunities.length - sorted.length;
 

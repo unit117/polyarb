@@ -21,12 +21,16 @@ const DEP_LABELS: Record<string, string> = {
 const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMore, loading }: Props) {
   const [showEmpty, setShowEmpty] = useState(false);
 
+  // Sort only the initial page; after "Load More" appends, preserve order
   const sorted = useMemo(() => {
     const filtered = showEmpty
       ? pairs
       : pairs.filter((p) => p.opportunity_count > 0);
-    return [...filtered].sort((a, b) => b.confidence - a.confidence);
-  }, [pairs, showEmpty]);
+    if (pagination.offset === 0) {
+      return [...filtered].sort((a, b) => b.confidence - a.confidence);
+    }
+    return filtered;
+  }, [pairs, showEmpty, pagination.offset]);
 
   const hiddenCount = pairs.length - sorted.length;
 
