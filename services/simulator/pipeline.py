@@ -113,6 +113,7 @@ class SimulatorPipeline:
 
             trades_executed = 0
             total_pnl = Decimal("0")
+            deferred_trade_events: list[dict] = []
 
             # Half-Kelly position sizing using the optimizer's edge estimate.
             # kelly_fraction = (edge / max_loss) * 0.5, where max_loss ≈ 1
@@ -230,20 +231,16 @@ class SimulatorPipeline:
                 session.add(paper_trade)
                 trades_executed += 1
 
-                await publish(
-                    self.redis,
-                    CHANNEL_TRADE_EXECUTED,
-                    {
-                        "trade_id": paper_trade.id,
-                        "opportunity_id": opp.id,
-                        "market_id": market.id,
-                        "outcome": trade["outcome"],
-                        "side": trade["side"],
-                        "size": fill["filled_size"],
-                        "vwap_price": fill["vwap_price"],
-                        "slippage": fill["slippage"],
-                    },
-                )
+                deferred_trade_events.append({
+                    "trade_id": paper_trade.id,
+                    "opportunity_id": opp.id,
+                    "market_id": market.id,
+                    "outcome": trade["outcome"],
+                    "side": trade["side"],
+                    "size": fill["filled_size"],
+                    "vwap_price": fill["vwap_price"],
+                    "slippage": fill["slippage"],
+                })
 
             # Mark simulated if trades executed; revert to optimized
             # if all were blocked so it can be retried after cooldown.
@@ -252,6 +249,11 @@ class SimulatorPipeline:
             else:
                 opp.status = "optimized"
             await session.commit()
+
+            # Publish trade events after commit so subscribers
+            # can read the rows from DB.
+            for event in deferred_trade_events:
+                await publish(self.redis, CHANNEL_TRADE_EXECUTED, event)
 
             # Record success/loss on circuit breaker
             if self.circuit_breaker and trades_executed > 0:
