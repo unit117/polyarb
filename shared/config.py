@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.82
     similarity_top_k: int = 20
     detector_batch_size: int = 100
-    classifier_model: str = "gpt-4o-mini"
+    classifier_model: str = "gpt-4.1-mini"
     detection_interval_seconds: int = 60
 
     # Optimizer settings
@@ -39,7 +39,6 @@ class Settings(BaseSettings):
     # Simulator settings
     initial_capital: float = 10000.0
     max_position_size: float = 100.0
-    fee_rate: float = 0.02
     slippage_model: str = "vwap"
     simulator_interval_seconds: int = 60
 
@@ -78,3 +77,26 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def polymarket_fee(price: float, side: str) -> float:
+    """Polymarket fee: 0% maker, ~1.5% taker on potential profit.
+
+    Taker fee = price * (1 - price) * 0.015, capped so fee <= price.
+    Maker orders pay nothing; we conservatively assume taker for now.
+    """
+    if side == "SELL":
+        # Selling at `price` — profit potential is `price` itself
+        return price * (1.0 - price) * 0.015
+    # Buying at `price` — profit potential is (1 - price)
+    return price * (1.0 - price) * 0.015
+
+
+def kalshi_fee(price: float) -> float:
+    """Kalshi fee: ceil(7% of price * (1 - price)) per contract (in cents).
+
+    Returns fee as a fraction of $1 contract (divide cents by 100).
+    """
+    import math
+    fee_cents = math.ceil(7.0 * price * (1.0 - price))
+    return fee_cents / 100.0

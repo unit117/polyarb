@@ -20,6 +20,7 @@ from shared.models import (
     PortfolioSnapshot,
     PriceSnapshot,
 )
+from shared.config import polymarket_fee
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
 
@@ -33,13 +34,11 @@ class SimulatorPipeline:
         redis: aioredis.Redis,
         portfolio: Portfolio,
         max_position_size: float,
-        fee_rate: float,
     ):
         self.session_factory = session_factory
         self.redis = redis
         self.portfolio = portfolio
         self.max_position_size = max_position_size
-        self.fee_rate = fee_rate
 
     async def simulate_opportunity(self, opportunity_id: int) -> dict:
         """Simulate executing trades for an optimized opportunity."""
@@ -87,7 +86,7 @@ class SimulatorPipeline:
                 size = base_size
                 fill = compute_vwap(order_book, trade["side"], size, midpoint)
 
-                fees = fill["vwap_price"] * fill["filled_size"] * self.fee_rate
+                fees = polymarket_fee(fill["vwap_price"], trade["side"]) * fill["filled_size"]
 
                 # Track rebalancing exit PNL before executing
                 key = f"{market.id}:{trade['outcome']}"

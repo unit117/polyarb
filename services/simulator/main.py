@@ -108,14 +108,12 @@ async def main() -> None:
         redis=redis,
         portfolio=portfolio,
         max_position_size=settings.max_position_size,
-        fee_rate=settings.fee_rate,
     )
 
     logger.info(
         "simulator_started",
         initial_capital=settings.initial_capital,
         max_position=settings.max_position_size,
-        fee_rate=settings.fee_rate,
         restored_cash=float(portfolio.cash),
         restored_positions=len(portfolio.positions),
     )
