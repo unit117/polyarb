@@ -13,6 +13,7 @@ from shared.models import ArbitrageOpportunity, Market, MarketPair
 from services.detector.similarity import find_similar_pairs
 from services.detector.classifier import classify_pair
 from services.detector.constraints import build_constraint_matrix
+from services.detector.verification import verify_pair
 
 logger = structlog.get_logger()
 
@@ -97,6 +98,18 @@ class DetectionPipeline:
                     market_b_dict["outcomes"],
                     prices_a,
                     prices_b,
+                    correlation=classification.get("correlation"),
+                )
+
+                # Verify pair before persisting
+                verification = verify_pair(
+                    dependency_type=classification["dependency_type"],
+                    market_a=market_a_dict,
+                    market_b=market_b_dict,
+                    prices_a=prices_a,
+                    prices_b=prices_b,
+                    confidence=classification["confidence"],
+                    correlation=classification.get("correlation"),
                 )
 
                 # Persist market pair
@@ -106,6 +119,7 @@ class DetectionPipeline:
                     dependency_type=classification["dependency_type"],
                     confidence=classification["confidence"],
                     constraint_matrix=constraint,
+                    verified=verification["verified"],
                 )
                 session.add(pair)
                 await session.flush()
@@ -123,9 +137,9 @@ class DetectionPipeline:
                     },
                 )
 
-                # If there's a theoretical profit, record an opportunity
+                # If there's a theoretical profit on a verified pair, record an opportunity
                 profit = constraint.get("profit_bound", 0.0)
-                if profit > 0:
+                if profit > 0 and verification["verified"]:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",
@@ -191,8 +205,10 @@ class DetectionPipeline:
 
                 # Recompute profit bound with actual prices
                 from services.detector.constraints import build_constraint_matrix
+                correlation = constraint.get("correlation")
                 fresh_constraint = build_constraint_matrix(
-                    pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b
+                    pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b,
+                    correlation=correlation,
                 )
 
                 # Update stored constraint with fresh profit data

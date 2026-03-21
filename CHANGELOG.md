@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-21 (2) — Conditional Constraints, Pair Verification, Position Sizing
+
+### Bug Fixes
+
+**3. Conditional pair constraints (detector/constraints.py)**
+- `_conditional_matrix` previously returned all-ones (identical to unconstrained). Now derives real feasibility constraints from Fréchet bounds + classifier correlation direction.
+- Classifier enhanced to output `correlation: "positive"|"negative"` for conditional pairs.
+- Positive correlation + price divergence > 0.15 → anti-correlated cell infeasible. Both high (sum > 1.15) → (No,No) infeasible. Both low (sum < 0.85) → (Yes,Yes) infeasible. Negative correlation → same as mutual_exclusion.
+- Conditional pairs with all-ones matrix (no correlation data) still skipped by optimizer.
+- `OPTIMIZER_SKIP_CONDITIONAL` default changed from `true` to `false` now that real constraints exist.
+
+**5. Pair verification (detector/verification.py — NEW)**
+- New verification pipeline runs 3 checks: classifier confidence ≥ 0.70, structural validity per dependency type, and price consistency.
+- Wired into detection pipeline — `MarketPair.verified` now populated.
+- Opportunities only created for verified pairs, preventing unvalidated classifications from reaching the optimizer.
+
+**6. Position sizing uses net profit (simulator/pipeline.py)**
+- Replaced `trade["edge"] * max_position_size` with sizing from opportunity-level `estimated_profit` (net of fees).
+- Scale: 0.10 net profit → full max_position_size, linear below. All trades in the bundle sized uniformly.
+- Opportunities with estimated_profit ≤ 0 skipped entirely.
+
+### Files Changed
+
+- `services/detector/classifier.py` — correlation field in LLM output for conditional pairs
+- `services/detector/constraints.py` — Fréchet-based conditional matrix + profit bounds
+- `services/detector/pipeline.py` — verification integration, correlation passthrough
+- `services/detector/verification.py` — NEW: structural + price verification module
+- `services/optimizer/pipeline.py` — smart conditional skip (all-ones check vs forced)
+- `services/simulator/pipeline.py` — net-profit position sizing
+- `shared/config.py` — `optimizer_skip_conditional` default → false
+
+---
+
 ## 2026-03-21 — Profitability Fixes (Classifier + Optimizer + Simulator)
 
 ### Bug Fixes

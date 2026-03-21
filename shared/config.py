@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     fw_ip_timeout_ms: int = 5000
     optimizer_interval_seconds: int = 30
     optimizer_min_edge: float = 0.03
-    optimizer_skip_conditional: bool = True
+    optimizer_skip_conditional: bool = False
 
     # Simulator settings
     initial_capital: float = 10000.0
