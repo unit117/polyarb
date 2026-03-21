@@ -66,6 +66,7 @@ class ClobWebSocket:
         # this dict are excluded from detector snapshot events to prevent
         # phantom arbs from mixed old-DB / new-WS prices.
         self._reconnect_pending: dict[int, set[str]] = {}
+        self._reconnect_pending_since: float = 0.0  # monotonic timestamp
 
     async def _build_token_map(self) -> None:
         """Build token_id -> (market_id, outcome_name) lookup from DB."""
@@ -308,6 +309,18 @@ class ClobWebSocket:
 
             stale_count = len(snapshots) - len(rows)
 
+            # Warn if markets have been stuck in reconnect-pending too long
+            if (
+                self._reconnect_pending
+                and time.monotonic() - self._reconnect_pending_since > 60
+            ):
+                log.warning(
+                    "ws_reconnect_pending_stale",
+                    stuck_markets=len(self._reconnect_pending),
+                    seconds=int(time.monotonic() - self._reconnect_pending_since),
+                    sample=list(self._reconnect_pending.keys())[:5],
+                )
+
             try:
                 if rows:
                     async with self._session_factory() as session:
@@ -349,7 +362,17 @@ class ClobWebSocket:
                     stale_suppressed=stale_count,
                 )
             except Exception:
-                log.exception("ws_flush_error", count=len(rows))
+                self._flush_errors = getattr(self, "_flush_errors", 0) + 1
+                backoff = min(2 ** self._flush_errors, 30)
+                log.exception(
+                    "ws_flush_error",
+                    count=len(rows),
+                    consecutive_errors=self._flush_errors,
+                    backoff_seconds=backoff,
+                )
+                await asyncio.sleep(backoff)
+            else:
+                self._flush_errors = 0
 
     def _handle_price_change(self, msg: dict) -> None:
         """Process a price_change event — update buffered midpoints."""
@@ -399,6 +422,11 @@ class ClobWebSocket:
         self._reconnect_pending[market_id].discard(outcome)
         if not self._reconnect_pending[market_id]:
             del self._reconnect_pending[market_id]
+            log.debug(
+                "ws_market_fully_refreshed",
+                market_id=market_id,
+                remaining_pending=len(self._reconnect_pending),
+            )
 
     async def _listen(self) -> None:
         """Main message loop — parse and dispatch events."""
@@ -445,6 +473,7 @@ class ClobWebSocket:
                 self._last_known_prices.clear()
                 self._pending_snapshots.clear()
                 self._reconnect_pending.clear()
+                self._reconnect_pending_since = time.monotonic()
                 await self._connect(initial_token_ids)
                 consecutive_failures = 0
                 self.connected = True
