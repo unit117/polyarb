@@ -190,6 +190,9 @@ class DetectionPipeline:
             pairs = result.scalars().all()
 
             for pair in pairs:
+                if not pair.verified:
+                    continue
+
                 prices_a = await _get_latest_prices(session, pair.market_a_id)
                 prices_b = await _get_latest_prices(session, pair.market_b_id)
 

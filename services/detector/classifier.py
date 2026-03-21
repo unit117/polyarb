@@ -215,6 +215,55 @@ def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | Non
         }
 
 
+_RANKING_RE = re.compile(
+    r"(?:Top|Bottom)\s+(\d+)",
+    re.IGNORECASE,
+)
+
+
+def _check_ranking_markets(market_a: dict, market_b: dict) -> dict | None:
+    """Detect "Top N" vs "Top M" markets on the same event.
+
+    Finishing Top 10 implies finishing Top 20 (N < M → implication).
+    Only applies when both questions reference the same subject/event
+    and differ only in the ranking cutoff.
+    """
+    q_a = market_a.get("question", "")
+    q_b = market_b.get("question", "")
+
+    m_a = _RANKING_RE.search(q_a)
+    m_b = _RANKING_RE.search(q_b)
+
+    if not m_a or not m_b:
+        return None
+
+    n_a = int(m_a.group(1))
+    n_b = int(m_b.group(1))
+
+    if n_a == n_b:
+        return None
+
+    # Strip the "Top N" portion and compare the rest to ensure same subject
+    subject_a = _RANKING_RE.sub("", q_a).strip().lower()
+    subject_b = _RANKING_RE.sub("", q_b).strip().lower()
+
+    if subject_a != subject_b:
+        return None
+
+    smaller = min(n_a, n_b)
+    larger = max(n_a, n_b)
+
+    return {
+        "dependency_type": "implication",
+        "confidence": 0.95,
+        "correlation": "positive",
+        "reasoning": (
+            f"Top {smaller} implies Top {larger} — "
+            f"ranking cutoffs form an implication chain"
+        ),
+    }
+
+
 async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
     """Apply rule-based heuristics. Returns result dict or None if ambiguous."""
     for check in (
@@ -222,6 +271,7 @@ async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
         _check_outcome_subset,
         _check_crypto_time_intervals,
         _check_price_threshold_markets,
+        _check_ranking_markets,
     ):
         result = check(market_a, market_b)
         if result:
