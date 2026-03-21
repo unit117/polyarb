@@ -122,6 +122,7 @@ class ArbitrageOpportunity(Base):
     status: Mapped[str] = mapped_column(String, default="detected")
     pending_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     expired_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    dependency_type: Mapped[str | None] = mapped_column(String, nullable=True)
 
     pair: Mapped["MarketPair"] = relationship(back_populates="opportunities")
 
