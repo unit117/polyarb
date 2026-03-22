@@ -31,7 +31,7 @@ from shared.db import SessionFactory, init_db
 log = structlog.get_logger()
 
 # Default dataset path on NAS (mounted into container)
-DEFAULT_DATASET_PATH = "/data/prediction-market-analysis"
+DEFAULT_DATASET_PATH = "/data/prediction-market-analysis/data"
 
 
 def load_resolved_markets(dataset_path: str) -> list[dict]:
