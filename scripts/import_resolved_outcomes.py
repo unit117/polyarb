@@ -162,10 +162,10 @@ async def import_outcomes(
     log.info("resolution_map_built", unique_tokens=len(resolution_map))
 
     async with SessionFactory() as session:
-        # Load all polymarket markets with their token_ids
+        # Load all markets with their token_ids
+        # (token_id join is inherently Polymarket-specific)
         result = await session.execute(
             select(Market.id, Market.token_ids, Market.resolved_outcome)
-            .where(Market.venue == "polymarket")
         )
         db_markets = result.all()
 

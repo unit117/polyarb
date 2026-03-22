@@ -144,15 +144,19 @@ services:
         limits:
           memory: 256M
 
-  # Step 1b: import authoritative resolutions from Jon-Becker dataset
-  import-outcomes:
+  # Step 1b: bootstrap backtest DB from Jon-Becker dataset (standalone)
+  dataset-bootstrap:
     build:
       context: .
       dockerfile: scripts/Dockerfile
     env_file: .env
     environment:
       POSTGRES_DB: polyarb_backtest
-    command: python -m scripts.import_resolved_outcomes --dataset-path /data/prediction-market-analysis
+    command: >-
+      python -m scripts.backtest_from_dataset
+        --dataset-path /data/prediction-market-analysis/data
+        --start 2025-06-01 --end 2026-02-01
+        --max-markets 5000
     volumes:
       - /volume1/docker/data:/data:ro
     depends_on:
@@ -162,7 +166,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
 
   # Step 2: backfill 30 days of historical prices into backtest DB
   backfill:
