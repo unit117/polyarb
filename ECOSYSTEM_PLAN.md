@@ -3,7 +3,8 @@
 *Generated 2026-03-21 — Based on survey of 15+ open-source Polymarket/prediction-market repos*
 
 **Status as of 2026-03-22:**
-- E1: Not started | E2: ⚠️ Partially superseded (custom Kalshi client built instead of pmxt) | E3-E6: Not started
+- E1: **In progress** — E1a0 ✅ (backtest bootstrap fixed), E1b ✅ (import script), E1d ✅ (authoritative settlement flag). E1a1 pending (dataset download). E1c pending (embedding validation).
+- E2: ⚠️ Partially superseded (custom Kalshi client built instead of pmxt) | E3-E6: Not started
 - All IMPROVEMENT_PLAN phases (1-6) are now complete, so E2/E5/E6 prerequisites are met.
 
 ---
@@ -364,7 +365,7 @@ Stale-price opportunities get a priority boost in the optimizer queue. These are
 
 | Phase | What | Depends On | Effort | Priority | Status |
 |-------|------|------------|--------|----------|--------|
-| E1 | Dataset plumbing + authoritative resolutions + embedding validation | — | 1.5-2 days | **Highest** — validates everything else | Not started |
+| E1 | Dataset plumbing + authoritative resolutions + embedding validation | — | 1.5-2 days | **Highest** — validates everything else | **In progress** (a0✅ b✅ d✅) |
 | E2 | PMXT for Kalshi integration | ~~IMPROVEMENT Phase 3~~ ✅ | 2 days | ~~High~~ Low — custom client already built | ⚠️ Superseded |
 | E3 | L2 order book backtest | E1 (needs resolved outcomes) | 2 days | High — accuracy of all future decisions | Not started |
 | E4 | Walk-forward parameter tuning | E1 + E3 | 1.5 days | Medium — optimization after validation | Not started |

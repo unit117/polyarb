@@ -294,13 +294,16 @@ async def simulate_opportunity(
 # ═══════════════════════════════════════════════════════════════════
 
 async def settle_resolved_positions(
-    session, portfolio: Portfolio, as_of: datetime
+    session, portfolio: Portfolio, as_of: datetime,
+    use_authoritative: bool = False,
 ) -> dict:
-    """Close positions in markets where a price has reached the resolution threshold.
+    """Close positions in resolved markets.
 
-    Checks current prices for all open positions. If any outcome's price >= 0.98,
-    that market is considered resolved: the winning outcome settles at 1.0, all
-    others at 0.0.
+    Two modes:
+    - Authoritative (use_authoritative=True): uses markets.resolved_outcome
+      from the DB — the same path the live simulator uses. Preferred when
+      authoritative outcomes have been imported (E1).
+    - Heuristic (default): falls back to price >= 0.98 threshold.
     """
     stats = {"settled": 0, "pnl_realized": 0.0}
     if not portfolio.positions:
@@ -316,19 +319,30 @@ async def settle_resolved_positions(
         market_ids.setdefault(mid, []).append(key)
 
     for market_id, position_keys in market_ids.items():
-        snap = await get_snapshot_at(session, market_id, as_of)
-        if not snap or not snap.prices:
-            continue
-
-        # Check if any outcome price >= threshold → market resolved
         winning_outcome = None
-        for outcome, price_str in snap.prices.items():
-            try:
-                if float(price_str) >= RESOLUTION_THRESHOLD:
-                    winning_outcome = outcome
-                    break
-            except (ValueError, TypeError):
+
+        if use_authoritative:
+            # Authoritative: check markets.resolved_outcome directly
+            market = await session.get(Market, market_id)
+            if (
+                market
+                and market.resolved_outcome
+                and market.resolved_at
+                and market.resolved_at <= as_of
+            ):
+                winning_outcome = market.resolved_outcome
+        else:
+            # Heuristic: price threshold
+            snap = await get_snapshot_at(session, market_id, as_of)
+            if not snap or not snap.prices:
                 continue
+            for outcome, price_str in snap.prices.items():
+                try:
+                    if float(price_str) >= RESOLUTION_THRESHOLD:
+                        winning_outcome = outcome
+                        break
+                except (ValueError, TypeError):
+                    continue
 
         if not winning_outcome:
             continue
@@ -411,6 +425,9 @@ async def run_backtest(
     initial_capital: float = 10000.0,
     max_position_size: float = 100.0,
     clean: bool = True,
+    use_authoritative: bool = False,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> list[dict]:
     """Run the full backtest and return daily results."""
     structlog.configure(
@@ -439,6 +456,12 @@ async def run_backtest(
             log.error("no_price_data", hint="Run backfill_history.py first")
             return []
 
+        # Override date range if explicit bounds given
+        if start_date:
+            earliest = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        if end_date:
+            latest = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+
         # Load all market pairs (detected by the live system)
         result = await session.execute(select(MarketPair))
         pairs = list(result.scalars().all())
@@ -454,6 +477,7 @@ async def run_backtest(
         initial_capital=initial_capital,
         max_position=max_position_size,
         fee_model="polymarket",
+        settlement="authoritative" if use_authoritative else "heuristic",
     )
 
     # ── Generate daily time steps ─────────────────────────────────
@@ -524,7 +548,8 @@ async def run_backtest(
             # ── Step 4: Settlement ──────────────────────────────
             try:
                 settle_stats = await settle_resolved_positions(
-                    session, portfolio, as_of
+                    session, portfolio, as_of,
+                    use_authoritative=use_authoritative,
                 )
                 day_stats["settled"] = settle_stats["settled"]
                 day_stats["settlement_pnl"] = round(settle_stats["pnl_realized"], 2)
@@ -695,6 +720,12 @@ async def cli_main():
     parser.add_argument("--max-position", type=float, default=100.0, help="Max position size")
     parser.add_argument("--output", type=str, default="backtest_report.json", help="Output JSON path")
     parser.add_argument("--no-clean", action="store_true", help="Don't clean previous results")
+    parser.add_argument("--authoritative", action="store_true",
+                        help="Settle from markets.resolved_outcome instead of price threshold")
+    parser.add_argument("--start", type=str, default=None,
+                        help="Start date (ISO format, e.g. 2026-01-01)")
+    parser.add_argument("--end", type=str, default=None,
+                        help="End date (ISO format, e.g. 2026-03-01)")
     args = parser.parse_args()
 
     results = await run_backtest(
@@ -702,6 +733,9 @@ async def cli_main():
         initial_capital=args.capital,
         max_position_size=args.max_position,
         clean=not args.no_clean,
+        use_authoritative=args.authoritative,
+        start_date=args.start,
+        end_date=args.end,
     )
 
     if results:

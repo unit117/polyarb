@@ -99,16 +99,29 @@ async def copy_markets_and_pairs() -> None:
         # Clear existing (idempotent re-runs)
         await conn.execute("TRUNCATE markets, market_pairs CASCADE")
 
-        # Copy markets via dblink — all columns in one shot
+        # Copy markets via dblink — explicit column names for schema safety
         market_count = await conn.fetchval(f"""
-            INSERT INTO markets
-            SELECT *
-            FROM dblink('{live_dsn}', 'SELECT * FROM markets')
+            INSERT INTO markets (
+                id, polymarket_id, venue, event_id, question, description,
+                outcomes, token_ids, active, end_date, volume, liquidity,
+                embedding, resolved_outcome, resolved_at, created_at, updated_at
+            )
+            SELECT
+                id, polymarket_id, venue, event_id, question, description,
+                outcomes, token_ids, active, end_date, volume, liquidity,
+                embedding, resolved_outcome, resolved_at, created_at, updated_at
+            FROM dblink('{live_dsn}',
+                'SELECT id, polymarket_id, venue, event_id, question, description,
+                        outcomes, token_ids, active, end_date, volume, liquidity,
+                        embedding, resolved_outcome, resolved_at, created_at, updated_at
+                 FROM markets'
+            )
             AS t(
-                id integer, polymarket_id text, event_id text, question text,
-                description text, outcomes jsonb, token_ids jsonb, active boolean,
-                end_date timestamptz, volume numeric, liquidity numeric,
-                embedding vector(384), created_at timestamptz, updated_at timestamptz
+                id integer, polymarket_id text, venue varchar(32), event_id text,
+                question text, description text, outcomes jsonb, token_ids jsonb,
+                active boolean, end_date timestamptz, volume numeric, liquidity numeric,
+                embedding vector(384), resolved_outcome text, resolved_at timestamptz,
+                created_at timestamptz, updated_at timestamptz
             )
             ON CONFLICT DO NOTHING
             RETURNING 1
