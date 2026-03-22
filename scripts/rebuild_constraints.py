@@ -22,7 +22,7 @@ from shared.db import SessionFactory, init_db
 from shared.logging import setup_logging
 from shared.models import Market, MarketPair, PriceSnapshot
 from services.detector.classifier import classify_rule_based, classify_llm
-from services.detector.constraints import build_constraint_matrix
+from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
 from services.detector.verification import verify_pair
 
 logger = structlog.get_logger()
@@ -168,16 +168,28 @@ async def main() -> None:
                 else (pair.constraint_matrix or {}).get("implication_direction")
             )
 
-            # Rebuild constraint matrix with latest logic
-            fresh_constraint = build_constraint_matrix(
-                pair.dependency_type,
-                market_a_dict["outcomes"],
-                market_b_dict["outcomes"],
-                prices_a,
-                prices_b,
-                correlation=correlation,
-                implication_direction=imp_direction,
-            )
+            # Rebuild constraint matrix — use vectors if stored, else label-based
+            if pair.resolution_vectors:
+                fresh_constraint = build_constraint_matrix_from_vectors(
+                    pair.resolution_vectors,
+                    market_a_dict["outcomes"],
+                    market_b_dict["outcomes"],
+                    dependency_type=pair.dependency_type,
+                    prices_a=prices_a,
+                    prices_b=prices_b,
+                    correlation=correlation,
+                    implication_direction=imp_direction,
+                )
+            else:
+                fresh_constraint = build_constraint_matrix(
+                    pair.dependency_type,
+                    market_a_dict["outcomes"],
+                    market_b_dict["outcomes"],
+                    prices_a,
+                    prices_b,
+                    correlation=correlation,
+                    implication_direction=imp_direction,
+                )
             pair.constraint_matrix = fresh_constraint
             stats["rebuilt"] += 1
 

@@ -38,7 +38,7 @@ from shared.models import (
     PortfolioSnapshot,
     PriceSnapshot,
 )
-from services.detector.constraints import build_constraint_matrix
+from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
 from services.detector.verification import verify_pair
 from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
@@ -136,12 +136,21 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
         if not verification["verified"]:
             continue
 
-        # Recompute profit bound with this day's prices
-        fresh = build_constraint_matrix(
-            pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b,
-            correlation=constraint.get("correlation"),
-            implication_direction=imp_direction,
-        )
+        # Recompute profit bound with this day's prices — use vectors if stored
+        if pair.resolution_vectors:
+            fresh = build_constraint_matrix_from_vectors(
+                pair.resolution_vectors, outcomes_a, outcomes_b,
+                dependency_type=pair.dependency_type,
+                prices_a=prices_a, prices_b=prices_b,
+                correlation=constraint.get("correlation"),
+                implication_direction=imp_direction,
+            )
+        else:
+            fresh = build_constraint_matrix(
+                pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b,
+                correlation=constraint.get("correlation"),
+                implication_direction=imp_direction,
+            )
 
         profit = fresh.get("profit_bound", 0.0)
         if profit <= 0:
