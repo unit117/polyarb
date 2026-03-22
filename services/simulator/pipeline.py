@@ -375,6 +375,10 @@ class SimulatorPipeline:
 
     async def settle_resolved_markets(self) -> dict:
         """Close all positions in markets that have resolved."""
+        async with self._execution_lock:
+            return await self._settle_resolved_markets_inner()
+
+    async def _settle_resolved_markets_inner(self) -> dict:
         stats = {"settled": 0, "pnl_realized": 0.0}
 
         if not self.portfolio.positions:
@@ -435,7 +439,7 @@ class SimulatorPipeline:
             await session.commit()
 
         if stats["settled"] > 0:
-            await self.snapshot_portfolio()
+            await self._snapshot_portfolio_inner()
             logger.info("settlement_complete", **stats)
 
         return stats
@@ -446,6 +450,10 @@ class SimulatorPipeline:
         Used after fixing classification bugs to give the portfolio a clean start.
         Records PURGE trades for auditability, then resets counters.
         """
+        async with self._execution_lock:
+            return await self._purge_contaminated_positions_inner()
+
+    async def _purge_contaminated_positions_inner(self) -> dict:
         if not self.portfolio.positions:
             return {"purged": 0, "pnl_realized": 0.0}
 
@@ -496,7 +504,7 @@ class SimulatorPipeline:
         self.portfolio.realized_pnl = Decimal("0")
 
         # Snapshot the clean state
-        await self.snapshot_portfolio()
+        await self._snapshot_portfolio_inner()
 
         logger.info(
             "contamination_purge_complete",
@@ -533,7 +541,12 @@ class SimulatorPipeline:
         return prices
 
     async def snapshot_portfolio(self) -> None:
-        """Persist current portfolio state to DB."""
+        """Persist current portfolio state to DB (acquires execution lock)."""
+        async with self._execution_lock:
+            await self._snapshot_portfolio_inner()
+
+    async def _snapshot_portfolio_inner(self) -> None:
+        """Persist current portfolio state — caller must hold _execution_lock."""
         current_prices = await self._get_current_prices()
         snap = self.portfolio.to_snapshot_dict(current_prices)
 
