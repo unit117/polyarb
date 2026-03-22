@@ -18,6 +18,7 @@ export default function App() {
   const {
     stats,
     history,
+    baseline,
     opportunities,
     trades,
     pairs,
@@ -48,6 +49,14 @@ export default function App() {
           {mode === "paper" ? "Paper Trading" : "Live Trading"} Dashboard
         </span>
         <div className={s.spacer} />
+        <a
+          href="/docs/"
+          className={s.docsLink}
+          target="_blank"
+          rel="noopener"
+        >
+          Docs
+        </a>
         <ModeSwitcher
           mode={mode}
           onModeChange={setMode}
@@ -56,7 +65,7 @@ export default function App() {
       </header>
 
       <StatsBar stats={stats} onStatClick={(t) => setTab(t as Tab)} />
-      <PnlChart history={history} />
+      <PnlChart history={history} baseline={baseline.total_value} />
 
       <nav className={s.tabs}>
         {(["opportunities", "trades", "pairs", "metrics"] as Tab[]).map((t) => (

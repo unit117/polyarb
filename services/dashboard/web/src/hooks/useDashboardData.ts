@@ -88,9 +88,16 @@ export interface PaginationInfo {
   hasMore: boolean;
 }
 
+export interface Baseline {
+  status: "none" | "pending" | "ready";
+  total_value: number | null;
+  timestamp: string | null;
+}
+
 export interface DashboardData {
   stats: Stats | null;
   history: HistoryPoint[];
+  baseline: Baseline;
   opportunities: Opportunity[];
   trades: Trade[];
   pairs: Pair[];
@@ -115,6 +122,7 @@ export function useDashboardData(): DashboardData {
   const [mode, setModeRaw] = useState<TradingMode>("paper");
   const [stats, setStats] = useState<Stats | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [baseline, setBaseline] = useState<Baseline>({ status: "pending", total_value: null, timestamp: null });
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [pairs, setPairs] = useState<Pair[]>([]);
@@ -124,12 +132,19 @@ export function useDashboardData(): DashboardData {
   const [pairsPag, setPairsPag] = useState<PaginationInfo>({ total: 0, offset: 0, limit: PAGE_SIZE, hasMore: false });
 
   const [loadingMore, setLoadingMore] = useState({ opportunities: false, trades: false, pairs: false });
+  // Tracks whether the baseline has been resolved (non-null value OR confirmed absent).
+  // "resolved" means we got a definitive answer — stop retrying.
+  const baselineResolvedRef = useRef(false);
+  const modeRef = useRef(mode);
 
   // Clear mode-dependent data immediately on switch so stale data doesn't flash
   const setMode = useCallback((m: TradingMode) => {
     setModeRaw(m);
+    modeRef.current = m;
     setStats(null);
     setHistory([]);
+    setBaseline({ status: "pending", total_value: null, timestamp: null });
+    baselineResolvedRef.current = false;
     setTrades([]);
     setTradesPag({ total: 0, offset: 0, limit: PAGE_SIZE, hasMore: false });
     loadedCountRef.current.trades = PAGE_SIZE;
@@ -146,6 +161,24 @@ export function useDashboardData(): DashboardData {
       .then((r) => setHistory(r.history))
       .catch(console.error);
   }, [sourceParam]);
+
+  const fetchBaseline = useCallback(() => {
+    // Once resolved (got a value OR confirmed no epoch), stop retrying
+    if (baselineResolvedRef.current) return;
+    const requestMode = mode;
+    apiFetch<Baseline>(`/portfolio/baseline?${sourceParam}`)
+      .then((b) => {
+        // Discard if mode changed while request was in flight
+        if (modeRef.current !== requestMode) return;
+        setBaseline(b);
+        // "ready" = got a value, "none" = no epoch configured — both are final.
+        // "pending" = epoch set but first snapshot not yet written — keep retrying.
+        if (b.status === "ready" || b.status === "none") {
+          baselineResolvedRef.current = true;
+        }
+      })
+      .catch(console.error);
+  }, [sourceParam, mode]);
 
   // Track how many items are currently loaded so WS refreshes
   // re-fetch the full loaded range, not just the first page.
@@ -243,16 +276,17 @@ export function useDashboardData(): DashboardData {
   useEffect(() => {
     fetchStats();
     fetchHistory();
+    fetchBaseline();
     fetchOpportunities();
     fetchTrades();
     fetchPairs();
-  }, [fetchStats, fetchHistory, fetchOpportunities, fetchTrades, fetchPairs]);
+  }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs]);
 
   // Keep fetch refs current so WebSocket handler always uses latest mode
-  const fetchRefsRef = useRef({ fetchStats, fetchHistory, fetchOpportunities, fetchTrades, fetchPairs });
+  const fetchRefsRef = useRef({ fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs });
   useEffect(() => {
-    fetchRefsRef.current = { fetchStats, fetchHistory, fetchOpportunities, fetchTrades, fetchPairs };
-  }, [fetchStats, fetchHistory, fetchOpportunities, fetchTrades, fetchPairs]);
+    fetchRefsRef.current = { fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs };
+  }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs]);
 
   // WebSocket with auto-reconnect — stable effect, doesn't reconnect on mode change
   const wsRef = useRef<WebSocket | null>(null);
@@ -284,6 +318,10 @@ export function useDashboardData(): DashboardData {
           f.fetchTrades();
           f.fetchStats();
           f.fetchHistory();
+        } else if (channel === "polyarb:portfolio_updated") {
+          f.fetchStats();
+          f.fetchHistory();
+          f.fetchBaseline();
         } else if (channel.startsWith("polyarb:pair:")) {
           f.fetchPairs();
           f.fetchStats();
@@ -315,6 +353,7 @@ export function useDashboardData(): DashboardData {
   return {
     stats,
     history,
+    baseline,
     opportunities,
     trades,
     pairs,

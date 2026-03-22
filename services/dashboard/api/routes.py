@@ -297,6 +297,39 @@ async def get_portfolio_history(hours: int = 24, source: str | None = None):
     }
 
 
+@router.get("/portfolio/baseline")
+async def get_portfolio_baseline(source: str | None = None):
+    """Return the stable experiment-start baseline (first post-epoch snapshot).
+
+    Used by the chart as a fixed reference point that doesn't drift
+    as the 24h window slides forward.
+    """
+    if not settings.simulator_reset_epoch:
+        return {"status": "none", "total_value": None, "timestamp": None}
+
+    async with SessionFactory() as session:
+        q = (
+            select(
+                PortfolioSnapshot.total_value,
+                PortfolioSnapshot.timestamp,
+            )
+            .where(PortfolioSnapshot.timestamp > settings.simulator_reset_epoch)
+            .order_by(PortfolioSnapshot.timestamp)
+            .limit(1)
+        )
+        if source:
+            q = q.where(PortfolioSnapshot.source == source)
+        row = (await session.execute(q)).first()
+
+    if not row:
+        return {"status": "pending", "total_value": None, "timestamp": None}
+    return {
+        "status": "ready",
+        "total_value": float(row[0]),
+        "timestamp": row[1].isoformat(),
+    }
+
+
 # --- Observability Endpoints ---
 
 
