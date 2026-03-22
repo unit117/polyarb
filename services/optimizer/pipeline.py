@@ -80,7 +80,7 @@ class OptimizerPipeline:
                 ) if feasibility else True
                 source = constraint.get("classification_source", "")
                 vector_with_constraints = (
-                    source == "resolution_vector" and not is_unconstrained
+                    source == "llm_vector" and not is_unconstrained
                 )
                 if is_unconstrained or (
                     self.skip_conditional and not vector_with_constraints

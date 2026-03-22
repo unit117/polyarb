@@ -126,17 +126,18 @@ async def export_pairs(n: int = 200) -> None:
                     "notes": "",
                 })
 
-        # Generate independent-pair candidates: sample random market pairs
-        # that are semantically similar but NOT persisted as MarketPair rows.
-        # These are the negative class the detector discarded as "none".
+        # Generate independent-pair candidates: sample semantically SIMILAR
+        # market pairs NOT persisted as MarketPair rows. These are the hard
+        # negative class — pairs the detector considered but discarded.
+        # Use cosine similarity on embeddings to find near-miss pairs.
         n_independent = max(80, n // 3)
         existing_pair_keys = set()
         for p in pairs_data:
             existing_pair_keys.add((p["market_a_id"], p["market_b_id"]))
             existing_pair_keys.add((p["market_b_id"], p["market_a_id"]))
 
-        # Fetch random markets with embeddings for similarity search
-        from pgvector.sqlalchemy import Vector
+        # Fetch random markets with embeddings
+        import numpy as np
 
         market_query = (
             select(Market)
@@ -147,17 +148,17 @@ async def export_pairs(n: int = 200) -> None:
         market_result = await session.execute(market_query)
         markets = market_result.scalars().all()
 
-        # Find similar pairs among these markets using cosine distance
-        independent_candidates = []
+        # Compute cosine similarities and keep the most similar non-persisted pairs
+        scored_candidates = []
         seen = set()
         for i, m_a in enumerate(markets):
-            if len(independent_candidates) >= n_independent:
-                break
             if m_a.embedding is None:
                 continue
+            vec_a = np.array(m_a.embedding, dtype=np.float32)
+            norm_a = np.linalg.norm(vec_a)
+            if norm_a == 0:
+                continue
             for m_b in markets[i + 1:]:
-                if len(independent_candidates) >= n_independent:
-                    break
                 if m_b.embedding is None:
                     continue
                 key = (min(m_a.id, m_b.id), max(m_a.id, m_b.id))
@@ -165,35 +166,50 @@ async def export_pairs(n: int = 200) -> None:
                     continue
                 seen.add(key)
 
-                # Skip if already a persisted pair
-                pair_check = await session.execute(
-                    select(MarketPair.id).where(
-                        ((MarketPair.market_a_id == m_a.id) & (MarketPair.market_b_id == m_b.id))
-                        | ((MarketPair.market_a_id == m_b.id) & (MarketPair.market_b_id == m_a.id))
-                    ).limit(1)
-                )
-                if pair_check.scalar_one_or_none() is not None:
+                vec_b = np.array(m_b.embedding, dtype=np.float32)
+                norm_b = np.linalg.norm(vec_b)
+                if norm_b == 0:
                     continue
+                similarity = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
+                scored_candidates.append((similarity, m_a, m_b))
 
-                independent_candidates.append({
-                    "pair_id": None,
-                    "market_a_id": m_a.id,
-                    "market_b_id": m_b.id,
-                    "question_a": m_a.question,
-                    "question_b": m_b.question,
-                    "description_a": m_a.description or "",
-                    "description_b": m_b.description or "",
-                    "outcomes_a": m_a.outcomes if isinstance(m_a.outcomes, list) else [],
-                    "outcomes_b": m_b.outcomes if isinstance(m_b.outcomes, list) else [],
-                    "event_id_a": m_a.event_id,
-                    "event_id_b": m_b.event_id,
-                    "current_dependency_type": "none_candidate",
-                    "current_confidence": 0.0,
-                    "verified": False,
-                    "ground_truth_type": "",
-                    "correct": None,
-                    "notes": "auto-generated independent candidate (not in market_pairs)",
-                })
+        # Sort by similarity descending — take the most similar pairs
+        scored_candidates.sort(key=lambda x: x[0], reverse=True)
+
+        independent_candidates = []
+        for similarity, m_a, m_b in scored_candidates:
+            if len(independent_candidates) >= n_independent:
+                break
+
+            # Skip if already a persisted pair
+            pair_check = await session.execute(
+                select(MarketPair.id).where(
+                    ((MarketPair.market_a_id == m_a.id) & (MarketPair.market_b_id == m_b.id))
+                    | ((MarketPair.market_a_id == m_b.id) & (MarketPair.market_b_id == m_a.id))
+                ).limit(1)
+            )
+            if pair_check.scalar_one_or_none() is not None:
+                continue
+
+            independent_candidates.append({
+                "pair_id": None,
+                "market_a_id": m_a.id,
+                "market_b_id": m_b.id,
+                "question_a": m_a.question,
+                "question_b": m_b.question,
+                "description_a": m_a.description or "",
+                "description_b": m_b.description or "",
+                "outcomes_a": m_a.outcomes if isinstance(m_a.outcomes, list) else [],
+                "outcomes_b": m_b.outcomes if isinstance(m_b.outcomes, list) else [],
+                "event_id_a": m_a.event_id,
+                "event_id_b": m_b.event_id,
+                "current_dependency_type": "none_candidate",
+                "current_confidence": 0.0,
+                "verified": False,
+                "ground_truth_type": "",
+                "correct": None,
+                "notes": f"cosine_similarity={similarity:.3f}",
+            })
 
         pairs_data.extend(independent_candidates)
         print(f"Added {len(independent_candidates)} independent-pair candidates")
