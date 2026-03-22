@@ -68,6 +68,7 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
         </div>
       )}
 
+      {/* Desktop table */}
       <table className={s.table}>
         <thead>
           <tr>
@@ -134,6 +135,31 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
           )}
         </tbody>
       </table>
+
+      {/* Mobile card list */}
+      <div className={s.cardList}>
+        {sorted.map((p) => (
+          <div key={p.id} className={s.card}>
+            <div className={s.cardHeader}>
+              <span className={s.depBadge}>{formatDepType(p.dependency_type)}</span>
+              <ConfidenceMeter value={p.confidence} />
+            </div>
+            <div className={s.cardMarket}>{p.market_a?.question || "\u2014"}</div>
+            <div className={s.cardMarket}>{p.market_b?.question || "\u2014"}</div>
+            <div className={s.cardRow}>
+              <span className={s.cardLabel}>Opps</span>
+              <span>{p.opportunity_count}</span>
+            </div>
+          </div>
+        ))}
+        {sorted.length === 0 && (
+          <div className={s.empty}>
+            {pairs.length === 0
+              ? "No pairs detected yet"
+              : "No pairs with opportunities (toggle to see all)"}
+          </div>
+        )}
+      </div>
       <LoadMoreBar
         pagination={pagination}
         loadedCount={pairs.length}

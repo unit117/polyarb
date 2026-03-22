@@ -25,6 +25,7 @@ const TradesTable = React.memo(function TradesTable({ trades, pagination, onLoad
 
   return (
     <div className={s.wrap}>
+      {/* Desktop table */}
       <table className={s.table}>
         <thead>
           <tr>
@@ -98,6 +99,32 @@ const TradesTable = React.memo(function TradesTable({ trades, pagination, onLoad
           )}
         </tbody>
       </table>
+
+      {/* Mobile card list */}
+      <div className={s.cardList}>
+        {trades.map((t) => (
+          <div key={t.id} className={s.card}>
+            <div className={s.cardHeader}>
+              <span className={t.side === "BUY" ? s.sideBuy : s.sideSell}>{t.side}</span>
+              <span className={`${s.sourceBadge} ${t.source === "live" ? s.sourceLive : s.sourcePaper}`}>
+                {t.source || "paper"}
+              </span>
+              <span className={s.cardTime}>{new Date(t.executed_at).toLocaleTimeString()}</span>
+            </div>
+            <div className={s.cardMarket}>{t.market}</div>
+            <div className={s.cardRow}>
+              <span>{t.outcome}</span>
+              <span className={s.cardMono}>{t.size.toFixed(2)} @ {t.vwap_price.toFixed(4)}</span>
+            </div>
+            <div className={s.cardRow}>
+              <span className={s.cardLabel}>Impact</span>
+              <span className={s.cardMono}>{(t.slippage * 100).toFixed(2)}%</span>
+            </div>
+          </div>
+        ))}
+        {trades.length === 0 && <div className={s.empty}>No trades yet</div>}
+      </div>
+
       <LoadMoreBar
         pagination={pagination}
         loadedCount={trades.length}

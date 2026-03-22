@@ -174,3 +174,61 @@
   background: rgba(0, 150, 255, 0.12);
   color: #4da6ff;
 }
+
+/* Mobile card list — hidden on desktop */
+.cardList {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .table {
+    display: none;
+  }
+
+  .cardList {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .card {
+    background: var(--color-bg-panel);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+  }
+
+  .cardHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+  }
+
+  .cardMarket {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 2px;
+  }
+
+  .cardRow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
+  }
+
+  .cardLabel {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+  }
+
+  .filterBar {
+    flex-wrap: wrap;
+  }
+}

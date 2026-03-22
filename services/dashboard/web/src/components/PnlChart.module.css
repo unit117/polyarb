@@ -76,7 +76,7 @@
 }
 
 /* Mobile responsive */
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   .container {
     padding: var(--space-3);
   }

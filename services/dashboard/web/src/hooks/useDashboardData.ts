@@ -112,7 +112,7 @@ export interface DashboardData {
   setMode: (mode: TradingMode) => void;
 }
 
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 50;
 
 function makePagination(total: number, offset: number, limit: number): PaginationInfo {
   return { total, offset, limit, hasMore: offset + limit < total };
@@ -288,6 +288,26 @@ export function useDashboardData(): DashboardData {
     fetchRefsRef.current = { fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs };
   }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs]);
 
+  // Debounced WS fetch — coalesce rapid events into one batch (150ms window)
+  const pendingFetches = useRef(new Set<string>());
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const scheduleFetch = useCallback((...keys: string[]) => {
+    for (const k of keys) pendingFetches.current.add(k);
+    clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      const f = fetchRefsRef.current;
+      const pending = pendingFetches.current;
+      if (pending.has("stats")) f.fetchStats();
+      if (pending.has("history")) f.fetchHistory();
+      if (pending.has("baseline")) f.fetchBaseline();
+      if (pending.has("opportunities")) f.fetchOpportunities();
+      if (pending.has("trades")) f.fetchTrades();
+      if (pending.has("pairs")) f.fetchPairs();
+      pending.clear();
+    }, 150);
+  }, []);
+
   // WebSocket with auto-reconnect — stable effect, doesn't reconnect on mode change
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -310,23 +330,16 @@ export function useDashboardData(): DashboardData {
           return;
         }
 
-        const f = fetchRefsRef.current;
         if (channel.startsWith("polyarb:opportunity:")) {
-          f.fetchOpportunities();
-          f.fetchStats();
+          scheduleFetch("opportunities", "stats");
         } else if (channel.startsWith("polyarb:trade:")) {
-          f.fetchTrades();
-          f.fetchStats();
-          f.fetchHistory();
+          scheduleFetch("trades", "stats", "history");
         } else if (channel === "polyarb:portfolio_updated") {
-          f.fetchStats();
-          f.fetchHistory();
-          f.fetchBaseline();
+          scheduleFetch("stats", "history", "baseline");
         } else if (channel.startsWith("polyarb:pair:")) {
-          f.fetchPairs();
-          f.fetchStats();
+          scheduleFetch("pairs", "stats");
         } else {
-          f.fetchStats();
+          scheduleFetch("stats");
         }
       };
 
@@ -346,9 +359,10 @@ export function useDashboardData(): DashboardData {
     return () => {
       unmounted = true;
       clearTimeout(reconnectTimer.current);
+      clearTimeout(debounceTimer.current);
       wsRef.current?.close();
     };
-  }, []); // stable — no deps, uses refs for latest fetch functions
+  }, [scheduleFetch]); // stable — scheduleFetch uses refs internally
 
   return {
     stats,

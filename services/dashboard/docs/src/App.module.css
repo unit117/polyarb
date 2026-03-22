@@ -1,0 +1,56 @@
+/* Knowledge Base layout */
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-panel);
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--color-green);
+  letter-spacing: -0.3px;
+}
+
+.subtitle {
+  font-size: var(--text-lg);
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.dashLink {
+  font-size: var(--text-base);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.dashLink:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-light);
+  background: var(--color-bg-hover);
+  text-decoration: none;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}

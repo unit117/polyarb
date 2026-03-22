@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import StatsBar from "./components/StatsBar.tsx";
 import OpportunitiesTable from "./components/OpportunitiesTable.tsx";
 import TradesTable from "./components/TradesTable.tsx";
-import PnlChart from "./components/PnlChart.tsx";
 import PairsTable from "./components/PairsTable.tsx";
-import MetricsPanel from "./components/MetricsPanel.tsx";
 import OpportunityDetail from "./components/OpportunityDetail.tsx";
+
+const PnlChart = lazy(() => import("./components/PnlChart.tsx"));
+const MetricsPanel = lazy(() => import("./components/MetricsPanel.tsx"));
 import { useDashboardData } from "./hooks/useDashboardData.ts";
 import type { TradingMode } from "./hooks/useDashboardData.ts";
 import s from "./App.module.css";
@@ -65,7 +66,9 @@ export default function App() {
       </header>
 
       <StatsBar stats={stats} onStatClick={(t) => setTab(t as Tab)} />
-      <PnlChart history={history} baseline={baseline.total_value} />
+      <Suspense fallback={<div style={{ height: 280, background: "var(--color-bg-panel)", borderRadius: 8, marginBottom: 20 }} />}>
+        <PnlChart history={history} baseline={baseline.total_value} />
+      </Suspense>
 
       <nav className={s.tabs}>
         {(["opportunities", "trades", "pairs", "metrics"] as Tab[]).map((t) => (
@@ -105,7 +108,11 @@ export default function App() {
             loading={loadingMore.pairs}
           />
         )}
-        {tab === "metrics" && <MetricsPanel />}
+        {tab === "metrics" && (
+          <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "var(--color-text-dim)" }}>Loading metrics...</div>}>
+            <MetricsPanel />
+          </Suspense>
+        )}
       </main>
 
       {selectedOpp && (
