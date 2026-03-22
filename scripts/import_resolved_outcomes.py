@@ -37,122 +37,99 @@ DEFAULT_DATASET_PATH = "/data/prediction-market-analysis/data"
 def load_resolved_markets(dataset_path: str) -> list[dict]:
     """Read resolved Polymarket markets from Parquet via DuckDB.
 
-    Returns list of dicts with keys: condition_id, outcome, resolved_at
+    The Jon-Becker dataset schema:
+      - condition_id: hex hash (NOT the same as our Gamma API polymarket_id)
+      - clob_token_ids: JSON array of token IDs (matches our markets.token_ids)
+      - outcomes: JSON array like '["Yes", "No"]'
+      - outcome_prices: JSON array like '["0.99...", "0.00..."]'
+      - closed: boolean
+      - end_date: timestamp
+
+    Resolution is encoded in outcome_prices: winning outcome → ~1.0.
+    Join key is clob_token_ids (matches our markets.token_ids).
+
+    Returns list of dicts with keys: token_id, outcome, resolved_at
     """
     import duckdb
+    import json
 
-    # Jon-Becker's dataset stores Polymarket data under polymarket/ subdir.
-    # The markets/conditions table has resolution info.
-    # We try several likely file patterns since the exact layout may vary.
     con = duckdb.connect(":memory:")
 
-    # Discover available parquet files
-    parquet_candidates = [
-        f"{dataset_path}/polymarket/markets.parquet",
-        f"{dataset_path}/polymarket/conditions.parquet",
-        f"{dataset_path}/data/polymarket/markets.parquet",
-        f"{dataset_path}/data/polymarket/conditions.parquet",
-    ]
-
-    markets_file = None
-    for path in parquet_candidates:
+    # Try sharded parquet glob first, then single file
+    markets_glob = f"{dataset_path}/polymarket/markets/markets_*.parquet"
+    try:
+        count = con.execute(
+            f"SELECT count(*) FROM read_parquet('{markets_glob}')"
+        ).fetchone()[0]
+        markets_file = markets_glob
+        log.info("found_parquet_shards", pattern=markets_file, total_rows=count)
+    except Exception:
+        # Fallback to single file
+        markets_file = f"{dataset_path}/polymarket/markets.parquet"
         try:
-            con.execute(f"SELECT count(*) FROM read_parquet('{path}')")
-            markets_file = path
-            log.info("found_parquet", path=path)
-            break
+            count = con.execute(
+                f"SELECT count(*) FROM read_parquet('{markets_file}')"
+            ).fetchone()[0]
+            log.info("found_parquet_single", path=markets_file, total_rows=count)
         except Exception:
-            continue
+            log.error(
+                "no_parquet_found",
+                dataset_path=dataset_path,
+                hint="Download the dataset first: see ECOSYSTEM_PLAN.md E1a1",
+            )
+            return []
 
-    if not markets_file:
-        # Try glob pattern
-        try:
-            result = con.execute(f"""
-                SELECT count(*) FROM read_parquet('{dataset_path}/**/markets.parquet')
-            """).fetchone()
-            if result and result[0] > 0:
-                markets_file = f"{dataset_path}/**/markets.parquet"
-                log.info("found_parquet_glob", pattern=markets_file)
-        except Exception:
-            pass
-
-    if not markets_file:
-        log.error(
-            "no_parquet_found",
-            dataset_path=dataset_path,
-            tried=parquet_candidates,
-            hint="Download the dataset first: see ECOSYSTEM_PLAN.md E1a1",
-        )
-        return []
-
-    # Inspect available columns
-    columns = con.execute(
-        f"SELECT column_name FROM information_schema.columns "
-        f"WHERE table_name = 'read_parquet'"
-    )
-    # Alternative: just describe
-    schema = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{markets_file}') LIMIT 0").fetchall()
-    col_names = [row[0] for row in schema]
-    log.info("parquet_schema", columns=col_names)
-
-    # Build query based on available columns
-    # We need: some form of market ID (condition_id, id, market_id) + resolution status
-    id_col = None
-    for candidate in ["condition_id", "id", "market_id", "conditionId"]:
-        if candidate in col_names:
-            id_col = candidate
-            break
-
-    outcome_col = None
-    for candidate in ["resolved_outcome", "outcome", "resolution", "winner", "result"]:
-        if candidate in col_names:
-            outcome_col = candidate
-            break
-
-    resolved_at_col = None
-    for candidate in ["resolved_at", "resolution_time", "end_date_iso", "closed_at"]:
-        if candidate in col_names:
-            resolved_at_col = candidate
-            break
-
-    if not id_col:
-        log.error("no_id_column", available=col_names)
-        return []
-
-    if not outcome_col:
-        log.error("no_outcome_column", available=col_names)
-        return []
-
-    log.info(
-        "column_mapping",
-        id_col=id_col,
-        outcome_col=outcome_col,
-        resolved_at_col=resolved_at_col,
-    )
-
-    # Query resolved markets
-    resolved_at_select = f", {resolved_at_col}" if resolved_at_col else ""
-    query = f"""
-        SELECT {id_col}, {outcome_col}{resolved_at_select}
+    # Query closed markets with outcome prices
+    rows = con.execute(f"""
+        SELECT clob_token_ids, outcomes, outcome_prices, end_date
         FROM read_parquet('{markets_file}')
-        WHERE {outcome_col} IS NOT NULL
-          AND {outcome_col} != ''
-    """
-
-    rows = con.execute(query).fetchall()
-    log.info("resolved_rows_loaded", count=len(rows))
+        WHERE closed = true
+          AND clob_token_ids IS NOT NULL
+          AND outcome_prices IS NOT NULL
+    """).fetchall()
+    log.info("closed_markets_loaded", count=len(rows))
 
     results = []
-    for row in rows:
-        entry = {
-            "condition_id": str(row[0]),
-            "outcome": str(row[1]),
-        }
-        if resolved_at_col and len(row) > 2 and row[2] is not None:
-            entry["resolved_at"] = row[2]
-        results.append(entry)
+    for clob_tokens_str, outcomes_str, prices_str, end_date in rows:
+        try:
+            outcomes = json.loads(outcomes_str) if isinstance(outcomes_str, str) else outcomes_str
+            prices = json.loads(prices_str) if isinstance(prices_str, str) else prices_str
+            tokens = json.loads(clob_tokens_str) if isinstance(clob_tokens_str, str) else clob_tokens_str
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        if not outcomes or not prices or not tokens:
+            continue
+        if len(outcomes) != len(prices):
+            continue
+
+        # Determine winner: outcome with price closest to 1.0
+        # Skip markets where no outcome clearly won (all prices near 0 or near 0.5)
+        max_price = -1.0
+        winner = None
+        for outcome, price_str in zip(outcomes, prices):
+            try:
+                p = float(price_str)
+            except (ValueError, TypeError):
+                continue
+            if p > max_price:
+                max_price = p
+                winner = outcome
+
+        if winner is None or max_price < 0.90:
+            # No clear resolution — skip
+            continue
+
+        # Use first token ID as join key (each token maps to one market row)
+        for token in tokens:
+            results.append({
+                "token_id": str(token).strip('"'),
+                "outcome": winner,
+                "resolved_at": end_date,
+            })
 
     con.close()
+    log.info("resolved_entries", count=len(results))
     return results
 
 
@@ -162,28 +139,32 @@ async def import_outcomes(
 ) -> dict:
     """Match resolved markets to our DB and update resolved_outcome/resolved_at.
 
-    Join key: polymarket_id == condition_id from dataset.
+    Join key: token_ids from dataset ↔ markets.token_ids in our DB.
+    Each market row stores token_ids as a JSONB array of token ID strings.
     """
+    import json
     from sqlalchemy import select, update
     from shared.models import Market
 
     stats = {
         "total_resolved": len(resolved),
         "matched": 0,
-        "unmatched": 0,
+        "unmatched_tokens": 0,
         "already_resolved": 0,
         "updated": 0,
     }
 
-    # Build lookup: condition_id → resolution info
+    # Build lookup: token_id → resolution info
     resolution_map = {}
     for entry in resolved:
-        resolution_map[entry["condition_id"]] = entry
+        resolution_map[entry["token_id"]] = entry
+
+    log.info("resolution_map_built", unique_tokens=len(resolution_map))
 
     async with SessionFactory() as session:
-        # Load all polymarket markets
+        # Load all polymarket markets with their token_ids
         result = await session.execute(
-            select(Market.id, Market.polymarket_id, Market.resolved_outcome)
+            select(Market.id, Market.token_ids, Market.resolved_outcome)
             .where(Market.venue == "polymarket")
         )
         db_markets = result.all()
@@ -191,10 +172,20 @@ async def import_outcomes(
         log.info("db_markets_loaded", count=len(db_markets))
 
         updates = []
-        for market_id, polymarket_id, existing_outcome in db_markets:
-            resolution = resolution_map.get(polymarket_id)
+        for market_id, token_ids, existing_outcome in db_markets:
+            if not token_ids:
+                continue
+
+            # token_ids is a JSONB array — check each token
+            tokens = token_ids if isinstance(token_ids, list) else json.loads(token_ids)
+            resolution = None
+            for token in tokens:
+                resolution = resolution_map.get(str(token).strip('"'))
+                if resolution:
+                    break
+
             if not resolution:
-                stats["unmatched"] += 1
+                stats["unmatched_tokens"] += 1
                 continue
 
             stats["matched"] += 1
@@ -204,7 +195,7 @@ async def import_outcomes(
                 continue
 
             update_vals = {"resolved_outcome": resolution["outcome"]}
-            if "resolved_at" in resolution:
+            if "resolved_at" in resolution and resolution["resolved_at"] is not None:
                 update_vals["resolved_at"] = resolution["resolved_at"]
 
             updates.append((market_id, update_vals))
@@ -256,7 +247,8 @@ async def main():
     # Print coverage summary
     if stats["matched"] > 0:
         match_rate = stats["matched"] / stats["total_resolved"] * 100
-        coverage = stats["matched"] / (stats["matched"] + stats["unmatched"]) * 100
+        unmatched = stats.get("unmatched_tokens", 0)
+        coverage = stats["matched"] / (stats["matched"] + unmatched) * 100
         log.info(
             "coverage_summary",
             match_rate_pct=round(match_rate, 1),
