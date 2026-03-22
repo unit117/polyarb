@@ -360,8 +360,8 @@ class DetectionPipeline:
                 if not pair.verified:
                     continue
 
-                prices_a = await _get_latest_prices(session, pair.market_a_id)
-                prices_b = await _get_latest_prices(session, pair.market_b_id)
+                prices_a = await _get_latest_prices(session, pair.market_a_id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_latest_prices(session, pair.market_b_id, settings.max_snapshot_age_seconds)
 
                 if not prices_a or not prices_b:
                     continue
@@ -483,8 +483,8 @@ class DetectionPipeline:
                 if not constraint:
                     continue
 
-                prices_a = await _get_latest_prices(session, pair.market_a_id)
-                prices_b = await _get_latest_prices(session, pair.market_b_id)
+                prices_a = await _get_latest_prices(session, pair.market_a_id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_latest_prices(session, pair.market_b_id, settings.max_snapshot_age_seconds)
                 if not prices_a or not prices_b:
                     continue
 
