@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Pair verification: validates that classifier output is structurally and
 price-consistent before allowing the pair to be traded.
 
@@ -21,6 +23,7 @@ def verify_pair(
     prices_b: dict | None,
     confidence: float,
     correlation: str | None = None,
+    implication_direction: str | None = None,
 ) -> dict:
     """Verify a classified pair via structural and price-consistency checks.
 
@@ -50,7 +53,7 @@ def verify_pair(
     if prices_a and prices_b:
         price_ok = _check_price_consistency(
             dependency_type, market_a, market_b, prices_a, prices_b,
-            correlation, reasons,
+            correlation, reasons, implication_direction,
         )
         if price_ok:
             checks_passed += 1
@@ -104,6 +107,12 @@ def _check_structural(
         event_b = market_b.get("event_id")
         if event_a and event_b and event_a != event_b:
             reasons.append("mutual_exclusion: different event_ids")
+            return False
+        # ME without ANY shared event_id is non-verifiable — markets about the
+        # same event almost always share event_ids on Polymarket.  The absence
+        # is a strong signal of LLM hallucination (e.g. Lana/Blake topology).
+        if not event_a and not event_b:
+            reasons.append("mutual_exclusion: neither market has event_id — non-verifiable")
             return False
         # Identical questions suggest different instances of same recurring event
         q_a = market_a.get("question", "")
@@ -166,6 +175,7 @@ def _check_price_consistency(
     prices_b: dict,
     correlation: str | None,
     reasons: list[str],
+    implication_direction: str | None = None,
 ) -> bool:
     """Check that prices are roughly consistent with the constraint.
 
@@ -194,22 +204,29 @@ def _check_price_consistency(
         return True
 
     if dependency_type == "implication":
-        # For A→B, P(A) should be ≤ P(B) + tolerance
+        # For A→B (a_implies_b), P(A) should be ≤ P(B) + tolerance
+        # For B→A (b_implies_a), P(B) should be ≤ P(A) + tolerance
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if p_a > p_b + 0.15:
-            reasons.append(f"implication: P(A)={p_a:.2f} >> P(B)={p_b:.2f}, violates A→B")
-            return False
+        if implication_direction == "b_implies_a":
+            if p_b > p_a + 0.15:
+                reasons.append(f"implication: P(B)={p_b:.2f} >> P(A)={p_a:.2f}, violates B→A")
+                return False
+        else:
+            if p_a > p_b + 0.15:
+                reasons.append(f"implication: P(A)={p_a:.2f} >> P(B)={p_b:.2f}, violates A→B")
+                return False
         return True
 
     if dependency_type == "mutual_exclusion":
         # P(A) + P(B) should be ≤ 1 + tolerance.  Real ME pairs sum to ~1.0;
-        # the arb is in small violations.  1.20 catches genuine ME while
-        # rejecting independent pairs that happen to look binary.
+        # the arb is in small violations.  Tightened to 1.10 — independent
+        # pairs priced near 0.50+0.50=1.00 still pass, but 0.60+0.60=1.20
+        # (which are likely independent) now correctly fail.
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if p_a + p_b > 1.20:
-            reasons.append(f"mutual_exclusion: P(A)+P(B)={p_a+p_b:.2f} > 1.20")
+        if p_a + p_b > 1.10:
+            reasons.append(f"mutual_exclusion: P(A)+P(B)={p_a+p_b:.2f} > 1.10")
             return False
         return True
 

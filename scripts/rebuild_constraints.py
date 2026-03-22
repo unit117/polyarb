@@ -162,6 +162,11 @@ async def main() -> None:
                 if rule_result
                 else (pair.constraint_matrix or {}).get("correlation")
             )
+            imp_direction = (
+                rule_result.get("implication_direction")
+                if rule_result
+                else (pair.constraint_matrix or {}).get("implication_direction")
+            )
 
             # Rebuild constraint matrix with latest logic
             fresh_constraint = build_constraint_matrix(
@@ -171,6 +176,7 @@ async def main() -> None:
                 prices_a,
                 prices_b,
                 correlation=correlation,
+                implication_direction=imp_direction,
             )
             pair.constraint_matrix = fresh_constraint
             stats["rebuilt"] += 1
@@ -184,6 +190,7 @@ async def main() -> None:
                 prices_b=prices_b,
                 confidence=pair.confidence,
                 correlation=correlation,
+                implication_direction=imp_direction,
             )
             pair.verified = verification["verified"]
             if not verification["verified"]:

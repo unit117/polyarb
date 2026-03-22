@@ -16,7 +16,7 @@ from shared.models import ArbitrageOpportunity, Market, MarketPair
 from shared.config import settings
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
-from services.detector.constraints import build_constraint_matrix
+from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
 from services.detector.verification import verify_pair
 
 logger = structlog.get_logger()
@@ -107,17 +107,43 @@ class DetectionPipeline:
                 prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
                 prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
 
-                # Build constraint matrix
-                constraint = build_constraint_matrix(
-                    classification["dependency_type"],
-                    market_a_dict["outcomes"],
-                    market_b_dict["outcomes"],
-                    prices_a,
-                    prices_b,
-                    correlation=classification.get("correlation"),
-                    venue_a=market_a_dict.get("venue", "polymarket"),
-                    venue_b=market_b_dict.get("venue", "polymarket"),
-                )
+                # Uncertainty filter: skip near-resolved markets
+                if prices_a and prices_b and not _passes_uncertainty_filter(
+                    prices_a, prices_b, market_a_dict["outcomes"], market_b_dict["outcomes"]
+                ):
+                    logger.info(
+                        "uncertainty_filter_rejected",
+                        market_a_id=market_a.id,
+                        market_b_id=market_b.id,
+                    )
+                    continue
+
+                # Build constraint matrix — use vectors directly when available
+                if classification.get("valid_outcomes"):
+                    constraint = build_constraint_matrix_from_vectors(
+                        classification["valid_outcomes"],
+                        market_a_dict["outcomes"],
+                        market_b_dict["outcomes"],
+                        dependency_type=classification["dependency_type"],
+                        prices_a=prices_a,
+                        prices_b=prices_b,
+                        correlation=classification.get("correlation"),
+                        implication_direction=classification.get("implication_direction"),
+                        venue_a=market_a_dict.get("venue", "polymarket"),
+                        venue_b=market_b_dict.get("venue", "polymarket"),
+                    )
+                else:
+                    constraint = build_constraint_matrix(
+                        classification["dependency_type"],
+                        market_a_dict["outcomes"],
+                        market_b_dict["outcomes"],
+                        prices_a,
+                        prices_b,
+                        correlation=classification.get("correlation"),
+                        venue_a=market_a_dict.get("venue", "polymarket"),
+                        venue_b=market_b_dict.get("venue", "polymarket"),
+                        implication_direction=classification.get("implication_direction"),
+                    )
 
                 # Verify pair before persisting
                 verification = verify_pair(
@@ -128,6 +154,7 @@ class DetectionPipeline:
                     prices_b=prices_b,
                     confidence=classification["confidence"],
                     correlation=classification.get("correlation"),
+                    implication_direction=classification.get("implication_direction"),
                 )
 
                 # Persist market pair
@@ -137,6 +164,9 @@ class DetectionPipeline:
                     dependency_type=classification["dependency_type"],
                     confidence=classification["confidence"],
                     constraint_matrix=constraint,
+                    resolution_vectors=classification.get("valid_outcomes"),
+                    implication_direction=classification.get("implication_direction"),
+                    classification_source=classification.get("classification_source"),
                     verified=verification["verified"],
                 )
                 session.add(pair)
@@ -272,6 +302,7 @@ class DetectionPipeline:
                     correlation=classification.get("correlation"),
                     venue_a=market_a_dict.get("venue", "polymarket"),
                     venue_b=market_b_dict.get("venue", "polymarket"),
+                    implication_direction=classification.get("implication_direction"),
                 )
 
                 verification = verify_pair(
@@ -282,6 +313,7 @@ class DetectionPipeline:
                     prices_b=prices_b,
                     confidence=classification["confidence"],
                     correlation=classification.get("correlation"),
+                    implication_direction=classification.get("implication_direction"),
                 )
 
                 pair = MarketPair(
@@ -290,6 +322,9 @@ class DetectionPipeline:
                     dependency_type=classification["dependency_type"],
                     confidence=classification["confidence"],
                     constraint_matrix=constraint,
+                    resolution_vectors=classification.get("valid_outcomes"),
+                    implication_direction=classification.get("implication_direction"),
+                    classification_source=classification.get("classification_source"),
                     verified=verification["verified"],
                 )
                 session.add(pair)
@@ -378,6 +413,7 @@ class DetectionPipeline:
                 # Recompute profit bound with actual prices
                 from services.detector.constraints import build_constraint_matrix
                 correlation = constraint.get("correlation")
+                imp_direction = constraint.get("implication_direction")
                 market_a_obj = await session.get(Market, pair.market_a_id)
                 market_b_obj = await session.get(Market, pair.market_b_id)
                 fresh_constraint = build_constraint_matrix(
@@ -385,6 +421,7 @@ class DetectionPipeline:
                     correlation=correlation,
                     venue_a=getattr(market_a_obj, "venue", "polymarket"),
                     venue_b=getattr(market_b_obj, "venue", "polymarket"),
+                    implication_direction=imp_direction,
                 )
 
                 # Update stored constraint with fresh profit data
@@ -401,6 +438,7 @@ class DetectionPipeline:
                     prices_b=prices_b,
                     confidence=pair.confidence,
                     correlation=correlation,
+                    implication_direction=imp_direction,
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
@@ -510,6 +548,7 @@ class DetectionPipeline:
                 outcomes_a = constraint.get("outcomes_a", [])
                 outcomes_b = constraint.get("outcomes_b", [])
                 correlation = constraint.get("correlation")
+                imp_direction = constraint.get("implication_direction")
 
                 market_a_obj = await session.get(Market, pair.market_a_id)
                 market_b_obj = await session.get(Market, pair.market_b_id)
@@ -522,6 +561,7 @@ class DetectionPipeline:
                     correlation=correlation,
                     venue_a=getattr(market_a_obj, "venue", "polymarket"),
                     venue_b=getattr(market_b_obj, "venue", "polymarket"),
+                    implication_direction=imp_direction,
                 )
                 pair.constraint_matrix = fresh_constraint
 
@@ -536,6 +576,7 @@ class DetectionPipeline:
                     prices_b=prices_b,
                     confidence=pair.confidence,
                     correlation=correlation,
+                    implication_direction=imp_direction,
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
@@ -638,6 +679,33 @@ def _market_to_dict(market: Market) -> dict:
         "outcomes": market.outcomes if isinstance(market.outcomes, list) else [],
         "venue": getattr(market, "venue", "polymarket"),
     }
+
+
+def _passes_uncertainty_filter(
+    prices_a: dict, prices_b: dict,
+    outcomes_a: list[str], outcomes_b: list[str],
+) -> bool:
+    """Reject pairs where any outcome is near-certain (< floor or > ceil).
+
+    Near-resolved markets have sub-5-cent margins that get eaten by fees
+    and slippage. Filter early to avoid wasting optimizer cycles.
+    """
+    floor = settings.uncertainty_price_floor
+    ceil = settings.uncertainty_price_ceil
+
+    for outcomes, prices in [(outcomes_a, prices_a), (outcomes_b, prices_b)]:
+        for outcome in outcomes:
+            try:
+                p = float(prices.get(outcome, 0.5))
+            except (TypeError, ValueError):
+                continue
+            if p < floor or p > ceil:
+                return False
+            # Check implied complement for single-sided data
+            complement = 1.0 - p
+            if complement < floor or complement > ceil:
+                return False
+    return True
 
 
 async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:

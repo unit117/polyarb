@@ -122,6 +122,7 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
             "question": market_b.question,
             "outcomes": market_b.outcomes if isinstance(market_b.outcomes, list) else [],
         }
+        imp_direction = constraint.get("implication_direction")
         verification = verify_pair(
             dependency_type=pair.dependency_type,
             market_a=market_a_dict,
@@ -130,13 +131,16 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
             prices_b=prices_b,
             confidence=pair.confidence,
             correlation=constraint.get("correlation"),
+            implication_direction=imp_direction,
         )
         if not verification["verified"]:
             continue
 
         # Recompute profit bound with this day's prices
         fresh = build_constraint_matrix(
-            pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b
+            pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b,
+            correlation=constraint.get("correlation"),
+            implication_direction=imp_direction,
         )
 
         profit = fresh.get("profit_bound", 0.0)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Constraint matrix generation for the optimizer.
 
 Given a dependency type and two markets, produces a JSONB-serializable
@@ -18,6 +20,7 @@ def build_constraint_matrix(
     correlation: str | None = None,
     venue_a: str = "polymarket",
     venue_b: str = "polymarket",
+    implication_direction: str | None = None,
 ) -> dict:
     """Build a constraint matrix for a market pair.
 
@@ -43,7 +46,7 @@ def build_constraint_matrix(
             )
 
     if dependency_type == "implication":
-        matrix = _implication_matrix(n_a, n_b)
+        matrix = _implication_matrix(n_a, n_b, direction=implication_direction or "a_implies_b")
     elif dependency_type == "partition":
         matrix = _partition_matrix(outcomes_a, outcomes_b)
     elif dependency_type == "mutual_exclusion":
@@ -69,6 +72,7 @@ def build_constraint_matrix(
         "matrix": matrix,
         "profit_bound": profit_bound,
         "correlation": correlation,
+        "implication_direction": implication_direction,
     }
 
     logger.info(
@@ -81,12 +85,20 @@ def build_constraint_matrix(
     return result
 
 
-def _implication_matrix(n_a: int, n_b: int) -> list[list[int]]:
-    """A implies B[0]: if A resolves Yes (idx 0), B must resolve Yes (idx 0)."""
+def _implication_matrix(n_a: int, n_b: int, direction: str = "a_implies_b") -> list[list[int]]:
+    """Build implication feasibility matrix with correct direction.
+
+    direction="a_implies_b": A=Yes forces B=Yes → A=Yes+B=No infeasible
+    direction="b_implies_a": B=Yes forces A=Yes → B=Yes+A=No (i.e. A=No+B=Yes) infeasible
+    """
     matrix = [[1] * n_b for _ in range(n_a)]
     if n_a >= 2 and n_b >= 2:
-        # A=Yes implies B=Yes, so A=Yes + B=No is infeasible
-        matrix[0][1] = 0
+        if direction == "b_implies_a":
+            # B=Yes forces A=Yes, so A=No + B=Yes is infeasible
+            matrix[1][0] = 0
+        else:
+            # A=Yes forces B=Yes, so A=Yes + B=No is infeasible
+            matrix[0][1] = 0
     return matrix
 
 
@@ -217,6 +229,68 @@ def _unconstrained_matrix(n_a: int, n_b: int) -> list[list[int]]:
     return [[1] * n_b for _ in range(n_a)]
 
 
+def build_constraint_matrix_from_vectors(
+    valid_outcomes: list[dict],
+    outcomes_a: list[str],
+    outcomes_b: list[str],
+    dependency_type: str,
+    prices_a: dict | None = None,
+    prices_b: dict | None = None,
+    correlation: str | None = None,
+    implication_direction: str | None = None,
+    venue_a: str = "polymarket",
+    venue_b: str = "polymarket",
+) -> dict:
+    """Build constraint matrix directly from resolution vectors.
+
+    Populates the feasibility matrix from the LLM's valid_outcomes list
+    instead of from a dependency type label, preserving full information.
+    Still computes profit bound using type-specific formulas (retained until
+    a proved matrix-based bound handles both buy and sell sides).
+    """
+    n_a = len(outcomes_a)
+    n_b = len(outcomes_b)
+
+    # Build outcome → index maps
+    idx_a = {o: i for i, o in enumerate(outcomes_a)}
+    idx_b = {o: i for i, o in enumerate(outcomes_b)}
+
+    # Start with all infeasible, mark feasible from vectors
+    matrix = [[0] * n_b for _ in range(n_a)]
+    for v in valid_outcomes:
+        a_val = v.get("a", "")
+        b_val = v.get("b", "")
+        i = idx_a.get(a_val)
+        j = idx_b.get(b_val)
+        if i is not None and j is not None:
+            matrix[i][j] = 1
+
+    profit_bound = _compute_profit_bound(
+        dependency_type, matrix, outcomes_a, outcomes_b, prices_a, prices_b,
+        correlation, venue_a=venue_a, venue_b=venue_b,
+    )
+
+    result = {
+        "type": dependency_type,
+        "outcomes_a": outcomes_a,
+        "outcomes_b": outcomes_b,
+        "matrix": matrix,
+        "profit_bound": profit_bound,
+        "correlation": correlation,
+        "implication_direction": implication_direction,
+        "classification_source": "llm_vector",
+    }
+
+    logger.info(
+        "constraint_matrix_from_vectors",
+        dep_type=dependency_type,
+        shape=f"{n_a}x{n_b}",
+        profit_bound=profit_bound,
+        n_feasible=sum(sum(row) for row in matrix),
+    )
+    return result
+
+
 def _compute_profit_bound(
     dependency_type: str,
     matrix: list[list[int]],
@@ -266,8 +340,17 @@ def _compute_profit_bound(
     if dependency_type == "implication":
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if p_a > p_b:
-            return round(p_a - p_b, 6)
+        # Use the matrix to determine direction:
+        # a_implies_b: matrix[0][1]=0, constraint is P(A) ≤ P(B), arb when P(A) > P(B)
+        # b_implies_a: matrix[1][0]=0, constraint is P(B) ≤ P(A), arb when P(B) > P(A)
+        if len(matrix) >= 2 and len(matrix[0]) >= 2 and matrix[1][0] == 0:
+            # b_implies_a direction
+            if p_b > p_a:
+                return round(p_b - p_a, 6)
+        else:
+            # a_implies_b direction (default)
+            if p_a > p_b:
+                return round(p_a - p_b, 6)
         return 0.0
 
     if dependency_type == "mutual_exclusion":

@@ -44,17 +44,36 @@ Respond ONLY with valid JSON: {"dependency_type": "...", "confidence": 0.XX, "co
 
 
 def _check_same_event(market_a: dict, market_b: dict) -> dict | None:
-    """If two markets share the same event_id, they likely form a partition."""
-    if (
+    """If two markets share the same event_id AND have overlapping outcomes,
+    they likely form a partition.
+
+    Polymarket's event_id groups markets by topic (e.g. "2024 US Election"),
+    not by logical partition. Two markets in the same event can be completely
+    independent, so we require outcome overlap as structural evidence.
+    """
+    if not (
         market_a.get("event_id")
         and market_b.get("event_id")
         and market_a["event_id"] == market_b["event_id"]
     ):
+        return None
+
+    # Require overlapping outcomes (beyond the trivial Yes/No)
+    outcomes_a = set(market_a.get("outcomes", []))
+    outcomes_b = set(market_b.get("outcomes", []))
+    overlap = outcomes_a & outcomes_b
+
+    # For multi-outcome markets, shared non-trivial outcomes indicate partition
+    if len(outcomes_a) > 2 and len(outcomes_b) > 2 and len(overlap) >= 2:
         return {
             "dependency_type": "partition",
             "confidence": 0.95,
-            "reasoning": "Same event_id — markets are part of the same event partition",
+            "reasoning": f"Same event_id + overlapping outcomes {overlap} — partition",
         }
+
+    # For binary markets (Yes/No), same event_id alone is not enough —
+    # "Will X win state A?" and "Will Y win state B?" share an event but
+    # are independent.  Demote to None and let LLM classify.
     return None
 
 
@@ -254,10 +273,15 @@ def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | Non
     if dir_a == "above":
         higher = max(threshold_a, threshold_b)
         lower = min(threshold_a, threshold_b)
+        # "above $higher" implies "above $lower" — the market with the higher
+        # threshold is the antecedent.  If market_a has the higher threshold,
+        # direction is a_implies_b; otherwise b_implies_a.
+        direction = "a_implies_b" if threshold_a >= threshold_b else "b_implies_a"
         return {
             "dependency_type": "implication",
             "confidence": 0.95,
             "correlation": "positive",
+            "implication_direction": direction,
             "reasoning": (
                 f"'{m_a.group(1).strip()}' above ${higher} implies above ${lower} — "
                 f"nested price thresholds form an implication chain"
@@ -266,10 +290,14 @@ def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | Non
     else:  # below
         higher = max(threshold_a, threshold_b)
         lower = min(threshold_a, threshold_b)
+        # "below $lower" implies "below $higher" — the market with the lower
+        # threshold is the antecedent.
+        direction = "a_implies_b" if threshold_a <= threshold_b else "b_implies_a"
         return {
             "dependency_type": "implication",
             "confidence": 0.95,
             "correlation": "positive",
+            "implication_direction": direction,
             "reasoning": (
                 f"'{m_a.group(1).strip()}' below ${lower} implies below ${higher} — "
                 f"nested price thresholds form an implication chain"
@@ -360,20 +388,26 @@ def _check_milestone_threshold_markets(market_a: dict, market_b: dict) -> dict |
         return f"{v:g}"
 
     if dir_a == "above":
+        # "above higher" implies "above lower" — higher threshold is antecedent
+        direction = "a_implies_b" if threshold_a >= threshold_b else "b_implies_a"
         return {
             "dependency_type": "implication",
             "confidence": 0.95,
             "correlation": "positive",
+            "implication_direction": direction,
             "reasoning": (
                 f"'{m_a.group(1).strip()}' above {_fmt(higher)} implies above {_fmt(lower)} — "
                 f"nested milestone thresholds form an implication chain"
             ),
         }
     else:
+        # "below lower" implies "below higher" — lower threshold is antecedent
+        direction = "a_implies_b" if threshold_a <= threshold_b else "b_implies_a"
         return {
             "dependency_type": "implication",
             "confidence": 0.95,
             "correlation": "positive",
+            "implication_direction": direction,
             "reasoning": (
                 f"'{m_a.group(1).strip()}' below {_fmt(lower)} implies below {_fmt(higher)} — "
                 f"nested milestone thresholds form an implication chain"
@@ -419,10 +453,13 @@ def _check_ranking_markets(market_a: dict, market_b: dict) -> dict | None:
     smaller = min(n_a, n_b)
     larger = max(n_a, n_b)
 
+    # "Top smaller" implies "Top larger" — market with smaller N is antecedent
+    direction = "a_implies_b" if n_a <= n_b else "b_implies_a"
     return {
         "dependency_type": "implication",
         "confidence": 0.95,
         "correlation": "positive",
+        "implication_direction": direction,
         "reasoning": (
             f"Top {smaller} implies Top {larger} — "
             f"ranking cutoffs form an implication chain"
@@ -470,10 +507,13 @@ def _check_over_under_markets(market_a: dict, market_b: dict) -> dict | None:
     higher = max(line_a, line_b)
     lower = min(line_a, line_b)
 
+    # "Over higher" implies "Over lower" — market with higher line is antecedent
+    direction = "a_implies_b" if line_a >= line_b else "b_implies_a"
     return {
         "dependency_type": "implication",
         "confidence": 0.95,
         "correlation": "positive",
+        "implication_direction": direction,
         "reasoning": (
             f"Over {lower} is implied by Over {higher} — "
             f"nested O/U lines form an implication chain"
@@ -572,14 +612,204 @@ Market B:
         return {"dependency_type": "none", "confidence": 0.0, "reasoning": str(e)}
 
 
+RESOLUTION_VECTOR_PROMPT = """You are a prediction market analyst. Given two binary markets A and B, determine ALL logically valid outcome combinations.
+
+Rules:
+- Each market resolves to exactly one outcome.
+- List every combination of (A_outcome, B_outcome) that is logically possible.
+- Only exclude a combination if it is LOGICALLY IMPOSSIBLE — not merely unlikely.
+- Correlation or probability does NOT make a combination invalid.
+- IMPORTANT: If both markets ask whether different entities will achieve the SAME singular outcome (e.g., "Will X win the award?" and "Will Y win the award?", or "Will X lead the league in stat?" and "Will Y lead the league in stat?"), then both cannot be Yes simultaneously — only one entity can win/lead. Exclude (Yes, Yes) in that case.
+
+Market A: "{question_a}" — Outcomes: {outcomes_a}
+Market B: "{question_b}" — Outcomes: {outcomes_b}
+
+Return strictly valid JSON with no additional text:
+{{"valid_outcomes": [{{"a": "Yes", "b": "Yes"}}, {{"a": "Yes", "b": "No"}}, ...], "reasoning": "<one sentence explaining the logical relationship>", "confidence": <float 0.0-1.0>}}"""
+
+
+def _strip_think_tags(raw: str) -> str:
+    """Strip <think>...</think> tags from model output (e.g. MiniMax M2.7).
+
+    M2.7's mandatory reasoning outputs <think>...</think> before the JSON body.
+    Split on </think> and take everything after. If </think> is absent, extract
+    from first { to last } as fallback.
+    """
+    if "</think>" in raw:
+        return raw.split("</think>", 1)[1].strip()
+    # Fallback: extract JSON object
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start:end + 1]
+    return raw
+
+
+def _derive_dependency_type(
+    valid_outcomes: list[dict],
+    outcomes_a: list,
+    outcomes_b: list,
+) -> dict:
+    """Deterministic mapping from resolution vectors to dependency type + direction.
+
+    Returns {"dependency_type": str, "implication_direction": str|None, "correlation": str|None}.
+    """
+    # Build a set of (a_outcome, b_outcome) tuples from the LLM output
+    combos = set()
+    for v in valid_outcomes:
+        a_val = v.get("a", "")
+        b_val = v.get("b", "")
+        combos.add((a_val, b_val))
+
+    # For binary markets, check against the 4 possible combinations
+    all_four = {("Yes", "Yes"), ("Yes", "No"), ("No", "Yes"), ("No", "No")}
+    missing = all_four - combos
+
+    n_valid = len(combos & all_four)  # only count canonical combos
+
+    if n_valid == 4:
+        return {"dependency_type": "none", "implication_direction": None, "correlation": None}
+
+    if n_valid == 0 or n_valid == 1:
+        # Degenerate — LLM error
+        return {"dependency_type": "_error", "implication_direction": None, "correlation": None}
+
+    if n_valid == 3:
+        # Exactly one combo excluded
+        excluded = missing.pop()
+        if excluded == ("Yes", "Yes"):
+            return {"dependency_type": "mutual_exclusion", "implication_direction": None, "correlation": None}
+        if excluded == ("Yes", "No"):
+            # A=Yes forces B=Yes → a_implies_b
+            return {"dependency_type": "implication", "implication_direction": "a_implies_b", "correlation": "positive"}
+        if excluded == ("No", "Yes"):
+            # B=Yes forces A=Yes → b_implies_a
+            return {"dependency_type": "implication", "implication_direction": "b_implies_a", "correlation": "positive"}
+        if excluded == ("No", "No"):
+            # Both can't be No — conditional with positive correlation
+            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "positive"}
+
+    if n_valid == 2:
+        if combos & all_four == {("Yes", "No"), ("No", "Yes")}:
+            return {"dependency_type": "partition", "implication_direction": None, "correlation": None}
+        if combos & all_four == {("Yes", "Yes"), ("No", "No")}:
+            return {"dependency_type": "cross_platform", "implication_direction": None, "correlation": None}
+        # Other 2-combo patterns → conditional with direction inferred
+        if ("Yes", "Yes") in combos and ("No", "No") not in combos:
+            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "positive"}
+        if ("Yes", "Yes") not in combos:
+            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "negative"}
+        return {"dependency_type": "conditional", "implication_direction": None, "correlation": None}
+
+    return {"dependency_type": "_error", "implication_direction": None, "correlation": None}
+
+
+async def classify_llm_resolution(
+    client: openai.AsyncOpenAI,
+    model: str,
+    market_a: dict,
+    market_b: dict,
+) -> dict | None:
+    """Classify via resolution vectors — ask the LLM which outcome combos are valid.
+
+    Returns a result dict with dependency_type, confidence, implication_direction,
+    correlation, valid_outcomes, and classification_source="llm_vector".
+    Returns None if parsing fails (caller should fall back to label-based).
+    """
+    outcomes_a = market_a.get("outcomes", ["Yes", "No"])
+    outcomes_b = market_b.get("outcomes", ["Yes", "No"])
+
+    # Resolution vectors only work for binary markets
+    if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+        return None
+
+    prompt = RESOLUTION_VECTOR_PROMPT.format(
+        question_a=market_a["question"],
+        outcomes_a=outcomes_a,
+        question_b=market_b["question"],
+        outcomes_b=outcomes_b,
+    )
+
+    try:
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": 512,
+        }
+        # Use JSON response format when model supports it
+        if "minimax" not in model:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = await client.chat.completions.create(**kwargs)
+        raw = response.choices[0].message.content.strip()
+
+        # Strip <think> tags (MiniMax M2.7 mandatory reasoning)
+        cleaned = _strip_think_tags(raw)
+        result = json.loads(cleaned)
+
+        valid_outcomes = result.get("valid_outcomes", [])
+        if not valid_outcomes or not isinstance(valid_outcomes, list):
+            logger.warning("resolution_vector_empty", raw=raw[:200])
+            return None
+
+        # Derive type deterministically from vectors
+        derived = _derive_dependency_type(valid_outcomes, outcomes_a, outcomes_b)
+        if derived["dependency_type"] == "_error":
+            logger.warning("resolution_vector_degenerate", combos=len(valid_outcomes), raw=raw[:200])
+            return None
+
+        # Binary confidence: vectors are structurally correct or wrong
+        confidence = 0.90
+
+        classification = {
+            "dependency_type": derived["dependency_type"],
+            "confidence": confidence,
+            "implication_direction": derived["implication_direction"],
+            "correlation": derived["correlation"],
+            "reasoning": result.get("reasoning", ""),
+            "valid_outcomes": valid_outcomes,
+            "classification_source": "llm_vector",
+        }
+
+        logger.info(
+            "resolution_vector_classification",
+            dep_type=derived["dependency_type"],
+            n_valid=len(valid_outcomes),
+            direction=derived.get("implication_direction"),
+        )
+        return classification
+
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("resolution_vector_parse_failed", error=str(e))
+        return None
+    except openai.APIError as e:
+        logger.error("resolution_vector_api_failed", error=str(e))
+        return None
+
+
 async def classify_pair(
     client: openai.AsyncOpenAI,
     model: str,
     market_a: dict,
     market_b: dict,
 ) -> dict:
-    """Classify a market pair: try rules first, fall back to LLM."""
+    """Classify a market pair: rules → resolution vectors → label-based LLM fallback."""
+    # 1. Try rule-based heuristics (fast, high confidence)
     result = await classify_rule_based(market_a, market_b)
     if result:
+        result["classification_source"] = "rule_based"
         return result
-    return await classify_llm(client, model, market_a, market_b)
+
+    # 2. Try resolution vector classification (structured, moderate latency)
+    result = await classify_llm_resolution(client, model, market_a, market_b)
+    if result:
+        return result
+
+    # 3. Fall back to label-based LLM (legacy, higher hallucination risk)
+    result = await classify_llm(client, model, market_a, market_b)
+    result["classification_source"] = "llm_label"
+    # Fallback safety: cap confidence at 0.70 so fallback pairs don't
+    # reach the optimizer without additional validation
+    result["confidence"] = min(result.get("confidence", 0.0), 0.70)
+    return result

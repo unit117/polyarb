@@ -37,7 +37,15 @@ class Settings(BaseSettings):
     similarity_top_k: int = 20
     detector_batch_size: int = 100
     classifier_model: str = "gpt-4.1-mini"
+    classifier_base_url: str = ""  # empty = OpenAI direct; set for OpenRouter
+    openrouter_api_key: str = ""
+    shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
+    shadow_classifier_base_url: str = ""
     detection_interval_seconds: int = 60
+
+    # Uncertainty filter — reject near-resolved markets in detector
+    uncertainty_price_floor: float = 0.05
+    uncertainty_price_ceil: float = 0.95
 
     # Optimizer settings
     fw_max_iterations: int = 200

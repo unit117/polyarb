@@ -72,7 +72,13 @@ async def main():
     from shared.events import get_redis
     redis = await get_redis()
 
-    openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+    if settings.classifier_base_url:
+        openai_client = openai.AsyncOpenAI(
+            api_key=settings.openrouter_api_key or settings.openai_api_key,
+            base_url=settings.classifier_base_url,
+        )
+    else:
+        openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
     threshold = args.similarity_threshold or settings.similarity_threshold
 
     pipeline = DetectionPipeline(

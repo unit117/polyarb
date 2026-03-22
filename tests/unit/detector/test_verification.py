@@ -55,10 +55,35 @@ class TestStructuralChecks:
         # Binary markets with no event_id or overlap fail structural
         assert result["verified"] is False
 
-    def test_me_binary_passes(self):
+    def test_me_binary_with_shared_event_passes(self):
+        result = verify_pair(
+            "mutual_exclusion",
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
+            {"Yes": 0.4, "No": 0.6},
+            {"Yes": 0.5, "No": 0.5},
+            confidence=0.90,
+        )
+        assert result["verified"] is True
+
+    def test_me_binary_no_event_id_fails(self):
+        """ME without any event_id is non-verifiable (likely LLM hallucination)."""
         result = verify_pair(
             "mutual_exclusion",
             {"outcomes": ["Yes", "No"]},
+            {"outcomes": ["Yes", "No"]},
+            {"Yes": 0.4, "No": 0.6},
+            {"Yes": 0.5, "No": 0.5},
+            confidence=0.90,
+        )
+        assert result["verified"] is False
+        assert any("neither market has event_id" in r for r in result["reasons"])
+
+    def test_me_one_event_id_passes(self):
+        """If at least one market has event_id, ME is potentially verifiable."""
+        result = verify_pair(
+            "mutual_exclusion",
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
             {"outcomes": ["Yes", "No"]},
             {"Yes": 0.4, "No": 0.6},
             {"Yes": 0.5, "No": 0.5},
@@ -163,13 +188,13 @@ class TestPriceConsistency:
     def test_me_prices_reasonable(self):
         result = verify_pair(
             "mutual_exclusion",
-            {"outcomes": ["Yes", "No"]},
-            {"outcomes": ["Yes", "No"]},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
             {"Yes": 0.4, "No": 0.6},
             {"Yes": 0.5, "No": 0.5},
             confidence=0.90,
         )
-        # sum = 0.9 ≤ 1.20 → pass
+        # sum = 0.9 ≤ 1.10 → pass
         assert result["verified"] is True
 
     def test_conditional_price_out_of_range(self):
@@ -200,13 +225,13 @@ class TestPriceConsistency:
     def test_me_sum_exceeds_threshold_fails(self):
         result = verify_pair(
             "mutual_exclusion",
-            {"outcomes": ["Yes", "No"]},
-            {"outcomes": ["Yes", "No"]},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1"},
             {"Yes": 0.75, "No": 0.25},
             {"Yes": 0.70, "No": 0.30},
             confidence=0.90,
         )
-        # sum = 1.45 > 1.20 → fail
+        # sum = 1.45 > 1.10 → fail
         assert result["verified"] is False
         assert any("mutual_exclusion" in r for r in result["reasons"])
 
@@ -237,7 +262,7 @@ class TestPriceConsistency:
 
 
 class TestStructuralEdgeCases:
-    def test_partition_multi_outcome_no_overlap_passes(self):
+    def test_partition_multi_outcome_no_overlap_structural_passes(self):
         result = verify_pair(
             "partition",
             {"outcomes": ["Alice", "Bob", "Charlie"]},
@@ -246,7 +271,9 @@ class TestStructuralEdgeCases:
             confidence=0.90,
         )
         # No event_id, no overlap, but both have >2 outcomes → structural passes
-        assert result["verified"] is True
+        # However, missing prices → price_check_skipped → overall not verified
+        assert result["verified"] is False
+        assert any("price_check_skipped" in r for r in result["reasons"])
 
     def test_partition_binary_different_outcomes_no_event_fails(self):
         result = verify_pair(
@@ -280,7 +307,9 @@ class TestStructuralEdgeCases:
             confidence=0.90,
         )
         # Non-binary conditional passes structural check without correlation
-        assert result["verified"] is True
+        # but missing prices → price_check_skipped → overall not verified
+        assert result["verified"] is False
+        assert any("price_check_skipped" in r for r in result["reasons"])
 
     def test_cross_platform_non_binary_fails(self):
         result = verify_pair(
