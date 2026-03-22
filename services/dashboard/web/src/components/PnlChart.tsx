@@ -15,15 +15,9 @@ import s from "./PnlChart.module.css";
 
 interface Props {
   history: HistoryPoint[];
-  initialCapital?: number;
 }
 
-const INITIAL_CAPITAL = 10000;
-
-const PnlChart = React.memo(function PnlChart({
-  history,
-  initialCapital = INITIAL_CAPITAL,
-}: Props) {
+const PnlChart = React.memo(function PnlChart({ history }: Props) {
   const chartData = useMemo(
     () =>
       history.map((d) => ({
@@ -39,18 +33,24 @@ const PnlChart = React.memo(function PnlChart({
     [history],
   );
 
+  // Use the first visible snapshot as baseline instead of a hardcoded constant
+  const startingValue = useMemo(
+    () => (chartData.length > 0 ? chartData[0].value : 0),
+    [chartData],
+  );
+
   const [yMin, yMax] = useMemo(() => {
     if (chartData.length === 0) return [0, 0];
     const allValues = chartData.flatMap((d) => [d.value, d.cash, d.realized, d.unrealized]);
-    const min = Math.min(...allValues, initialCapital);
-    const max = Math.max(...allValues, initialCapital);
+    const min = Math.min(...allValues, startingValue);
+    const max = Math.max(...allValues, startingValue);
     const range = max - min || 100;
     const padding = range * 0.15;
     return [
       Math.floor((min - padding) / 10) * 10,
       Math.ceil((max + padding) / 10) * 10,
     ];
-  }, [chartData, initialCapital]);
+  }, [chartData, startingValue]);
 
   if (chartData.length === 0) {
     return (
@@ -91,13 +91,13 @@ const PnlChart = React.memo(function PnlChart({
             domain={[yMin, yMax]}
             tickFormatter={(v: number) => `$${v.toLocaleString()}`}
           />
-          <Tooltip content={<CustomTooltip initialCapital={initialCapital} />} />
+          <Tooltip content={<CustomTooltip startingValue={startingValue} />} />
           <ReferenceLine
-            y={initialCapital}
+            y={startingValue}
             stroke="#444"
             strokeDasharray="6 3"
             label={{
-              value: `Starting $${initialCapital.toLocaleString()}`,
+              value: `Start $${startingValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
               position: "insideTopRight",
               fill: "#555",
               fontSize: 10,
@@ -153,12 +153,12 @@ export default PnlChart;
 function CustomTooltip({
   active,
   payload,
-  initialCapital,
+  startingValue,
 }: {
   active?: boolean;
   payload?: Array<{ value: number; name: string; color: string; dataKey: string }>;
   label?: string;
-  initialCapital: number;
+  startingValue: number;
 }) {
   if (!active || !payload || payload.length === 0) return null;
 
@@ -167,8 +167,8 @@ function CustomTooltip({
   const cash = get("cash");
   const realized = get("realized");
   const unrealized = get("unrealized");
-  const totalPnl = value - initialCapital;
-  const pnlPct = ((totalPnl / initialCapital) * 100).toFixed(2);
+  const totalPnl = value - startingValue;
+  const pnlPct = startingValue !== 0 ? ((totalPnl / startingValue) * 100).toFixed(2) : "0.00";
   const sign = totalPnl >= 0 ? "+" : "";
 
   return (
