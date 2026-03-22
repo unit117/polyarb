@@ -15,7 +15,7 @@ COPY services/ingestor/requirements.txt  /tmp/ing.txt
 RUN cat /tmp/sim.txt /tmp/opt.txt /tmp/det.txt /tmp/ing.txt | \
     sort -u > /tmp/all.txt && \
     pip install --no-cache-dir -r /tmp/all.txt && \
-    pip install --no-cache-dir duckdb pyarrow
+    pip install --no-cache-dir duckdb pyarrow pytz
 
 COPY shared/           /app/shared/
 COPY alembic/          /app/alembic/
