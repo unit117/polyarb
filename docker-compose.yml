@@ -154,7 +154,7 @@ services:
       POSTGRES_DB: polyarb_backtest
     command: python -m scripts.import_resolved_outcomes --dataset-path /data/prediction-market-analysis
     volumes:
-      - /volume1/data:/data:ro
+      - /volume1/docker/data:/data:ro
     depends_on:
       postgres:
         condition: service_healthy
