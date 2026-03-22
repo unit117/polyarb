@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +52,7 @@ class Settings(BaseSettings):
     slippage_model: str = "vwap"
     simulator_interval_seconds: int = 60
     max_snapshot_age_seconds: int = 120  # Reject price snapshots older than this
+    simulator_reset_epoch: datetime | None = None  # Filter dashboard to only show data after this timestamp
 
     # Settlement settings
     resolution_price_threshold: float = 0.98

@@ -29,6 +29,7 @@ export interface Stats {
 
 export interface HistoryPoint {
   timestamp: string;
+  cash: number;
   total_value: number;
   realized_pnl: number;
   unrealized_pnl: number;

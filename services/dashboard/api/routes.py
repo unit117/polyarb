@@ -45,6 +45,8 @@ async def get_stats(source: str | None = None):
         trade_query = select(func.count()).select_from(PaperTrade)
         if source:
             trade_query = trade_query.where(PaperTrade.source == source)
+        if settings.simulator_reset_epoch:
+            trade_query = trade_query.where(PaperTrade.executed_at > settings.simulator_reset_epoch)
         trades = await session.scalar(trade_query)
 
         # Latest portfolio for the given source
@@ -218,6 +220,8 @@ async def get_trades(limit: int = 200, offset: int = 0, source: str | None = Non
         )
         if source:
             query = query.where(PaperTrade.source == source)
+        if settings.simulator_reset_epoch:
+            query = query.where(PaperTrade.executed_at > settings.simulator_reset_epoch)
 
         result = await session.execute(query)
         trades = result.unique().scalars().all()
@@ -225,6 +229,8 @@ async def get_trades(limit: int = 200, offset: int = 0, source: str | None = Non
         count_query = select(func.count()).select_from(PaperTrade)
         if source:
             count_query = count_query.where(PaperTrade.source == source)
+        if settings.simulator_reset_epoch:
+            count_query = count_query.where(PaperTrade.executed_at > settings.simulator_reset_epoch)
         total = await session.scalar(count_query)
 
     items = []
@@ -262,6 +268,8 @@ async def get_portfolio_history(hours: int = 24, source: str | None = None):
         )
         if source:
             query = query.where(PortfolioSnapshot.source == source)
+        if settings.simulator_reset_epoch:
+            query = query.where(PortfolioSnapshot.timestamp > settings.simulator_reset_epoch)
 
         result = await session.execute(query)
         snapshots = result.scalars().all()
