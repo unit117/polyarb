@@ -69,3 +69,23 @@
   margin-top: 2px;
   padding-top: 2px;
 }
+
+.titleDetail {
+  font-weight: 400;
+  color: var(--color-text-dim);
+}
+
+/* Mobile responsive */
+@media (max-width: 480px) {
+  .container {
+    padding: var(--space-3);
+  }
+
+  .title {
+    font-size: var(--text-base);
+  }
+
+  .titleDetail {
+    display: none;
+  }
+}

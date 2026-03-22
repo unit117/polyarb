@@ -15,9 +15,10 @@ import s from "./PnlChart.module.css";
 
 interface Props {
   history: HistoryPoint[];
+  baseline?: number | null;
 }
 
-const PnlChart = React.memo(function PnlChart({ history }: Props) {
+const PnlChart = React.memo(function PnlChart({ history, baseline }: Props) {
   const chartData = useMemo(
     () =>
       history.map((d) => ({
@@ -33,10 +34,10 @@ const PnlChart = React.memo(function PnlChart({ history }: Props) {
     [history],
   );
 
-  // Use the first visible snapshot as baseline instead of a hardcoded constant
+  // Stable experiment baseline from API; fall back to first visible point
   const startingValue = useMemo(
-    () => (chartData.length > 0 ? chartData[0].value : 0),
-    [chartData],
+    () => baseline ?? (chartData.length > 0 ? chartData[0].value : 0),
+    [baseline, chartData],
   );
 
   const [yMin, yMax] = useMemo(() => {
@@ -62,7 +63,7 @@ const PnlChart = React.memo(function PnlChart({ history }: Props) {
 
   return (
     <div className={s.container}>
-      <h3 className={s.title}>Portfolio Value (24h)</h3>
+      <h3 className={s.title}>Portfolio Value <span className={s.titleDetail}>(24h · PnL vs experiment start)</span></h3>
       <ResponsiveContainer width="100%" height={280}>
         <ComposedChart data={chartData}>
           <defs>
@@ -97,10 +98,10 @@ const PnlChart = React.memo(function PnlChart({ history }: Props) {
             stroke="#444"
             strokeDasharray="6 3"
             label={{
-              value: `Start $${startingValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+              value: `$${startingValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
               position: "insideTopRight",
               fill: "#555",
-              fontSize: 10,
+              fontSize: 9,
             }}
           />
           {/* Portfolio Value — primary green area */}

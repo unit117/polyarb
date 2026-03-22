@@ -11,6 +11,7 @@
   align-items: baseline;
   gap: var(--space-3);
   margin-bottom: var(--space-6);
+  flex-wrap: wrap;
 }
 
 .title {
@@ -29,6 +30,23 @@
 
 .spacer {
   flex: 1;
+}
+
+.docsLink {
+  font-size: var(--text-base);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  margin-right: var(--space-3);
+}
+
+.docsLink:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-light);
+  background: var(--color-bg-hover);
 }
 
 /* Tab navigation */
@@ -120,4 +138,38 @@
 
 .main {
   animation: fadeIn var(--transition-slow);
+}
+
+/* Mobile responsive */
+@media (max-width: 480px) {
+  .root {
+    padding: var(--space-3) var(--space-3);
+  }
+
+  .header {
+    gap: var(--space-2);
+  }
+
+  .title {
+    font-size: var(--text-xl);
+  }
+
+  .subtitle {
+    font-size: var(--text-base);
+  }
+
+  .docsLink {
+    display: none;
+  }
+
+  .tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    white-space: nowrap;
+  }
 }
