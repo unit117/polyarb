@@ -26,7 +26,19 @@ async def main() -> None:
 
     await init_db()
 
-    openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+    # Build OpenAI client — use classifier_base_url if set (for OpenRouter),
+    # otherwise direct OpenAI.
+    if settings.classifier_base_url:
+        api_key = settings.openrouter_api_key or settings.openai_api_key
+        openai_client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url=settings.classifier_base_url,
+        )
+        logger.info("classifier_client", provider="openrouter", base_url=settings.classifier_base_url)
+    else:
+        openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        logger.info("classifier_client", provider="openai_direct")
+
     redis = await get_redis()
 
     pipeline = DetectionPipeline(
@@ -44,6 +56,7 @@ async def main() -> None:
         threshold=settings.similarity_threshold,
         top_k=settings.similarity_top_k,
         interval=settings.detection_interval_seconds,
+        classifier_model=settings.classifier_model,
     )
 
     # Run detection on three triggers:

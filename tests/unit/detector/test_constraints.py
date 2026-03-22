@@ -2,15 +2,16 @@
 
 import pytest
 
-from services.detector.constraints import build_constraint_matrix
+from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
 
 
 class TestImplicationMatrix:
-    def test_binary_implication(self):
+    def test_binary_implication_a_implies_b(self):
         result = build_constraint_matrix(
             "implication", ["Yes", "No"], ["Yes", "No"],
             prices_a={"Yes": 0.8, "No": 0.2},
             prices_b={"Yes": 0.6, "No": 0.4},
+            implication_direction="a_implies_b",
         )
         m = result["matrix"]
         assert m[0][0] == 1  # A=Yes, B=Yes: feasible
@@ -18,13 +19,46 @@ class TestImplicationMatrix:
         assert m[1][0] == 1  # A=No, B=Yes: feasible
         assert m[1][1] == 1  # A=No, B=No: feasible
 
-    def test_profit_bound_when_pa_gt_pb(self):
+    def test_binary_implication_b_implies_a(self):
+        result = build_constraint_matrix(
+            "implication", ["Yes", "No"], ["Yes", "No"],
+            prices_a={"Yes": 0.6, "No": 0.4},
+            prices_b={"Yes": 0.8, "No": 0.2},
+            implication_direction="b_implies_a",
+        )
+        m = result["matrix"]
+        assert m[0][0] == 1  # A=Yes, B=Yes: feasible
+        assert m[0][1] == 1  # A=Yes, B=No: feasible
+        assert m[1][0] == 0  # A=No, B=Yes: infeasible (B implies A)
+        assert m[1][1] == 1  # A=No, B=No: feasible
+
+    def test_default_direction_is_a_implies_b(self):
         result = build_constraint_matrix(
             "implication", ["Yes", "No"], ["Yes", "No"],
             prices_a={"Yes": 0.8, "No": 0.2},
             prices_b={"Yes": 0.6, "No": 0.4},
         )
+        m = result["matrix"]
+        assert m[0][1] == 0  # default a_implies_b
+
+    def test_profit_bound_a_implies_b_when_pa_gt_pb(self):
+        result = build_constraint_matrix(
+            "implication", ["Yes", "No"], ["Yes", "No"],
+            prices_a={"Yes": 0.8, "No": 0.2},
+            prices_b={"Yes": 0.6, "No": 0.4},
+            implication_direction="a_implies_b",
+        )
         assert result["profit_bound"] == pytest.approx(0.2, abs=0.001)
+
+    def test_profit_bound_b_implies_a_when_pb_gt_pa(self):
+        result = build_constraint_matrix(
+            "implication", ["Yes", "No"], ["Yes", "No"],
+            prices_a={"Yes": 0.5, "No": 0.5},
+            prices_b={"Yes": 0.8, "No": 0.2},
+            implication_direction="b_implies_a",
+        )
+        # B→A: arb when P(B) > P(A), profit = 0.8 - 0.5 = 0.3
+        assert result["profit_bound"] == pytest.approx(0.3, abs=0.001)
 
     def test_no_profit_when_pa_le_pb(self):
         result = build_constraint_matrix(
@@ -33,6 +67,13 @@ class TestImplicationMatrix:
             prices_b={"Yes": 0.7, "No": 0.3},
         )
         assert result["profit_bound"] == 0.0
+
+    def test_implication_direction_stored_in_result(self):
+        result = build_constraint_matrix(
+            "implication", ["Yes", "No"], ["Yes", "No"],
+            implication_direction="b_implies_a",
+        )
+        assert result["implication_direction"] == "b_implies_a"
 
 
 class TestPartitionMatrix:
@@ -266,3 +307,72 @@ class TestConditionalEdgeCases:
         )
         # "bad_value" → _f returns 0.0; excess = (0+0.5)-1.0 = -0.5 → 0.0
         assert result["profit_bound"] == 0.0
+
+
+class TestBuildConstraintMatrixFromVectors:
+    def test_me_from_vectors(self):
+        """Missing (Y,Y) → matrix[0][0] = 0."""
+        vectors = [
+            {"a": "Yes", "b": "No"}, {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"},
+        ]
+        result = build_constraint_matrix_from_vectors(
+            vectors, ["Yes", "No"], ["Yes", "No"],
+            dependency_type="mutual_exclusion",
+            prices_a={"Yes": 0.6, "No": 0.4},
+            prices_b={"Yes": 0.5, "No": 0.5},
+        )
+        m = result["matrix"]
+        assert m[0][0] == 0  # Both Yes infeasible
+        assert m[0][1] == 1
+        assert m[1][0] == 1
+        assert m[1][1] == 1
+        assert result["classification_source"] == "llm_vector"
+
+    def test_implication_a_implies_b_from_vectors(self):
+        """Missing (Y,N) → matrix[0][1] = 0."""
+        vectors = [
+            {"a": "Yes", "b": "Yes"}, {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"},
+        ]
+        result = build_constraint_matrix_from_vectors(
+            vectors, ["Yes", "No"], ["Yes", "No"],
+            dependency_type="implication",
+            implication_direction="a_implies_b",
+            prices_a={"Yes": 0.8, "No": 0.2},
+            prices_b={"Yes": 0.6, "No": 0.4},
+        )
+        m = result["matrix"]
+        assert m[0][0] == 1
+        assert m[0][1] == 0  # A=Yes + B=No infeasible
+        assert m[1][0] == 1
+        assert m[1][1] == 1
+        assert result["profit_bound"] == pytest.approx(0.2, abs=0.001)
+
+    def test_partition_from_vectors(self):
+        """XOR: only (Y,N) and (N,Y) feasible."""
+        vectors = [{"a": "Yes", "b": "No"}, {"a": "No", "b": "Yes"}]
+        result = build_constraint_matrix_from_vectors(
+            vectors, ["Yes", "No"], ["Yes", "No"],
+            dependency_type="partition",
+        )
+        assert result["matrix"] == [[0, 1], [1, 0]]
+
+    def test_all_four_from_vectors(self):
+        """All combos valid → unconstrained."""
+        vectors = [
+            {"a": "Yes", "b": "Yes"}, {"a": "Yes", "b": "No"},
+            {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"},
+        ]
+        result = build_constraint_matrix_from_vectors(
+            vectors, ["Yes", "No"], ["Yes", "No"],
+            dependency_type="none",
+        )
+        assert result["matrix"] == [[1, 1], [1, 1]]
+
+    def test_preserves_type_key(self):
+        """Optimizer reads constraint.get('type') — must be present."""
+        vectors = [{"a": "Yes", "b": "No"}, {"a": "No", "b": "Yes"}]
+        result = build_constraint_matrix_from_vectors(
+            vectors, ["Yes", "No"], ["Yes", "No"],
+            dependency_type="partition",
+        )
+        assert result["type"] == "partition"

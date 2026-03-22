@@ -98,6 +98,9 @@ class MarketPair(Base):
     dependency_type: Mapped[str] = mapped_column(String)
     confidence: Mapped[float] = mapped_column(Float)
     constraint_matrix: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    resolution_vectors: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    implication_direction: Mapped[str | None] = mapped_column(String, nullable=True)
+    classification_source: Mapped[str | None] = mapped_column(String, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, server_default=func.now()
     )

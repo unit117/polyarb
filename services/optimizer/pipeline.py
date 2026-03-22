@@ -68,21 +68,29 @@ class OptimizerPipeline:
                 logger.warning("invalid_constraint_matrix", pair_id=pair.id)
                 return {"status": "invalid_constraints"}
 
-            # Skip conditional pairs whose matrix is still all-ones (no
-            # correlation info or non-binary), or when skip_conditional is forced
+            # Skip conditional pairs whose matrix is all-ones (unconstrained),
+            # or when skip_conditional is forced — UNLESS the pair was classified
+            # via resolution vectors and has a non-trivial matrix (at least one
+            # infeasible cell), in which case evaluate it regardless.
             if dep_type == "conditional":
                 is_unconstrained = all(
                     feasibility[i][j] == 1
                     for i in range(len(feasibility))
                     for j in range(len(feasibility[0]))
                 ) if feasibility else True
-                if self.skip_conditional or is_unconstrained:
+                source = constraint.get("classification_source", "")
+                vector_with_constraints = (
+                    source == "resolution_vector" and not is_unconstrained
+                )
+                if is_unconstrained or (
+                    self.skip_conditional and not vector_with_constraints
+                ):
                     opp.status = "skipped"
                     await session.commit()
                     logger.info(
                         "skipping_conditional_pair",
                         opportunity_id=opportunity_id,
-                        reason="forced" if self.skip_conditional else "unconstrained",
+                        reason="unconstrained" if is_unconstrained else "forced",
                     )
                     return {"status": "skipped", "reason": "conditional_unconstrained"}
 
