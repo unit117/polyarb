@@ -36,35 +36,36 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
 
   const hiddenCount = opportunities.length - sorted.length;
 
-  return (
-    <div className={s.wrap}>
+  const filterBar = (
+    <>
       {!showUnprofitable && hiddenCount > 0 && (
         <div className={s.filterBar}>
           <span className={s.filterText}>
-            Showing {sorted.length} profitable opportunities.{" "}
+            Showing {sorted.length} profitable.{" "}
           </span>
-          <button
-            className={s.toggleBtn}
-            onClick={() => setShowUnprofitable(true)}
-          >
-            Show all {opportunities.length} ({hiddenCount} with zero profit
-            after fees)
+          <button className={s.toggleBtn} onClick={() => setShowUnprofitable(true)}>
+            Show all {opportunities.length}
           </button>
         </div>
       )}
       {showUnprofitable && (
         <div className={s.filterBar}>
           <span className={s.filterText}>
-            Showing all {sorted.length} opportunities.{" "}
+            Showing all {sorted.length}.{" "}
           </span>
-          <button
-            className={s.toggleBtn}
-            onClick={() => setShowUnprofitable(false)}
-          >
+          <button className={s.toggleBtn} onClick={() => setShowUnprofitable(false)}>
             Hide zero-profit
           </button>
         </div>
       )}
+    </>
+  );
+
+  return (
+    <div className={s.wrap}>
+      {filterBar}
+
+      {/* Desktop table */}
       <table className={s.table}>
         <thead>
           <tr>
@@ -162,6 +163,46 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
           )}
         </tbody>
       </table>
+
+      {/* Mobile card list */}
+      <div className={s.cardList}>
+        {sorted.map((o) => {
+          const profitClass =
+            o.estimated_profit > 0.01
+              ? s.profitGreen
+              : o.estimated_profit > 0
+                ? s.profitYellow
+                : s.profitGray;
+          return (
+            <div key={o.id} className={s.card} onClick={() => onSelect?.(o)}>
+              <div className={s.cardHeader}>
+                <span className={`${s.badge} ${statusClass(o.status)}`}>{o.status}</span>
+                <span className={s.cardTime}>
+                  {o.timestamp ? new Date(o.timestamp).toLocaleTimeString() : "\u2014"}
+                </span>
+              </div>
+              <div className={s.cardMarket}>{o.pair?.market_a || "\u2014"}</div>
+              <div className={s.cardMarket}>{o.pair?.market_b || "\u2014"}</div>
+              <div className={s.cardRow}>
+                <span className={s.cardLabel}>Est. Profit</span>
+                <span className={profitClass}>{o.estimated_profit.toFixed(4)}</span>
+              </div>
+              <div className={s.cardRow}>
+                <span className={s.cardLabel}>Type</span>
+                <span>{o.pair?.dependency_type || o.type}</span>
+              </div>
+            </div>
+          );
+        })}
+        {sorted.length === 0 && (
+          <div className={s.empty}>
+            {opportunities.length === 0
+              ? "No opportunities yet"
+              : "No profitable opportunities (toggle to see all)"}
+          </div>
+        )}
+      </div>
+
       <LoadMoreBar
         pagination={pagination}
         loadedCount={opportunities.length}

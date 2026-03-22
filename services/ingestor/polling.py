@@ -133,7 +133,7 @@ class MarketPoller:
                 "liquidity": _safe_decimal(raw.get("liquidityNum")),
             }
         rows = list(rows_by_id.values())
-        seen_ids = set(rows_by_id.keys())
+        seen_ids = list(rows_by_id.keys())
         log.info("sync_markets_deduped", unique=len(rows), raw=len(raw_markets))
 
         BATCH_SIZE = 500
@@ -157,21 +157,17 @@ class MarketPoller:
                 await session.execute(stmt)
                 log.info("sync_markets_batch", offset=i, batch_size=len(batch))
 
-            # Mark stale Polymarket markets inactive (scoped to venue)
-            await session.execute(
+            # Gamma returns the currently active Polymarket markets, so only rows
+            # outside that seen set need to be flipped inactive.
+            stale_result = await session.execute(
                 update(Market)
-                .where(Market.active == True, Market.venue == "polymarket")  # noqa: E712
+                .where(
+                    Market.venue == "polymarket",
+                    Market.active == True,  # noqa: E712
+                    ~Market.polymarket_id.in_(seen_ids),
+                )
                 .values(active=False)
             )
-            # The upserts above already set active=True for all seen markets,
-            # but they ran before this update. Re-run a lightweight update for seen IDs in batches.
-            for i in range(0, len(rows), BATCH_SIZE):
-                batch_ids = [r["polymarket_id"] for r in rows[i : i + BATCH_SIZE]]
-                await session.execute(
-                    update(Market)
-                    .where(Market.polymarket_id.in_(batch_ids), Market.venue == "polymarket")
-                    .values(active=True)
-                )
 
             await session.commit()
 
@@ -180,7 +176,11 @@ class MarketPoller:
             )
             markets = list(result.scalars().all())
 
-        log.info("sync_markets_done", active_count=len(markets))
+        log.info(
+            "sync_markets_done",
+            active_count=len(markets),
+            stale_marked_inactive=stale_result.rowcount or 0,
+        )
         await publish(
             self._redis,
             CHANNEL_MARKET_UPDATED,
@@ -347,9 +347,6 @@ class MarketPoller:
     async def poll_once(self) -> list[Market]:
         log.info("poll_cycle_start")
         markets = await self.sync_markets()
-        await self.compute_embeddings(markets)
-        await self.snapshot_prices(markets)
-        await self.check_resolved_markets()
 
         # Update WS subscriptions with current eligible markets
         if self._ws_client is not None:
@@ -370,6 +367,22 @@ class MarketPoller:
                 await self._ws_client.update_subscriptions(eligible)
             except Exception:
                 log.exception("ws_subscription_update_error")
+
+        # Keep price ingestion and settlement progressing even if embeddings fail.
+        try:
+            await self.snapshot_prices(markets)
+        except Exception:
+            log.exception("snapshot_prices_error")
+
+        try:
+            await self.check_resolved_markets()
+        except Exception:
+            log.exception("resolution_check_error")
+
+        try:
+            await self.compute_embeddings(markets)
+        except Exception:
+            log.exception("compute_embeddings_error")
 
         log.info("poll_cycle_done")
         return markets

@@ -18,7 +18,19 @@ interface Props {
   baseline?: number | null;
 }
 
+function useIsMobile() {
+  const [mobile, setMobile] = React.useState(() => window.innerWidth <= 640);
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return mobile;
+}
+
 const PnlChart = React.memo(function PnlChart({ history, baseline }: Props) {
+  const isMobile = useIsMobile();
   const chartData = useMemo(
     () =>
       history.map((d) => ({
@@ -64,7 +76,7 @@ const PnlChart = React.memo(function PnlChart({ history, baseline }: Props) {
   return (
     <div className={s.container}>
       <h3 className={s.title}>Portfolio Value <span className={s.titleDetail}>(24h · PnL vs experiment start)</span></h3>
-      <ResponsiveContainer width="100%" height={280}>
+      <ResponsiveContainer width="100%" height={isMobile ? 180 : 280}>
         <ComposedChart data={chartData}>
           <defs>
             <linearGradient id="gradientGreen" x1="0" y1="0" x2="0" y2="1">

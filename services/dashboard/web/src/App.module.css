@@ -141,7 +141,7 @@
 }
 
 /* Mobile responsive */
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   .root {
     padding: var(--space-3) var(--space-3);
   }
