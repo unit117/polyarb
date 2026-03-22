@@ -27,9 +27,9 @@ The existing improvement plan covers **internal fixes and features** (Phases 1�
 
 ---
 
-## Phase E1 — Historical Dataset Integration (highest ROI)
+## Phase E1 — Historical Dataset Integration (highest ROI, Polymarket first)
 
-**Goal:** Use Jon-Becker's 36GB Polymarket+Kalshi dataset to validate embeddings and backtest against real resolutions.
+**Goal:** Use Jon-Becker's dataset to validate embeddings against authoritative outcomes and make the existing backtest settle from known winners/losers instead of the current price-threshold heuristic.
 
 **Source:** [Jon-Becker/prediction-market-analysis](https://github.com/Jon-Becker/prediction-market-analysis) (2.3K stars, updated 17 days ago)
 
@@ -41,34 +41,58 @@ The existing improvement plan covers **internal fixes and features** (Phases 1�
 
 **Integration steps:**
 
-### E1a. Download and stage the dataset
+### E1a0. Refresh the backtest bootstrap first
+Before touching external data, fix the existing backtest bootstrap so it matches the current schema:
+- Update `scripts/backtest_setup.py` to copy the current `markets` shape (`venue`, `resolved_outcome`, `resolved_at`) instead of the older pre-settlement schema
+- Verify the isolated backtest DB can still be rebuilt from scratch after the copy step
+- Keep this as a prerequisite for all later E1 work so the historical validation path does not fork from the live schema
+
+### E1a1. Download, stage, and expose the dataset to the backtest jobs
 ```bash
 # ~36GB compressed via Cloudflare R2
 make setup  # from their repo — downloads to data/
 ```
-Store on NAS at `/volume1/data/prediction-market-analysis/`. No need to load into Postgres — query with DuckDB or Pandas directly from Parquet.
+Store on NAS at `/volume1/data/prediction-market-analysis/`, then wire it into our tooling:
+- Mount the dataset path into `backtest` profile containers in `docker-compose.yml`
+- Add `duckdb` + Parquet reader deps (`pyarrow` or equivalent) to `scripts/Dockerfile`
+- Query Parquet directly from DuckDB; do not bulk-load the raw dataset into Postgres
 
-### E1b. Embedding validation script
-New script: `scripts/validate_embeddings.py`
+### E1b. Import a slim authoritative resolution map into the backtest DB
+New script: `scripts/import_resolved_outcomes.py`
+
+**Scope for first pass:** Polymarket only. Kalshi can wait until the Polymarket path is proven end-to-end.
 
 **Logic:**
-1. Load all resolved Polymarket markets from Jon-Becker Parquet files
-2. For each market pair in our `market_pairs` table, look up both markets' resolution outcomes
-3. Compute: did ME pairs actually resolve to mutual exclusion? (exactly 1 winner)
-4. Compute: did conditional pairs show empirical price correlation before resolution?
-5. Output: precision/recall by dependency type, cosine similarity bucket, and pair age
+1. Read the resolved Polymarket rows from Jon-Becker Parquet via DuckDB
+2. Match them to our `markets` table using a documented join key (`polymarket_id` if available; otherwise stop and define the fallback mapping explicitly)
+3. Write only the minimal fields we need into the backtest DB: `resolved_outcome`, `resolved_at`, optionally `active = false`
+4. Emit match-rate metrics: matched markets, unmatched markets, duplicate candidates, ambiguous mappings
 
-**Why this matters:** The embedding audit showed 76.5% verification rate, but that's based on LLM re-classification. This validates against *ground truth outcomes* — the only metric that matters for PnL.
+**Why this shape:** The simulator already settles from `markets.resolved_outcome`. Importing authoritative outcomes into the DB lets the backtest reuse the same settlement path instead of growing a second backtest-only resolution implementation.
 
-### E1c. Backtest with real resolutions
-Extend `scripts/backtest.py` to:
-1. Import resolved outcomes from Jon-Becker data instead of inferring from prices
-2. Run settlement logic against known winners/losers
-3. Compute actual realized PnL (not just unrealized from price snapshots)
+### E1c. Extend the existing validation scripts instead of adding a parallel audit stack
+Extend:
+- `scripts/audit_embeddings.py` for outcome-based dependency validation
+- `scripts/validate_correlations.py` for resolved-market conditional checks
 
-**Cross-ref:** Feeds into IMPROVEMENT_PLAN Phase 1 (re-baseline) and SETTLEMENT_PLAN (validates settlement logic).
+**Additions:**
+1. For mutual exclusion / partition / implication pairs, compare predicted dependency vs actual winner combinations from authoritative outcomes
+2. Bucket results by dependency type, cosine similarity, and pair age
+3. Report coverage separately from quality: how many pairs can actually be matched to authoritative dataset rows
+4. Keep the existing empirical-correlation path for conditional pairs, but add a resolved-outcome summary so conditionals are not judged only on live snapshot correlation
 
-**Effort:** ~1 day. **Risk:** Low — read-only data import, no changes to live system.
+**Why this matters:** The current 76.5% figure comes from LLM and rule-based verification. E1 should answer the harder question: do the pairs correspond to real outcome relationships once markets actually resolve?
+
+### E1d. Run the existing backtest against authoritative resolutions
+Modify the backtest flow to reuse imported `resolved_outcome` values:
+1. Replace the `price >= 0.98` resolution heuristic in `scripts/backtest.py` with settlement driven by `markets.resolved_outcome`
+2. Reuse the same payout logic already used by the simulator service, so live and offline settlement do not drift
+3. Add explicit date-window controls (`--start` / `--end`) so dataset-scale runs are bounded and reproducible
+4. First pass stays Polymarket-only; leave multi-venue historical replay for a later phase
+
+**Cross-ref:** Feeds into IMPROVEMENT_PLAN Phase 1 (re-baseline), BACKTEST_PLAN (authoritative replay), and SETTLEMENT_PLAN (confirms the current settlement path against real outcomes).
+
+**Effort:** ~1.5-2 days. **Risk:** Low-medium — read-only external data, but requires touching the backtest bootstrap and Docker runtime.
 
 ---
 
@@ -340,7 +364,7 @@ Stale-price opportunities get a priority boost in the optimizer queue. These are
 
 | Phase | What | Depends On | Effort | Priority | Status |
 |-------|------|------------|--------|----------|--------|
-| E1 | Historical dataset + embedding validation | — | 1 day | **Highest** — validates everything else | Not started |
+| E1 | Dataset plumbing + authoritative resolutions + embedding validation | — | 1.5-2 days | **Highest** — validates everything else | Not started |
 | E2 | PMXT for Kalshi integration | ~~IMPROVEMENT Phase 3~~ ✅ | 2 days | ~~High~~ Low — custom client already built | ⚠️ Superseded |
 | E3 | L2 order book backtest | E1 (needs resolved outcomes) | 2 days | High — accuracy of all future decisions | Not started |
 | E4 | Walk-forward parameter tuning | E1 + E3 | 1.5 days | Medium — optimization after validation | Not started |
@@ -349,9 +373,9 @@ Stale-price opportunities get a priority boost in the optimizer queue. These are
 
 **Recommended execution order:** E1 → E3 → E4 → E6 → E5
 
-E1 first because it validates whether our embeddings and backtest are trustworthy — everything downstream depends on that answer. E2 is superseded (custom Kalshi client already built). E5 and E6 both require WebSocket streaming (now complete via IMPROVEMENT Phase 4).
+E1 first because it validates whether our embeddings and settlement/backtest path are trustworthy — everything downstream depends on that answer. The first pass should stay Polymarket-only and reuse the existing simulator settlement path via imported `resolved_outcome` values. E2 is superseded (custom Kalshi client already built). E5 and E6 both require WebSocket streaming (now complete via IMPROVEMENT Phase 4).
 
-**Total effort:** ~8-9 days of focused work (E2 reduced since Kalshi client exists). All IMPROVEMENT_PLAN prerequisites are now met.
+**Total effort:** ~8.5-10 days of focused work (E2 reduced since Kalshi client exists). All IMPROVEMENT_PLAN prerequisites are now met.
 
 ---
 

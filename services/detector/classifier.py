@@ -5,8 +5,11 @@ Uses a two-stage approach:
 2. LLM classification for ambiguous cases — slower, moderate confidence
 """
 
+from __future__ import annotations
+
 import json
 import re
+from typing import Optional
 
 import openai
 import structlog
@@ -71,6 +74,24 @@ def _check_outcome_subset(market_a: dict, market_b: dict) -> dict | None:
     return None
 
 
+# Extracts a calendar date like "March 21" from a question string.
+_DATE_RE = re.compile(
+    r"(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December|"
+    r"Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{1,2}",
+    re.IGNORECASE,
+)
+
+
+def _extract_date(question: str) -> Optional[str]:
+    """Extract a calendar date like 'March 21' from a question string.
+
+    Returns a lowercased canonical form for comparison, or None if no date found.
+    """
+    m = _DATE_RE.search(question)
+    return m.group(0).lower().replace(".", "") if m else None
+
+
 # Matches "Bitcoin Up or Down — March 21, 3:15AM-3:30AM ET" style questions
 # AND hourly format "HYPE Up or Down — March 21, 10PM ET".
 # Captures: (asset, start_time, end_time_or_None)
@@ -122,6 +143,19 @@ def _check_crypto_time_intervals(market_a: dict, market_b: dict) -> dict | None:
     if asset_a.lower() != asset_b.lower():
         return None
 
+    # Different calendar dates → independent regardless of time window
+    date_a = _extract_date(q_a)
+    date_b = _extract_date(q_b)
+    if date_a and date_b and date_a != date_b:
+        return {
+            "dependency_type": "none",
+            "confidence": 0.95,
+            "reasoning": (
+                f"Same asset '{asset_a}', different dates ({date_a} vs {date_b}) "
+                f"— independent events"
+            ),
+        }
+
     # Same asset, same time window → genuine mutual exclusion (up vs down)
     if start_a == start_b and end_a == end_b:
         window = f"{start_a}-{end_a}" if start_a != end_a else start_a
@@ -165,6 +199,19 @@ def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | Non
     # Different assets — not the same pattern
     if asset_a != asset_b:
         return None
+
+    # Different calendar dates → independent regardless of threshold
+    date_a = _extract_date(q_a)
+    date_b = _extract_date(q_b)
+    if date_a and date_b and date_a != date_b:
+        return {
+            "dependency_type": "none",
+            "confidence": 0.95,
+            "reasoning": (
+                f"Same asset '{m_a.group(1).strip()}', different dates "
+                f"({date_a} vs {date_b}) — independent events"
+            ),
+        }
 
     threshold_a = float(m_a.group(2).replace(",", ""))
     threshold_b = float(m_b.group(2).replace(",", ""))
@@ -226,6 +273,110 @@ def _check_price_threshold_markets(market_a: dict, market_b: dict) -> dict | Non
             "reasoning": (
                 f"'{m_a.group(1).strip()}' below ${lower} implies below ${higher} — "
                 f"nested price thresholds form an implication chain"
+            ),
+        }
+
+
+# Matches milestone/subscriber threshold markets:
+#   "YouTube subscribers above 475 million"
+#   "TikTok followers above 200M"
+#   "Views exceed 1.5 billion"
+# Captures: (subject, threshold, multiplier)
+_MILESTONE_RE = re.compile(
+    r"^(.+?)\s+(?:above|below|over|under|reach|hit|exceed)\s+"
+    r"([0-9,]+(?:\.\d+)?)\s*"
+    r"(million|billion|trillion|[MBT])\b",
+    re.IGNORECASE,
+)
+
+_MULTIPLIER_MAP = {
+    "million": 1_000_000, "m": 1_000_000,
+    "billion": 1_000_000_000, "b": 1_000_000_000,
+    "trillion": 1_000_000_000_000, "t": 1_000_000_000_000,
+}
+
+
+def _check_milestone_threshold_markets(market_a: dict, market_b: dict) -> dict | None:
+    """Detect milestone/subscriber threshold markets forming implication chains.
+
+    "YouTube subscribers above 475 million" and "above 477 million" form an
+    implication chain identical to price thresholds: if subscribers exceed 477M,
+    they necessarily also exceed 475M.
+    """
+    q_a = market_a.get("question", "")
+    q_b = market_b.get("question", "")
+
+    m_a = _MILESTONE_RE.search(q_a)
+    m_b = _MILESTONE_RE.search(q_b)
+
+    if not m_a or not m_b:
+        return None
+
+    subject_a = m_a.group(1).strip().lower()
+    subject_b = m_b.group(1).strip().lower()
+
+    if subject_a != subject_b:
+        return None
+
+    mult_a = _MULTIPLIER_MAP[m_a.group(3).lower()]
+    mult_b = _MULTIPLIER_MAP[m_b.group(3).lower()]
+    threshold_a = float(m_a.group(2).replace(",", "")) * mult_a
+    threshold_b = float(m_b.group(2).replace(",", "")) * mult_b
+
+    if threshold_a == threshold_b:
+        return None
+
+    # Different calendar dates → independent
+    date_a = _extract_date(q_a)
+    date_b = _extract_date(q_b)
+    if date_a and date_b and date_a != date_b:
+        return {
+            "dependency_type": "none",
+            "confidence": 0.95,
+            "reasoning": (
+                f"Same subject '{m_a.group(1).strip()}', different dates "
+                f"({date_a} vs {date_b}) — independent events"
+            ),
+        }
+
+    # Detect direction
+    dir_a = "above" if re.search(r"\b(?:above|over|exceed|reach|hit)\b", q_a, re.IGNORECASE) else "below"
+    dir_b = "above" if re.search(r"\b(?:above|over|exceed|reach|hit)\b", q_b, re.IGNORECASE) else "below"
+
+    if dir_a != dir_b:
+        return None
+
+    higher = max(threshold_a, threshold_b)
+    lower = min(threshold_a, threshold_b)
+
+    # Format for readable output
+    def _fmt(v: float) -> str:
+        if v >= 1_000_000_000_000:
+            return f"{v / 1_000_000_000_000:g}T"
+        if v >= 1_000_000_000:
+            return f"{v / 1_000_000_000:g}B"
+        if v >= 1_000_000:
+            return f"{v / 1_000_000:g}M"
+        return f"{v:g}"
+
+    if dir_a == "above":
+        return {
+            "dependency_type": "implication",
+            "confidence": 0.95,
+            "correlation": "positive",
+            "reasoning": (
+                f"'{m_a.group(1).strip()}' above {_fmt(higher)} implies above {_fmt(lower)} — "
+                f"nested milestone thresholds form an implication chain"
+            ),
+        }
+    else:
+        return {
+            "dependency_type": "implication",
+            "confidence": 0.95,
+            "correlation": "positive",
+            "reasoning": (
+                f"'{m_a.group(1).strip()}' below {_fmt(lower)} implies below {_fmt(higher)} — "
+                f"nested milestone thresholds form an implication chain"
             ),
         }
 
@@ -336,6 +487,7 @@ async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
         _check_same_event,
         _check_outcome_subset,
         _check_crypto_time_intervals,
+        _check_milestone_threshold_markets,
         _check_price_threshold_markets,
         _check_ranking_markets,
         _check_over_under_markets,

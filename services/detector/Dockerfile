@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY shared/ /app/shared/
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/
+COPY scripts/ /app/scripts/
 COPY services/__init__.py /app/services/
 COPY services/detector/ /app/services/detector/
 

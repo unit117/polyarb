@@ -6,6 +6,14 @@ RUN npm install
 COPY services/dashboard/web/ .
 RUN npm run build
 
+FROM node:22-slim AS docs
+
+WORKDIR /docs
+COPY services/dashboard/docs/package.json services/dashboard/docs/package-lock.json* ./
+RUN npm install
+COPY services/dashboard/docs/ .
+RUN npm run build
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -26,6 +34,9 @@ COPY services/dashboard/api/ /app/services/dashboard/api/
 
 # Copy built React app
 COPY --from=frontend /web/dist /app/services/dashboard/web/dist
+
+# Copy built Knowledge Base
+COPY --from=docs /docs/dist /app/services/dashboard/docs/dist
 
 ENV PYTHONPATH=/app
 
