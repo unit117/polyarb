@@ -446,8 +446,8 @@ class DetectionPipeline:
                     prices_a=prices_a,
                     prices_b=prices_b,
                     confidence=pair.confidence,
-                    correlation=correlation,
-                    implication_direction=imp_direction,
+                    correlation=fresh_constraint.get("correlation"),
+                    implication_direction=fresh_constraint.get("implication_direction"),
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
@@ -556,8 +556,6 @@ class DetectionPipeline:
 
                 outcomes_a = constraint.get("outcomes_a", [])
                 outcomes_b = constraint.get("outcomes_b", [])
-                correlation = constraint.get("correlation")
-                imp_direction = constraint.get("implication_direction")
 
                 market_a_obj = await session.get(Market, pair.market_a_id)
                 market_b_obj = await session.get(Market, pair.market_b_id)
@@ -578,8 +576,8 @@ class DetectionPipeline:
                     prices_a=prices_a,
                     prices_b=prices_b,
                     confidence=pair.confidence,
-                    correlation=correlation,
-                    implication_direction=imp_direction,
+                    correlation=fresh_constraint.get("correlation"),
+                    implication_direction=fresh_constraint.get("implication_direction"),
                 )
                 if not re_verification["verified"]:
                     pair.verified = False

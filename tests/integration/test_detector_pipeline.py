@@ -68,6 +68,8 @@ class TestDetectionPipelineRunOnce:
 
             with patch("services.detector.pipeline.settings") as mock_settings:
                 mock_settings.kalshi_enabled = False
+                mock_settings.uncertainty_price_floor = 0.05
+                mock_settings.uncertainty_price_ceil = 0.95
 
                 result = await pipeline.run_once()
 
@@ -135,6 +137,8 @@ class TestDetectionPipelineRunOnce:
                 with patch("services.detector.pipeline.settings") as mock_settings:
                     mock_settings.kalshi_enabled = False
                     mock_settings.max_snapshot_age_seconds = 0
+                    mock_settings.uncertainty_price_floor = 0.05
+                    mock_settings.uncertainty_price_ceil = 0.95
 
                     # Mock _rescan_existing_pairs to avoid complex queries
                     with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
@@ -185,6 +189,8 @@ class TestDetectionPipelineRunOnce:
 
                 with patch("services.detector.pipeline.settings") as mock_settings:
                     mock_settings.kalshi_enabled = False
+                    mock_settings.uncertainty_price_floor = 0.05
+                    mock_settings.uncertainty_price_ceil = 0.95
 
                     with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
                         mock_rescan.return_value = {"opportunities": 0}
