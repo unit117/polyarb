@@ -263,6 +263,14 @@ async def get_portfolio_history(hours: int = 24, source: str | None = None):
     async with SessionFactory() as session:
         query = (
             select(PortfolioSnapshot)
+            .options(load_only(
+                PortfolioSnapshot.timestamp,
+                PortfolioSnapshot.cash,
+                PortfolioSnapshot.total_value,
+                PortfolioSnapshot.realized_pnl,
+                PortfolioSnapshot.unrealized_pnl,
+                PortfolioSnapshot.total_trades,
+            ))
             .where(PortfolioSnapshot.timestamp >= since)
             .order_by(PortfolioSnapshot.timestamp)
         )
