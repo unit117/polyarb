@@ -1,5 +1,6 @@
 """Simulator pipeline: executes paper trades for optimized opportunities."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -44,14 +45,21 @@ class SimulatorPipeline:
         self.max_position_size = max_position_size
         self.circuit_breaker = circuit_breaker
         self._in_flight: set[int] = set()  # opportunity_ids currently being processed
+        self._execution_lock = asyncio.Lock()  # serialize portfolio mutations across opportunities
 
     async def simulate_opportunity(self, opportunity_id: int) -> dict:
-        """Simulate executing trades for an optimized opportunity."""
+        """Simulate executing trades for an optimized opportunity.
+
+        Uses _execution_lock to serialize portfolio mutations so that
+        concurrent opportunities (from periodic loop + event loop) cannot
+        interleave validation and execution against stale portfolio state.
+        """
         if opportunity_id in self._in_flight:
             return {"status": "skipped", "reason": "in_flight"}
         self._in_flight.add(opportunity_id)
         try:
-            return await self._simulate_opportunity_inner(opportunity_id)
+            async with self._execution_lock:
+                return await self._simulate_opportunity_inner(opportunity_id)
         finally:
             self._in_flight.discard(opportunity_id)
 
@@ -144,6 +152,7 @@ class SimulatorPipeline:
             # opportunity to avoid one-sided exposure.
             validated_legs: list[dict] = []
             all_legs_valid = True
+            reserved_cash = Decimal("0")  # Track cash reserved by earlier BUY legs
 
             for trade in opp.optimal_trades["trades"]:
                 market = market_a if trade["market"] == "A" else market_b
@@ -172,13 +181,29 @@ class SimulatorPipeline:
                 trade_venue = trade.get("venue", getattr(market, "venue", "polymarket"))
                 fees = venue_fee(trade_venue, fill["vwap_price"], trade["side"]) * fill["filled_size"]
 
+                # Cash reservation: ensure BUY legs won't starve each other
+                if trade["side"] == "BUY":
+                    cost = Decimal(str(fill["filled_size"])) * Decimal(str(fill["vwap_price"])) + Decimal(str(fees))
+                    available = self.portfolio.cash - reserved_cash
+                    if cost > available:
+                        logger.info(
+                            "insufficient_cash_for_leg",
+                            opportunity_id=opp.id,
+                            market_id=market.id,
+                            cost=float(cost),
+                            available=float(available),
+                        )
+                        all_legs_valid = False
+                        break
+                    reserved_cash += cost
+
                 # Post-VWAP edge validation: check the edge survived slippage.
                 fair_price = trade.get("fair_price", 0.0)
                 if fair_price > 0:
                     if trade["side"] == "BUY":
                         post_vwap_edge = fair_price - fill["vwap_price"]
                     else:
-                        post_vwap_edge = fill["vwap_price"] - (1.0 - fair_price)
+                        post_vwap_edge = fill["vwap_price"] - fair_price
                     per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade["side"])
                     if post_vwap_edge - per_share_fee <= 0:
                         logger.info(
