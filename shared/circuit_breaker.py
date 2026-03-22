@@ -5,6 +5,8 @@ consecutive errors, or manual kill switch via Redis.
 Auto-resets after a configurable cooldown period.
 """
 
+from __future__ import annotations
+
 import time
 
 import redis.asyncio as aioredis
@@ -148,8 +150,10 @@ class CircuitBreaker:
                 post_market_exposure += abs(post_position)
 
             if post_market_exposure > self.max_position_per_market:
-                await self._trip(
-                    "max_position_per_market",
+                # Local rejection only — don't trip the global breaker.
+                # Other markets can still trade; only this market is capped.
+                logger.info(
+                    "position_cap_rejected",
                     market_id=market_id,
                     post_market_exposure=post_market_exposure,
                     limit=self.max_position_per_market,
