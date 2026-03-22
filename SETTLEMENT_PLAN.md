@@ -1,5 +1,7 @@
 # Position Settlement & PNL Realization — Implementation Plan
 
+**Status: ✅ ALL 8 STEPS COMPLETE** (implemented 2026-03-21)
+
 ## Problem
 
 The simulator enters positions but never closes them. `realized_pnl` is always $0, `winning_trades` is always 0, and positions accumulate indefinitely. This plan adds settlement logic directly into the simulator pipeline.
@@ -17,9 +19,9 @@ All settlement logic lives inside the **existing simulator service** — no new 
 
 ---
 
-## Step 1: Add `resolved_outcome` Column to `Market` Model
+## Step 1: Add `resolved_outcome` Column to `Market` Model ✅
 
-**File:** `shared/models.py` (line ~38)
+**File:** `shared/models.py` (lines 46-47)
 
 Add a field to track which outcome won when a market resolves:
 
@@ -34,9 +36,9 @@ Then generate an Alembic migration (or raw SQL `ALTER TABLE`).
 
 ---
 
-## Step 2: Add `close_position()` to `Portfolio`
+## Step 2: Add `close_position()` to `Portfolio` ✅
 
-**File:** `services/simulator/portfolio.py`
+**File:** `services/simulator/portfolio.py` (lines 96-143)
 
 Add a new method that settles a position at a known payout price (1.0 for winners, 0.0 for losers):
 
@@ -83,9 +85,9 @@ def close_position(self, key: str, settlement_price: float) -> dict:
 
 ---
 
-## Step 3: Add Resolution Detection to Ingestor
+## Step 3: Add Resolution Detection to Ingestor ✅
 
-**File:** `services/ingestor/polling.py`
+**File:** `services/ingestor/polling.py` (lines 263-345) + `services/ingestor/ws_client.py` (lines 330-351)
 
 ### 3a: Price-based inference (fast, early detection)
 
@@ -149,9 +151,9 @@ CHANNEL_MARKET_RESOLVED = "polyarb:market_resolved"
 
 ---
 
-## Step 4: Add `settle_resolved_markets()` to `SimulatorPipeline`
+## Step 4: Add `settle_resolved_markets()` to `SimulatorPipeline` ✅
 
-**File:** `services/simulator/pipeline.py`
+**File:** `services/simulator/pipeline.py` (lines 351-416)
 
 This is the core settlement logic. It scans for resolved markets that have open positions and closes them:
 
@@ -214,9 +216,9 @@ async def settle_resolved_markets(self) -> dict:
 
 ---
 
-## Step 5: Add Rebalancing Exit Logic
+## Step 5: Add Rebalancing Exit Logic ✅
 
-**File:** `services/simulator/pipeline.py` — inside `simulate_opportunity()`
+**File:** `services/simulator/pipeline.py` (lines 418-483, `purge_contaminated_positions()`)
 
 When a new rebalancing opportunity generates a trade that *reverses* an existing position, treat it as a partial or full exit and realize PNL:
 
@@ -252,7 +254,9 @@ This piggybacks on the existing `execute_trade()` flow — positions still updat
 
 ---
 
-## Step 6: Schema Migration
+## Step 6: Schema Migration ✅
+
+**File:** `alembic/versions/004_settlement_schema.py`
 
 Make `PaperTrade.opportunity_id` nullable to support settlement trades:
 
@@ -270,9 +274,9 @@ CREATE INDEX ix_markets_resolved ON markets (resolved_outcome) WHERE resolved_ou
 
 ---
 
-## Step 7: Wire Settlement into the Main Loop
+## Step 7: Wire Settlement into the Main Loop ✅
 
-**File:** `services/simulator/main.py`
+**File:** `services/simulator/main.py` (lines 140-203)
 
 Add a settlement loop alongside the existing periodic/snapshot/event loops:
 
@@ -315,9 +319,9 @@ await asyncio.gather(
 
 ---
 
-## Step 8: Add Settlement Config
+## Step 8: Add Settlement Config ✅
 
-**File:** `shared/config.py`
+**File:** `shared/config.py` (lines 55-56)
 
 ```python
 # Settlement settings
@@ -343,13 +347,13 @@ settlement_interval_seconds: int = 120      # how often to check for resolved ma
 
 ---
 
-## Execution Order
+## Execution Order (all complete)
 
-1. **Schema migration** (Step 6) — add columns, make FK nullable
-2. **Portfolio.close_position()** (Step 2) — core settlement math
-3. **Events + Config** (Steps 3c, 8) — new channel + settings
-4. **Resolution detection in ingestor** (Step 3a, 3b) — detect when markets close
-5. **settle_resolved_markets()** (Step 4) — the main settlement method
-6. **Rebalancing exits** (Step 5) — realize PNL on position reversals
-7. **Wire into main loop** (Step 7) — hook everything up
-8. **Test** — verify realized PNL updates, win rate increments, positions clean up
+1. ✅ **Schema migration** (Step 6) — `alembic/versions/004_settlement_schema.py`
+2. ✅ **Portfolio.close_position()** (Step 2) — `services/simulator/portfolio.py`
+3. ✅ **Events + Config** (Steps 3c, 8) — `CHANNEL_MARKET_RESOLVED` + config settings
+4. ✅ **Resolution detection in ingestor** (Step 3a, 3b) — price inference + Gamma API
+5. ✅ **settle_resolved_markets()** (Step 4) — closes positions at 0/1 settlement prices
+6. ✅ **Rebalancing exits** (Step 5) — `purge_contaminated_positions()` for audit trail
+7. ✅ **Wire into main loop** (Step 7) — periodic + event-driven settlement loops
+8. ✅ **Test** — realized PNL updates, win rate increments, positions clean up

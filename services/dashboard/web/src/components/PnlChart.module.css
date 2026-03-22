@@ -63,3 +63,9 @@
   font-weight: 600;
   font-family: var(--font-mono);
 }
+
+.tooltipTotal {
+  border-top: 1px solid var(--color-border);
+  margin-top: 2px;
+  padding-top: 2px;
+}

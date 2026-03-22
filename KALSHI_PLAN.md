@@ -2,6 +2,10 @@
 
 *Generated 2026-03-21 — Combines IMPROVEMENT_PLAN Phase 5 and ECOSYSTEM_PLAN Phase E2*
 
+**Status: ✅ ALL 10 STEPS COMPLETE** (implemented 2026-03-22)
+
+**Note:** Built with a custom RSA-SHA256 REST client instead of pmxt SDK. All functionality from the original plan is implemented.
+
 ---
 
 ## Context
@@ -14,7 +18,7 @@ Phase 3 (circuit breakers, Kelly, dedup) and Phase 4 (WebSocket) are already com
 
 ## Implementation Steps
 
-### Step 1: Database Migration (`alembic/versions/011_venue_column.py`)
+### Step 1: Database Migration (`alembic/versions/011_venue_column.py`) ✅
 
 - Add `venue VARCHAR(32) NOT NULL DEFAULT 'polymarket'` to `markets`
 - Add index `ix_markets_venue` on `venue`
@@ -24,13 +28,13 @@ Phase 3 (circuit breakers, Kelly, dedup) and Phase 4 (WebSocket) are already com
 
 **Why keep `polymarket_id` column name:** It's referenced in 5 files. Renaming is a larger migration for cosmetic benefit. Kalshi tickers go in `polymarket_id` with `venue='kalshi'`.
 
-### Step 2: Model Updates (`shared/models.py`)
+### Step 2: Model Updates (`shared/models.py`) ✅
 
 - Add `venue` column to `Market` (default `'polymarket'`)
 - Update `__table_args__` unique constraint from `polymarket_id` alone to `(venue, polymarket_id)`
 - Add `venue` column to `PaperTrade` (nullable, default `'polymarket'`)
 
-### Step 3: Config Changes (`shared/config.py`)
+### Step 3: Config Changes (`shared/config.py`) ✅
 
 New settings:
 ```
@@ -50,9 +54,9 @@ def venue_fee(venue: str, price: float, side: str = "BUY") -> float:
     return polymarket_fee(price, side)
 ```
 
-### Step 4: Kalshi Client (`services/ingestor/kalshi_client.py`) — NEW FILE
+### Step 4: Kalshi Client (`services/ingestor/kalshi_client.py`) ✅ — NEW FILE
 
-pmxt-based client wrapping `pmxt.Kalshi()`:
+Custom RSA-SHA256 authenticated REST client (248 lines, not pmxt-based):
 - `fetch_markets()` → returns normalized dicts (venue, external_id, question, outcomes, volume)
 - `fetch_prices(ticker)` → returns PriceSnapshot-compatible dict
 - Rate limiting via asyncio lock (same pattern as `GammaClient`)
@@ -60,7 +64,7 @@ pmxt-based client wrapping `pmxt.Kalshi()`:
 
 **Note:** If pmxt breaks or the API changes, fall back to building a custom Kalshi REST client with RSA-SHA256 auth. The `KalshiClient` abstraction layer means only this file would need to change.
 
-### Step 5: Kalshi Polling (`services/ingestor/kalshi_polling.py`) — NEW FILE
+### Step 5: Kalshi Polling (`services/ingestor/kalshi_polling.py`) ✅ — NEW FILE
 
 `KalshiPoller` class following `MarketPoller` pattern:
 - `sync_markets()` — fetch from pmxt, batch upsert with `venue='kalshi'`
@@ -68,7 +72,7 @@ pmxt-based client wrapping `pmxt.Kalshi()`:
 - Reuse existing `embedder.py` for embedding computation (same model/dims)
 - Publish same Redis events (`CHANNEL_MARKET_UPDATED`, `CHANNEL_SNAPSHOT_CREATED`)
 
-### Step 6: Ingestor Entry Point (`services/ingestor/main.py`)
+### Step 6: Ingestor Entry Point (`services/ingestor/main.py`) ✅
 
 Add conditional Kalshi startup:
 ```python
@@ -78,7 +82,7 @@ if settings.kalshi_enabled:
 # Add to existing asyncio.gather
 ```
 
-### Step 7: Cross-Platform Dependency Type
+### Step 7: Cross-Platform Dependency Type ✅
 
 **`services/detector/classifier.py`:**
 - Add `"cross_platform"` to `DEPENDENCY_TYPES`
@@ -92,7 +96,7 @@ if settings.kalshi_enabled:
 **`services/detector/verification.py`:**
 - Add `cross_platform` verification: both binary, different venues, reasonable price range (0.05-0.95)
 
-### Step 8: Cross-Venue Similarity Search (`services/detector/similarity.py`)
+### Step 8: Cross-Venue Similarity Search (`services/detector/similarity.py`) ✅
 
 Add `find_cross_venue_pairs()`:
 - Anchors = Kalshi markets, neighbors = Polymarket markets (or vice versa)
@@ -103,7 +107,7 @@ Add `find_cross_venue_pairs()`:
 - Add `_detect_cross_venue()` method called from `run_once()` when Kalshi is enabled
 - Separate from intra-venue detection cycle
 
-### Step 9: Fee Routing in Optimizer + Simulator
+### Step 9: Fee Routing in Optimizer + Simulator ✅
 
 **`services/optimizer/trades.py`:**
 - Accept `venue_a`, `venue_b` params in `compute_trades()`
@@ -117,7 +121,7 @@ Add `find_cross_venue_pairs()`:
 - Replace `from shared.config import polymarket_fee` with `venue_fee`
 - Read venue from trade dict or market model for fee calculation
 
-### Step 10: Dashboard Updates (`services/dashboard/`)
+### Step 10: Dashboard Updates (`services/dashboard/`) ✅
 
 - Add venue badge to markets table
 - Show "Cross-Venue" tag on cross-platform pairs

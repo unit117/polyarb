@@ -1,7 +1,8 @@
 import React, { useMemo } from "react";
 import {
-  AreaChart,
+  ComposedChart,
   Area,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -31,14 +32,16 @@ const PnlChart = React.memo(function PnlChart({
           minute: "2-digit",
         }),
         value: d.total_value,
-        pnl: initialCapital + (d.unrealized_pnl ?? d.total_value - initialCapital),
+        cash: d.cash,
+        realized: d.realized_pnl,
+        unrealized: d.unrealized_pnl,
       })),
-    [history, initialCapital],
+    [history],
   );
 
   const [yMin, yMax] = useMemo(() => {
     if (chartData.length === 0) return [0, 0];
-    const allValues = chartData.flatMap((d) => [d.value, d.pnl]);
+    const allValues = chartData.flatMap((d) => [d.value, d.cash, d.realized, d.unrealized]);
     const min = Math.min(...allValues, initialCapital);
     const max = Math.max(...allValues, initialCapital);
     const range = max - min || 100;
@@ -60,15 +63,15 @@ const PnlChart = React.memo(function PnlChart({
   return (
     <div className={s.container}>
       <h3 className={s.title}>Portfolio Value (24h)</h3>
-      <ResponsiveContainer width="100%" height={250}>
-        <AreaChart data={chartData}>
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={chartData}>
           <defs>
             <linearGradient id="gradientGreen" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#00e67a" stopOpacity={0.2} />
               <stop offset="100%" stopColor="#00e67a" stopOpacity={0} />
             </linearGradient>
             <linearGradient id="gradientBlue" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#4488ff" stopOpacity={0.1} />
+              <stop offset="0%" stopColor="#4488ff" stopOpacity={0.08} />
               <stop offset="100%" stopColor="#4488ff" stopOpacity={0} />
             </linearGradient>
           </defs>
@@ -100,6 +103,7 @@ const PnlChart = React.memo(function PnlChart({
               fontSize: 10,
             }}
           />
+          {/* Portfolio Value — primary green area */}
           <Area
             type="monotone"
             dataKey="value"
@@ -109,17 +113,36 @@ const PnlChart = React.memo(function PnlChart({
             dot={false}
             name="Portfolio Value"
           />
+          {/* Unrealized PnL — subtle blue area */}
           <Area
             type="monotone"
-            dataKey="pnl"
+            dataKey="unrealized"
             stroke="#4488ff"
-            strokeWidth={1.5}
+            strokeWidth={1}
             fill="url(#gradientBlue)"
             dot={false}
-            strokeDasharray="4 2"
             name="Unrealized PnL"
           />
-        </AreaChart>
+          {/* Cash — gray dashed line */}
+          <Line
+            type="monotone"
+            dataKey="cash"
+            stroke="#6b7280"
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+            dot={false}
+            name="Cash"
+          />
+          {/* Realized PnL — cyan step line */}
+          <Line
+            type="stepAfter"
+            dataKey="realized"
+            stroke="#06b6d4"
+            strokeWidth={1.5}
+            dot={false}
+            name="Realized PnL"
+          />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
@@ -133,31 +156,47 @@ function CustomTooltip({
   initialCapital,
 }: {
   active?: boolean;
-  payload?: Array<{ value: number; name: string; color: string }>;
+  payload?: Array<{ value: number; name: string; color: string; dataKey: string }>;
   label?: string;
   initialCapital: number;
 }) {
   if (!active || !payload || payload.length === 0) return null;
 
-  const value = payload[0]?.value ?? 0;
-  const pnlLine = payload[1]?.value ?? initialCapital;
-  const pnl = pnlLine - initialCapital;
-  const isPositive = pnl >= 0;
-  const sign = isPositive ? "+" : "";
+  const get = (key: string) => payload.find((p) => p.dataKey === key)?.value ?? 0;
+  const value = get("value");
+  const cash = get("cash");
+  const realized = get("realized");
+  const unrealized = get("unrealized");
+  const totalPnl = value - initialCapital;
+  const pnlPct = ((totalPnl / initialCapital) * 100).toFixed(2);
+  const sign = totalPnl >= 0 ? "+" : "";
 
   return (
     <div className={s.tooltip}>
       <div className={s.tooltipRow}>
         <span className={s.tooltipLabel}>Value:</span>
-        <span className={s.tooltipValue}>
-          ${value.toFixed(2)}
+        <span className={s.tooltipValue}>${value.toFixed(2)}</span>
+      </div>
+      <div className={s.tooltipRow}>
+        <span className={s.tooltipLabel}>Cash:</span>
+        <span className={s.tooltipValue}>${cash.toFixed(2)}</span>
+      </div>
+      <div className={s.tooltipRow}>
+        <span className={s.tooltipLabel}>Realized:</span>
+        <span className={realized >= 0 ? s.tooltipValuePositive : s.tooltipValueNegative}>
+          {realized >= 0 ? "+" : ""}${realized.toFixed(2)}
         </span>
       </div>
       <div className={s.tooltipRow}>
-        <span className={s.tooltipLabel}>Unreal. PnL:</span>
-        <span className={isPositive ? s.tooltipValuePositive : s.tooltipValueNegative}>
-          {sign}${pnl.toFixed(2)} ({sign}
-          {((pnl / initialCapital) * 100).toFixed(2)}%)
+        <span className={s.tooltipLabel}>Unrealized:</span>
+        <span className={unrealized >= 0 ? s.tooltipValuePositive : s.tooltipValueNegative}>
+          {unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)}
+        </span>
+      </div>
+      <div className={`${s.tooltipRow} ${s.tooltipTotal}`}>
+        <span className={s.tooltipLabel}>Total PnL:</span>
+        <span className={totalPnl >= 0 ? s.tooltipValuePositive : s.tooltipValueNegative}>
+          {sign}${totalPnl.toFixed(2)} ({sign}{pnlPct}%)
         </span>
       </div>
     </div>
