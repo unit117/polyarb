@@ -84,6 +84,11 @@ async def _redis_broadcaster(r: aioredis.Redis):
         await pubsub.aclose()
 
 
+# Serve Knowledge Base if it exists (must be before "/" catch-all)
+docs_dir = Path(__file__).parent.parent / "docs" / "dist"
+if docs_dir.exists():
+    app.mount("/docs", StaticFiles(directory=str(docs_dir), html=True), name="docs")
+
 # Serve React static build if it exists
 static_dir = Path(__file__).parent.parent / "web" / "dist"
 if static_dir.exists():
