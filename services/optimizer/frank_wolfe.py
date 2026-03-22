@@ -34,6 +34,7 @@ class FWResult:
         "kl_divergence",
         "n_outcomes_a",
         "n_outcomes_b",
+        "feasibility_matrix",
     )
 
     def __init__(
@@ -46,6 +47,7 @@ class FWResult:
         kl_div: float,
         n_outcomes_a: int,
         n_outcomes_b: int,
+        feasibility_matrix: list | None = None,
     ):
         self.optimal_q = optimal_q
         self.market_prices = market_prices
@@ -55,6 +57,7 @@ class FWResult:
         self.kl_divergence = kl_div
         self.n_outcomes_a = n_outcomes_a
         self.n_outcomes_b = n_outcomes_b
+        self.feasibility_matrix = feasibility_matrix
 
 
 def optimize(
@@ -91,7 +94,7 @@ def optimize(
     q = _find_initial_feasible(n_a, n_b, feasibility_matrix)
     if q is None:
         logger.error("no_feasible_initial_point")
-        return FWResult(p, p, 0, float("inf"), False, 0.0, n_a, n_b)
+        return FWResult(p, p, 0, float("inf"), False, 0.0, n_a, n_b, feasibility_matrix)
 
     converged = False
     final_gap = float("inf")
@@ -136,7 +139,7 @@ def optimize(
         kl_divergence=kl_div,
     )
 
-    return FWResult(q, p, iterations, final_gap, converged, kl_div, n_a, n_b)
+    return FWResult(q, p, iterations, final_gap, converged, kl_div, n_a, n_b, feasibility_matrix)
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:

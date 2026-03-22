@@ -49,29 +49,84 @@ class Portfolio:
                 cost = size_d * price_d + fees_d
 
             self.cash -= cost
-            self.positions[key] = self.positions.get(key, Decimal("0")) + size_d
-            self.cost_basis[key] = self.cost_basis.get(key, Decimal("0")) + size_d * price_d
+            current = self.positions.get(key, Decimal("0"))
+
+            if current < 0:
+                # Covering a short position — reduce credit-received basis
+                cover_size = min(size_d, abs(current))
+                remainder = size_d - cover_size
+                if key in self.cost_basis and current != 0:
+                    avg_credit = self.cost_basis[key] / abs(current)
+                    self.cost_basis[key] -= cover_size * avg_credit
+
+                new_position = current + size_d
+                if new_position == 0:
+                    del self.positions[key]
+                    self.cost_basis.pop(key, None)
+                elif new_position > 0:
+                    # Flipped to long — basis is cost of the long portion
+                    self.positions[key] = new_position
+                    self.cost_basis[key] = remainder * price_d
+                else:
+                    # Still short, just reduced
+                    self.positions[key] = new_position
+            else:
+                # Opening/adding to a long
+                self.positions[key] = current + size_d
+                self.cost_basis[key] = self.cost_basis.get(key, Decimal("0")) + size_d * price_d
 
         else:  # SELL
             current = self.positions.get(key, Decimal("0"))
-            sell_size = min(size_d, current) if current > 0 else size_d
-            proceeds = sell_size * price_d - fees_d
-            self.cash += proceeds
+            sell_size = size_d
 
             if current > 0:
-                # Closing/reducing a long — reduce cost basis proportionally
-                if key in self.cost_basis:
-                    avg_entry = self.cost_basis[key] / current
-                    self.cost_basis[key] -= sell_size * avg_entry
+                # Closing/reducing a long (possibly flipping to short)
+                close_size = min(sell_size, current)
+                remainder = sell_size - close_size
 
-                self.positions[key] = current - sell_size
-                if self.positions[key] <= 0:
+                # Reduce cost basis proportionally for the closed portion
+                if key in self.cost_basis and current > 0:
+                    avg_entry = self.cost_basis[key] / current
+                    self.cost_basis[key] -= close_size * avg_entry
+
+                # Margin check for the short remainder (if flipping)
+                if remainder > 0:
+                    margin_required = remainder * price_d
+                    available = self.cash + close_size * price_d - fees_d  # after close proceeds
+                    if margin_required > available:
+                        max_short = available / price_d if price_d > 0 else Decimal("0")
+                        remainder = max(max_short.quantize(Decimal("0.01")), Decimal("0"))
+                    sell_size = close_size + remainder
+
+                proceeds = sell_size * price_d - fees_d
+                self.cash += proceeds
+
+                new_position = current - sell_size
+                if new_position == 0:
                     del self.positions[key]
                     self.cost_basis.pop(key, None)
+                elif new_position > 0:
+                    self.positions[key] = new_position
+                else:
+                    # Flipped to short — basis is net credit for the short portion
+                    self.positions[key] = new_position
+                    proportional_short_fees = fees_d * remainder / sell_size if sell_size > 0 else Decimal("0")
+                    self.cost_basis[key] = remainder * price_d - proportional_short_fees
             else:
-                # Opening/increasing a short — cost basis tracks credit received
+                # Opening/increasing a short — margin check
+                margin_required = sell_size * price_d
+                if margin_required > self.cash:
+                    max_short = self.cash / price_d if price_d > 0 else Decimal("0")
+                    if max_short <= 0:
+                        return {"executed": False, "reason": "insufficient_margin"}
+                    sell_size = max_short.quantize(Decimal("0.01"))
+
+                proceeds = sell_size * price_d - fees_d
+                self.cash += proceeds
+
                 self.positions[key] = current - sell_size
-                self.cost_basis[key] = self.cost_basis.get(key, Decimal("0")) + sell_size * price_d
+                proportional_fees = fees_d * sell_size / size_d if size_d > 0 else fees_d
+                self.cost_basis[key] = self.cost_basis.get(key, Decimal("0")) + sell_size * price_d - proportional_fees
 
         self.total_trades += 1
 
@@ -153,8 +208,16 @@ class Portfolio:
         pos_value = Decimal("0")
         if current_prices:
             for key, shares in self.positions.items():
-                price = Decimal(str(current_prices.get(key, 0)))
-                pos_value += shares * price
+                if key in current_prices:
+                    price = Decimal(str(current_prices[key]))
+                    pos_value += shares * price
+                else:
+                    # Missing price: use cost_basis as break-even mark
+                    cost = self.cost_basis.get(key, Decimal("0"))
+                    if shares > 0:
+                        pos_value += cost
+                    else:
+                        pos_value -= cost
         return float(self.cash + pos_value)
 
     def unrealized_pnl(self, current_prices: dict[str, float] | None = None) -> float:
@@ -163,7 +226,10 @@ class Portfolio:
             return 0.0
         pnl = Decimal("0")
         for key, shares in self.positions.items():
-            current = Decimal(str(current_prices.get(key, 0)))
+            if key not in current_prices:
+                # Missing price: assume break-even (0 unrealized PnL)
+                continue
+            current = Decimal(str(current_prices[key]))
             cost = self.cost_basis.get(key, abs(shares) * Decimal("0.5"))
             if shares > 0:
                 pnl += shares * current - cost
@@ -179,7 +245,9 @@ class Portfolio:
             return 0, total
         in_profit = 0
         for key, shares in self.positions.items():
-            current = Decimal(str(current_prices.get(key, 0)))
+            if key not in current_prices:
+                continue  # Missing price: skip (neither profit nor loss)
+            current = Decimal(str(current_prices[key]))
             cost = self.cost_basis.get(key, abs(shares) * Decimal("0.5"))
             if shares > 0:
                 profitable = shares * current > cost

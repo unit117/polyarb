@@ -39,6 +39,7 @@ from shared.models import (
     PriceSnapshot,
 )
 from services.detector.constraints import build_constraint_matrix
+from services.detector.verification import verify_pair
 from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
 from services.simulator.portfolio import Portfolio
@@ -90,6 +91,9 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
     opp_ids = []
 
     for pair in pairs:
+        if not pair.verified:
+            continue
+
         prices_a = await get_prices_at(session, pair.market_a_id, as_of)
         prices_b = await get_prices_at(session, pair.market_b_id, as_of)
 
@@ -102,6 +106,33 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
 
         outcomes_a = constraint.get("outcomes_a", [])
         outcomes_b = constraint.get("outcomes_b", [])
+
+        # Re-verify pair with today's prices
+        market_a = await session.get(Market, pair.market_a_id)
+        market_b = await session.get(Market, pair.market_b_id)
+        if not market_a or not market_b:
+            continue
+        market_a_dict = {
+            "event_id": market_a.event_id,
+            "question": market_a.question,
+            "outcomes": market_a.outcomes if isinstance(market_a.outcomes, list) else [],
+        }
+        market_b_dict = {
+            "event_id": market_b.event_id,
+            "question": market_b.question,
+            "outcomes": market_b.outcomes if isinstance(market_b.outcomes, list) else [],
+        }
+        verification = verify_pair(
+            dependency_type=pair.dependency_type,
+            market_a=market_a_dict,
+            market_b=market_b_dict,
+            prices_a=prices_a,
+            prices_b=prices_b,
+            confidence=pair.confidence,
+            correlation=constraint.get("correlation"),
+        )
+        if not verification["verified"]:
+            continue
 
         # Recompute profit bound with this day's prices
         fresh = build_constraint_matrix(
@@ -217,9 +248,12 @@ async def simulate_opportunity(
 
     trades_executed = 0
 
+    # Pass 1: compute fills for all legs to determine proportional scaling
+    leg_fills = []
     for trade in opp.optimal_trades["trades"]:
         market = market_a if trade["market"] == "A" else market_b
         if not market:
+            leg_fills.append(None)
             continue
 
         snapshot = await get_snapshot_at(session, market.id, as_of)
@@ -228,6 +262,30 @@ async def simulate_opportunity(
 
         size = min(trade["edge"] * max_position_size, max_position_size)
         fill = compute_vwap(order_book, trade["side"], size, midpoint)
+        leg_fills.append({"fill": fill, "requested_size": size, "market": market, "midpoint": midpoint})
+
+    # Cross-leg proportional scaling: match the smallest fill ratio
+    fill_ratios = []
+    for lf in leg_fills:
+        if lf and lf["requested_size"] > 0:
+            fill_ratios.append(lf["fill"]["filled_size"] / lf["requested_size"])
+    min_ratio = min(fill_ratios) if fill_ratios else 1.0
+
+    for i, trade in enumerate(opp.optimal_trades["trades"]):
+        lf = leg_fills[i]
+        if not lf:
+            continue
+
+        fill = lf["fill"]
+        market = lf["market"]
+        midpoint = lf["midpoint"]
+
+        # Scale to match the smallest fill ratio across all legs
+        if min_ratio < 1.0 and lf["requested_size"] > 0:
+            scaled_size = lf["requested_size"] * min_ratio
+            if scaled_size < fill["filled_size"]:
+                fill = dict(fill)  # copy to avoid mutating
+                fill["filled_size"] = round(scaled_size, 6)
 
         fees = polymarket_fee(fill["vwap_price"], trade["side"]) * fill["filled_size"]
 
@@ -257,14 +315,17 @@ async def simulate_opportunity(
             avg_entry = pre_trade_cost / abs(existing_position)
             exit_price = Decimal(str(fill["vwap_price"]))
 
+            # Subtract exit fees proportional to close size
+            exit_fees = Decimal(str(fees)) * close_size / Decimal(str(fill["filled_size"])) if fill["filled_size"] > 0 else Decimal("0")
+
             if existing_position > 0:
-                realized = (exit_price - avg_entry) * close_size
+                realized = (exit_price - avg_entry) * close_size - exit_fees
             else:
-                realized = (avg_entry - exit_price) * close_size
+                realized = (avg_entry - exit_price) * close_size - exit_fees
 
             portfolio.realized_pnl += realized
             if realized > 0:
-                portfolio.mark_winner()
+                portfolio.winning_trades += 1
 
         if not result["executed"]:
             continue
@@ -411,6 +472,7 @@ async def snapshot_portfolio(session, portfolio: Portfolio, as_of: datetime) -> 
         unrealized_pnl=Decimal(str(snap_dict["unrealized_pnl"])),
         total_trades=snap_dict["total_trades"],
         winning_trades=snap_dict["winning_trades"],
+        settled_trades=snap_dict["settled_trades"],
     )
     session.add(ps)
     return snap_dict
@@ -462,8 +524,10 @@ async def run_backtest(
         if end_date:
             latest = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
 
-        # Load all market pairs (detected by the live system)
-        result = await session.execute(select(MarketPair))
+        # Load verified market pairs only
+        result = await session.execute(
+            select(MarketPair).where(MarketPair.verified == True)  # noqa: E712
+        )
         pairs = list(result.scalars().all())
 
     if not pairs:
@@ -720,8 +784,10 @@ async def cli_main():
     parser.add_argument("--max-position", type=float, default=100.0, help="Max position size")
     parser.add_argument("--output", type=str, default="backtest_report.json", help="Output JSON path")
     parser.add_argument("--no-clean", action="store_true", help="Don't clean previous results")
-    parser.add_argument("--authoritative", action="store_true",
-                        help="Settle from markets.resolved_outcome instead of price threshold")
+    parser.add_argument("--authoritative", action="store_true", default=True,
+                        help="Settle from markets.resolved_outcome (default: True)")
+    parser.add_argument("--heuristic", action="store_true",
+                        help="Use heuristic price-threshold settlement instead of authoritative")
     parser.add_argument("--start", type=str, default=None,
                         help="Start date (ISO format, e.g. 2026-01-01)")
     parser.add_argument("--end", type=str, default=None,
@@ -733,7 +799,7 @@ async def cli_main():
         initial_capital=args.capital,
         max_position_size=args.max_position,
         clean=not args.no_clean,
-        use_authoritative=args.authoritative,
+        use_authoritative=not args.heuristic,
         start_date=args.start,
         end_date=args.end,
     )

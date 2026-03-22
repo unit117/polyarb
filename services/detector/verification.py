@@ -46,14 +46,16 @@ def verify_pair(
         checks_passed += 1
 
     # ── Check 3: Price consistency — do prices agree with the constraint? ──
+    checks_total += 1
     if prices_a and prices_b:
-        checks_total += 1
         price_ok = _check_price_consistency(
             dependency_type, market_a, market_b, prices_a, prices_b,
             correlation, reasons,
         )
         if price_ok:
             checks_passed += 1
+    else:
+        reasons.append("price_check_skipped: missing price data for one or both markets")
 
     verified = checks_passed == checks_total
 
@@ -92,21 +94,38 @@ def _check_structural(
         return False
 
     if dependency_type == "mutual_exclusion":
-        # Both markets must be binary (Yes/No style) for mutual_exclusion to make sense
         outcomes_a = market_a.get("outcomes", [])
         outcomes_b = market_b.get("outcomes", [])
-        if len(outcomes_a) == 2 and len(outcomes_b) == 2:
-            return True
-        reasons.append("mutual_exclusion: non-binary markets")
-        return False
+        if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+            reasons.append("mutual_exclusion: non-binary markets")
+            return False
+        # Require same event — different events cannot be mutually exclusive
+        event_a = market_a.get("event_id")
+        event_b = market_b.get("event_id")
+        if event_a and event_b and event_a != event_b:
+            reasons.append("mutual_exclusion: different event_ids")
+            return False
+        # Identical questions suggest different instances of same recurring event
+        q_a = market_a.get("question", "")
+        q_b = market_b.get("question", "")
+        if q_a and q_b and q_a == q_b:
+            reasons.append("mutual_exclusion: identical questions suggest different event instances")
+            return False
+        return True
 
     if dependency_type == "implication":
         outcomes_a = market_a.get("outcomes", [])
         outcomes_b = market_b.get("outcomes", [])
-        if len(outcomes_a) >= 2 and len(outcomes_b) >= 2:
+        if len(outcomes_a) < 2 or len(outcomes_b) < 2:
+            reasons.append("implication: markets need at least 2 outcomes each")
+            return False
+        # Same event_id is strong evidence of valid implication
+        event_a = market_a.get("event_id")
+        event_b = market_b.get("event_id")
+        if event_a and event_b and event_a == event_b:
             return True
-        reasons.append("implication: markets need at least 2 outcomes each")
-        return False
+        # Different events: still allow but rely on price check (Check 3) for validation
+        return True
 
     if dependency_type == "conditional":
         # Must have correlation direction for binary pairs
@@ -169,19 +188,17 @@ def _check_price_consistency(
         total = sum(_f(prices_a.get(o, 0)) for o in outcomes_a) + sum(
             _f(prices_b.get(o, 0)) for o in outcomes_b
         )
-        if abs(total - 1.0) > PRICE_TOLERANCE:
-            # Still OK if it's a moderate violation — that's the arb opportunity
-            if abs(total - 1.0) > 0.50:
-                reasons.append(f"partition: price sum {total:.2f} too far from 1.0")
-                return False
+        if abs(total - 1.0) > 0.25:
+            reasons.append(f"partition: price sum {total:.2f} too far from 1.0")
+            return False
         return True
 
     if dependency_type == "implication":
         # For A→B, P(A) should be ≤ P(B) + tolerance
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if p_a > p_b + 0.50:
-            reasons.append(f"implication: P(A)={p_a:.2f} >> P(B)={p_b:.2f}, extreme violation")
+        if p_a > p_b + 0.15:
+            reasons.append(f"implication: P(A)={p_a:.2f} >> P(B)={p_b:.2f}, violates A→B")
             return False
         return True
 
@@ -212,6 +229,12 @@ def _check_price_consistency(
         if not (0.05 < p_a < 0.95) or not (0.05 < p_b < 0.95):
             reasons.append(
                 f"cross_platform: prices at extreme ({p_a:.2f}, {p_b:.2f})"
+            )
+            return False
+        # Cross-platform prices should be roughly similar — same event on different venues
+        if abs(p_a - p_b) > 0.25:
+            reasons.append(
+                f"cross_platform: price divergence too large ({p_a:.2f} vs {p_b:.2f}, diff={abs(p_a-p_b):.2f})"
             )
             return False
         return True

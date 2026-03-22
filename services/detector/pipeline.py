@@ -241,7 +241,9 @@ class DetectionPipeline:
 
                 # High similarity → auto-classify as cross_platform
                 # Moderate similarity → use LLM to verify
-                if similarity >= 0.92:
+                # Threshold 0.95 to avoid matching markets with same topic
+                # but different resolution criteria (dates, thresholds)
+                if similarity >= 0.95:
                     classification = {
                         "dependency_type": "cross_platform",
                         "confidence": 0.95,
@@ -388,6 +390,23 @@ class DetectionPipeline:
                 # Update stored constraint with fresh profit data
                 pair.constraint_matrix = fresh_constraint
 
+                # Re-verify pair with fresh prices (BT-018)
+                market_a_dict = _market_to_dict(market_a_obj)
+                market_b_dict = _market_to_dict(market_b_obj)
+                re_verification = verify_pair(
+                    dependency_type=pair.dependency_type,
+                    market_a=market_a_dict,
+                    market_b=market_b_dict,
+                    prices_a=prices_a,
+                    prices_b=prices_b,
+                    confidence=pair.confidence,
+                    correlation=correlation,
+                )
+                if not re_verification["verified"]:
+                    pair.verified = False
+                    logger.info("pair_unverified_on_rescan", pair_id=pair.id, reasons=re_verification["reasons"])
+                    continue
+
                 profit = fresh_constraint.get("profit_bound", 0.0)
 
                 if profit <= 0:
@@ -505,6 +524,24 @@ class DetectionPipeline:
                     venue_b=getattr(market_b_obj, "venue", "polymarket"),
                 )
                 pair.constraint_matrix = fresh_constraint
+
+                # Re-verify pair with fresh prices (BT-018)
+                market_a_dict = _market_to_dict(market_a_obj)
+                market_b_dict = _market_to_dict(market_b_obj)
+                re_verification = verify_pair(
+                    dependency_type=pair.dependency_type,
+                    market_a=market_a_dict,
+                    market_b=market_b_dict,
+                    prices_a=prices_a,
+                    prices_b=prices_b,
+                    confidence=pair.confidence,
+                    correlation=correlation,
+                )
+                if not re_verification["verified"]:
+                    pair.verified = False
+                    logger.info("pair_unverified_on_rescan", pair_id=pair.id, reasons=re_verification["reasons"])
+                    continue
+
                 profit = fresh_constraint.get("profit_bound", 0.0)
 
                 existing_opp = in_flight_opps.get(pair.id)

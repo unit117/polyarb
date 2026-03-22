@@ -534,6 +534,13 @@ Market B:
         raw = response.choices[0].message.content.strip()
         result = json.loads(raw)
 
+        # Calibrate LLM confidence: LLMs are systematically overconfident
+        # Cap at 0.85 and apply 0.8x discount so raw >= 0.875 is needed
+        # to pass the 0.70 verification threshold
+        raw_confidence = float(result.get("confidence", 0.0))
+        result["raw_llm_confidence"] = raw_confidence
+        result["confidence"] = min(raw_confidence * 0.80, 0.85)
+
         if result.get("dependency_type") not in (*DEPENDENCY_TYPES, "none"):
             logger.warning("llm_invalid_type", raw=raw)
             return {"dependency_type": "none", "confidence": 0.0, "reasoning": raw}

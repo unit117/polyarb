@@ -300,10 +300,13 @@ class SimulatorPipeline:
                     avg_entry = pre_trade_cost / abs(existing_position)
                     exit_price = Decimal(str(fill["vwap_price"]))
 
+                    # Subtract exit fees proportional to close size
+                    exit_fees = Decimal(str(fees)) * close_size / Decimal(str(fill["filled_size"])) if fill["filled_size"] > 0 else Decimal("0")
+
                     if existing_position > 0:
-                        realized = (exit_price - avg_entry) * close_size
+                        realized = (exit_price - avg_entry) * close_size - exit_fees
                     else:
-                        realized = (avg_entry - exit_price) * close_size
+                        realized = (avg_entry - exit_price) * close_size - exit_fees
 
                     self.portfolio.realized_pnl += realized
 
