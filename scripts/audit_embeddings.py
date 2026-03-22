@@ -302,6 +302,18 @@ def _check_outcome_consistency(
     oa = outcome_a.strip().lower()
     ob = outcome_b.strip().lower()
 
+    # For non-binary outcomes (not simple Yes/No), always use the constraint
+    # matrix if available — the Yes/No heuristics below don't apply to
+    # named outcomes like "Hornets"/"Bulls".
+    is_binary = oa in ("yes", "no") and ob in ("yes", "no")
+
+    if not is_binary:
+        if constraint_matrix and "matrix" in constraint_matrix:
+            return _outcome_in_feasibility(
+                outcome_a, outcome_b, constraint_matrix
+            )
+        return None  # Can't determine without matrix
+
     if dep_type == "mutual_exclusion":
         # Both can't be "yes" — at most one wins
         if oa == "yes" and ob == "yes":
@@ -318,8 +330,6 @@ def _check_outcome_consistency(
         # Exactly one outcome wins across the partition
         # For binary: one yes, one no
         if oa == ob:
-            # Both yes or both no — depends on partition structure
-            # With 2-market partition, both "yes" or both "no" is wrong
             return False
         return True
 
@@ -330,8 +340,6 @@ def _check_outcome_consistency(
         return True
 
     elif dep_type == "conditional":
-        # Conditional relationships are harder to validate from outcomes alone.
-        # We can check if the constraint matrix allows the observed combination.
         if constraint_matrix and "matrix" in constraint_matrix:
             return _outcome_in_feasibility(
                 outcome_a, outcome_b, constraint_matrix

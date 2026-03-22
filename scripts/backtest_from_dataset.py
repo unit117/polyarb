@@ -162,7 +162,7 @@ def load_markets_from_dataset(
             "token_ids": token_ids,
             "volume": Decimal(str(volume)) if volume else None,
             "liquidity": Decimal(str(liquidity)) if liquidity else None,
-            "active": False,  # Historical
+            "active": True,  # Must be True for detector visibility
             "end_date": end_date_val,
             "created_at": created_at,
             "resolved_outcome": resolved_outcome,
@@ -212,19 +212,37 @@ def load_trade_prices(
 ) -> dict[str, list[tuple]]:
     """Load trades for specific tokens and compute daily prices.
 
+    Joins trades with blocks table to get timestamps (trades.timestamp is
+    NULL in the Jon-Becker dataset — block_number → blocks.timestamp is
+    the only way to recover trade dates).
+
     Returns: {token_id: [(date, price), ...]}
     """
     import duckdb
 
     con = duckdb.connect(":memory:")
     trades_glob = f"{dataset_path}/polymarket/trades/trades_*.parquet"
+    blocks_glob = f"{dataset_path}/polymarket/blocks/blocks_*.parquet"
 
-    # For efficiency, load all trades and filter in DuckDB
-    # taker_asset_id maps to clob_token_id
+    # taker_asset_id = CLOB token ID (same namespace as markets.clob_token_ids)
     # price = maker_amount / taker_amount (both in base units)
     log.info("loading_trades", token_count=len(token_ids))
 
-    # Build a temp table with our token IDs for join
+    # Step 1: Materialize blocks into a DuckDB table ONCE.
+    # Without this, every chunk re-scans 785 block parquet files = OOM/timeout.
+    log.info("materializing_blocks_table")
+    con.execute(f"""
+        CREATE TABLE blocks AS
+        SELECT block_number, CAST(timestamp AS TIMESTAMP) as ts
+        FROM read_parquet('{blocks_glob}')
+        WHERE timestamp IS NOT NULL
+    """)
+    block_count = con.execute("SELECT count(*) FROM blocks").fetchone()[0]
+    log.info("blocks_materialized", count=block_count)
+
+    # Create index for fast joins
+    con.execute("CREATE INDEX idx_blocks_bn ON blocks(block_number)")
+
     token_list = list(token_ids)
 
     # Process in chunks to avoid memory issues
@@ -238,14 +256,14 @@ def load_trade_prices(
         try:
             rows = con.execute(f"""
                 SELECT
-                    taker_asset_id as token_id,
-                    DATE_TRUNC('day', TIMESTAMP '1970-01-01' + INTERVAL (timestamp) SECONDS) as trade_date,
-                    AVG(CAST(maker_amount AS DOUBLE) / NULLIF(CAST(taker_amount AS DOUBLE), 0)) as avg_price,
+                    t.taker_asset_id as token_id,
+                    DATE_TRUNC('day', b.ts) as trade_date,
+                    AVG(CAST(t.maker_amount AS DOUBLE) / NULLIF(CAST(t.taker_amount AS DOUBLE), 0)) as avg_price,
                     COUNT(*) as trade_count
-                FROM read_parquet('{trades_glob}')
-                WHERE taker_asset_id IN ({token_csv})
-                  AND taker_amount > 0
-                  AND timestamp IS NOT NULL
+                FROM read_parquet('{trades_glob}') t
+                JOIN blocks b ON t.block_number = b.block_number
+                WHERE t.taker_asset_id IN ({token_csv})
+                  AND t.taker_amount > 0
                 GROUP BY 1, 2
                 ORDER BY 1, 2
             """).fetchall()
@@ -280,6 +298,11 @@ async def insert_price_snapshots(
     # We need to combine per-token daily prices into per-market snapshots
 
     async with SessionFactory() as session:
+        # Clear stale snapshots to avoid duplicates on rerun
+        from sqlalchemy import text
+        await session.execute(text("TRUNCATE price_snapshots"))
+        await session.commit()
+
         # Get market IDs from DB
         from sqlalchemy import select
         result = await session.execute(

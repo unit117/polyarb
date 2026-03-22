@@ -127,6 +127,27 @@ services:
         limits:
           memory: 384M
 
+  # Dashboard pointed at backtest DB for viewing E1 results
+  dashboard-backtest:
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    env_file: .env
+    environment:
+      POSTGRES_DB: polyarb_backtest
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ["backtest"]
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
   # ── Backtest one-shot services (isolated database) ───────────
   # Step 1: create polyarb_backtest DB & copy markets/pairs from live
   backtest-setup:
@@ -166,7 +187,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 4G
 
   # Step 2: backfill 30 days of historical prices into backtest DB
   backfill:

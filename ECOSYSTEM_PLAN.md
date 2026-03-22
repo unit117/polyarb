@@ -2,8 +2,16 @@
 
 *Generated 2026-03-21 — Based on survey of 15+ open-source Polymarket/prediction-market repos*
 
-**Status as of 2026-03-22:**
-- E1: **In progress** — E1a0 ✅ (backtest bootstrap fixed), E1b ✅ (import script), E1d ✅ (authoritative settlement flag). E1a1 pending (dataset download). E1c pending (embedding validation).
+**Status as of 2026-03-22 (afternoon):**
+- E1: **In progress — end-to-end backtest not yet complete.**
+  - E1a0 ✅ Backtest bootstrap fixed (schema, venue column, dblink)
+  - E1a1 ✅ Dataset downloaded (51GB on NAS at `/volume1/docker/data/prediction-market-analysis/`)
+  - E1b ✅ `backtest_from_dataset.py` imports 5000 markets with embeddings + authoritative outcomes (99.9% resolution rate)
+  - E1b-prices ⏳ Trade price loading fixed (blocks JOIN, was broken due to NULL timestamps) — running now
+  - E1c ⏳ `audit_embeddings.py` extended with outcome validation, but only 15 pairs so far — detector cycles running to grow sample
+  - E1c-fix ✅ Audit accuracy fix for non-binary outcomes (uses constraint matrix instead of Yes/No heuristics)
+  - E1d ✅ `--authoritative` flag in `backtest.py` (settles from `resolved_outcome`)
+  - **Remaining:** price snapshots must land → run authoritative backtest → produce E1 report
 - E2: ⚠️ Partially superseded (custom Kalshi client built instead of pmxt) | E3-E6: Not started
 - All IMPROVEMENT_PLAN phases (1-6) are now complete, so E2/E5/E6 prerequisites are met.
 
