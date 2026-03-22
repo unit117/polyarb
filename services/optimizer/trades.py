@@ -69,8 +69,13 @@ def compute_trades(
                     "venue": venue,
                 })
         if candidates:
-            # Keep only the single best leg per market
-            trades.append(max(candidates, key=lambda t: t["edge"]))
+            if len(outcomes) <= 2:
+                # Binary markets: BUY Yes and SELL No are mirrors — keep only
+                # the best-edge leg to avoid paying double fees
+                trades.append(max(candidates, key=lambda t: t["edge"]))
+            else:
+                # Multi-outcome markets: keep all legs to preserve hedge structure
+                trades.extend(candidates)
 
     # Sanity cap: edges above MAX_EDGE are almost certainly misclassified
     # pairs, not real arbitrage.  Drop the entire opportunity.
@@ -111,7 +116,58 @@ def compute_trades(
     # this is the best proxy for execution cost.
     est_slippage = sum(t["market_price"] * 0.005 for t in trades)
 
+    # Note: this is a per-unit edge proxy (not size-aware dollar PnL).
+    # Downstream consumers (Kelly sizing, dashboard) should be aware of this.
     estimated_profit = max(raw_edge - est_fees - est_slippage, 0.0)
+
+    # BT-008: Reject opportunities where net edge after fees+slippage is
+    # too small to overcome execution friction. Minimum 0.5% net edge.
+    if estimated_profit < 0.005:
+        logger.info(
+            "trade_below_min_profit",
+            estimated_profit=round(estimated_profit, 6),
+            raw_edge=round(raw_edge, 6),
+            est_fees=round(est_fees, 6),
+            est_slippage=round(est_slippage, 6),
+        )
+        return {
+            "trades": [],
+            "estimated_profit": 0.0,
+            "theoretical_profit": round(theoretical_profit, 6),
+            "market_a_prices": {
+                "current": [round(float(x), 6) for x in p_a],
+                "optimal": [round(float(x), 6) for x in q_a],
+            },
+            "market_b_prices": {
+                "current": [round(float(x), 6) for x in p_b],
+                "optimal": [round(float(x), 6) for x in q_b],
+            },
+        }
+
+    # BT-009: Payout proof — verify the trade bundle has non-negative
+    # worst-case payoff across all feasible joint outcomes.
+    feasibility = result.feasibility_matrix
+    if feasibility and trades:
+        worst_payoff = _worst_case_payoff(trades, outcomes_a, outcomes_b, feasibility)
+        if worst_payoff < -0.01:  # Allow 1¢ tolerance for floating point
+            logger.warning(
+                "payout_proof_failed",
+                worst_payoff=round(worst_payoff, 6),
+                trades=len(trades),
+            )
+            return {
+                "trades": [],
+                "estimated_profit": 0.0,
+                "theoretical_profit": round(theoretical_profit, 6),
+                "market_a_prices": {
+                    "current": [round(float(x), 6) for x in p_a],
+                    "optimal": [round(float(x), 6) for x in q_a],
+                },
+                "market_b_prices": {
+                    "current": [round(float(x), 6) for x in p_b],
+                    "optimal": [round(float(x), 6) for x in q_b],
+                },
+            }
 
     return {
         "trades": trades,
@@ -126,3 +182,51 @@ def compute_trades(
             "optimal": [round(float(x), 6) for x in q_b],
         },
     }
+
+
+def _worst_case_payoff(
+    trades: list[dict],
+    outcomes_a: list[str],
+    outcomes_b: list[str],
+    feasibility: list[list[int]],
+) -> float:
+    """Compute worst-case payoff across all feasible joint outcomes.
+
+    For each feasible (outcome_a, outcome_b) combination, compute the
+    net PnL of the trade bundle assuming that combination resolves.
+    Returns the minimum payoff (worst case).
+    """
+    worst = float("inf")
+
+    for i, oa in enumerate(outcomes_a):
+        for j, ob in enumerate(outcomes_b):
+            if not feasibility[i][j]:
+                continue  # infeasible outcome — skip
+
+            # Compute PnL for each trade leg under this resolution
+            total_pnl = 0.0
+            for t in trades:
+                outcome = t["outcome"]
+                side = t["side"]
+                price = t["market_price"]
+
+                # Determine settlement: 1.0 if this outcome wins, 0.0 otherwise
+                if t["market"] == "A":
+                    settlement = 1.0 if outcome == oa else 0.0
+                else:
+                    settlement = 1.0 if outcome == ob else 0.0
+
+                # Per-share PnL
+                if side == "BUY":
+                    # Paid price, receive settlement
+                    pnl = settlement - price
+                else:
+                    # Received price, pay settlement
+                    pnl = price - settlement
+
+                total_pnl += pnl
+
+            if total_pnl < worst:
+                worst = total_pnl
+
+    return worst if worst != float("inf") else 0.0

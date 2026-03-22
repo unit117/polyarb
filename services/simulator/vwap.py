@@ -69,18 +69,31 @@ def compute_vwap(
 
 
 def _midpoint_fill(midpoint: float, side: str, size: float) -> dict:
-    """Fallback fill at midpoint with estimated slippage."""
-    # Apply a small estimated slippage when no book data
-    estimated_slippage = 0.005
+    """Fallback fill at midpoint with size-dependent estimated slippage.
+
+    Without order book data, slippage should scale with order size to
+    approximate market impact. Base slippage of 0.5% for small orders,
+    scaling up for larger fills.
+    """
+    base_slippage = 0.005
+    # Size impact: additional 0.1% per 10 shares above 10
+    size_impact = max(0, (size - 10)) * 0.0001
+    estimated_slippage = min(base_slippage + size_impact, 0.05)  # cap at 5%
+
     if side == "BUY":
         vwap_price = midpoint * (1 + estimated_slippage)
     else:
         vwap_price = midpoint * (1 - estimated_slippage)
 
+    # Partial fill for large orders: assume liquidity caps at ~50 shares
+    # without order book data
+    max_fill = max(size, 50.0) if midpoint > 0 else size
+    filled_size = min(size, max_fill)
+
     return {
         "vwap_price": round(vwap_price, 6),
-        "slippage": estimated_slippage,
-        "filled_size": size,
+        "slippage": round(estimated_slippage, 6),
+        "filled_size": round(filled_size, 6),
         "levels_consumed": 0,
-        "partial_fill": False,
+        "partial_fill": filled_size < size,
     }
