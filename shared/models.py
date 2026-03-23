@@ -6,6 +6,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -20,6 +21,16 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 TIMESTAMPTZ = DateTime(timezone=True)
+LIVE_ORDER_STATUSES = (
+    "dry_run",
+    "submitted",
+    "filled",
+    "partially_filled",
+    "cancelled",
+    "rejected",
+    "expired",
+    "settled",
+)
 
 
 class Base(DeclarativeBase):
@@ -192,4 +203,66 @@ class PortfolioSnapshot(Base):
 
     __table_args__ = (
         Index("ix_portfolio_snapshots_timestamp", timestamp.desc()),
+    )
+
+
+class LiveOrder(Base):
+    __tablename__ = "live_orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("arbitrage_opportunities.id"), nullable=True, index=True
+    )
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id"), index=True)
+    outcome: Mapped[str] = mapped_column(String)
+    token_id: Mapped[str] = mapped_column(String)
+    side: Mapped[str] = mapped_column(String)
+    requested_size: Mapped[Decimal] = mapped_column(Numeric)
+    requested_price: Mapped[Decimal] = mapped_column(Numeric)
+    status: Mapped[str] = mapped_column(String, default="dry_run")
+    dry_run: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    venue_order_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ, server_default=func.now()
+    )
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    opportunity: Mapped[Optional["ArbitrageOpportunity"]] = relationship()
+    market: Mapped["Market"] = relationship()
+    fills: Mapped[list["LiveFill"]] = relationship(back_populates="live_order")
+
+    __table_args__ = (
+        Index("ix_live_orders_status", "status"),
+        Index("ix_live_orders_submitted_at", submitted_at.desc()),
+        CheckConstraint(
+            "status IN ('dry_run','submitted','filled','partially_filled','cancelled','rejected','expired','settled')",
+            name="ck_live_orders_status",
+        ),
+    )
+
+
+class LiveFill(Base):
+    __tablename__ = "live_fills"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    live_order_id: Mapped[int] = mapped_column(
+        ForeignKey("live_orders.id"), index=True
+    )
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id"), index=True)
+    outcome: Mapped[str] = mapped_column(String)
+    side: Mapped[str] = mapped_column(String)
+    venue_fill_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    fill_size: Mapped[Decimal] = mapped_column(Numeric)
+    fill_price: Mapped[Decimal] = mapped_column(Numeric)
+    fees: Mapped[Decimal] = mapped_column(Numeric, server_default="0")
+    filled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ, server_default=func.now()
+    )
+
+    live_order: Mapped["LiveOrder"] = relationship(back_populates="fills")
+    market: Mapped["Market"] = relationship()
+
+    __table_args__ = (
+        Index("ix_live_fills_filled_at", filled_at.desc()),
+        Index("ix_live_fills_venue_fill_id", "venue_fill_id", unique=True),
     )
