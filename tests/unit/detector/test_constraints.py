@@ -32,14 +32,16 @@ class TestImplicationMatrix:
         assert m[1][0] == 0  # A=No, B=Yes: infeasible (B implies A)
         assert m[1][1] == 1  # A=No, B=No: feasible
 
-    def test_default_direction_is_a_implies_b(self):
+    def test_missing_direction_returns_unconstrained(self):
         result = build_constraint_matrix(
             "implication", ["Yes", "No"], ["Yes", "No"],
             prices_a={"Yes": 0.8, "No": 0.2},
             prices_b={"Yes": 0.6, "No": 0.4},
         )
         m = result["matrix"]
-        assert m[0][1] == 0  # default a_implies_b
+        # No direction → unconstrained (all ones), no false arb signal
+        assert m == [[1, 1], [1, 1]]
+        assert result["profit_bound"] == 0.0
 
     def test_profit_bound_a_implies_b_when_pa_gt_pb(self):
         result = build_constraint_matrix(

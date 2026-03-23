@@ -37,9 +37,10 @@ class TestComputeVWAP:
         assert result["filled_size"] == pytest.approx(50.0)
 
     def test_no_order_book_falls_back_to_midpoint(self):
-        result = compute_vwap(None, "BUY", 100, midpoint=0.50)
+        # Use small size (< 10 threshold) so base slippage = 0.5%, no size impact
+        result = compute_vwap(None, "BUY", 5, midpoint=0.50)
         assert result["vwap_price"] == pytest.approx(0.50 * 1.005, abs=0.001)
-        assert result["slippage"] == 0.005
+        assert result["slippage"] == pytest.approx(0.005)
         assert result["levels_consumed"] == 0
 
     def test_empty_levels_falls_back(self):
@@ -54,8 +55,9 @@ class TestComputeVWAP:
         assert result["slippage"] == pytest.approx(expected_slippage, abs=0.0001)
 
     def test_sell_midpoint_fallback(self):
+        # size=100 → base 0.5% + (100-10)*0.01% = 1.4% slippage
         result = compute_vwap(None, "SELL", 100, midpoint=0.50)
-        assert result["vwap_price"] == pytest.approx(0.50 * 0.995, abs=0.001)
+        assert result["vwap_price"] == pytest.approx(0.50 * (1 - 0.014), abs=0.001)
 
     def test_dict_format_levels(self):
         """Test with dict-formatted order book levels."""
