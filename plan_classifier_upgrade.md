@@ -567,11 +567,36 @@ All steps implemented, deployed to NAS, and evaluated. 12 files changed, +1100 l
 
 Spot-check found resolution vectors missed "singular winner" ME (e.g., "Will X win Golden Boot?" / "Will Y win Golden Boot?"). Added explicit singular-winner constraint to prompt. Verified 6/6 test cases. Reduced false none from 60→49 (-18%).
 
+### Backtest Results (2026-03-23, post-reclassification)
+
+**Reclassification:** 597 pairs reclassified via OpenRouter `openai/gpt-4.1-mini`. 443 pairs changed (74%):
+- 312 ME→none (false positive cleanup)
+- 70 ME→partition (sports same-game pairs correctly typed)
+- 35 ME→implication (threshold/deadline pairs correctly typed)
+- Sources: 194 llm_vector, 398 llm_label, 5 rule_based
+
+**Backtest comparison (489 days, 2024-09-24 → 2026-01-25, $10K capital):**
+
+| Metric | E1 Pre-fix | E1 Post-fix | **New Classifier** |
+|--------|-----------|-------------|-------------------|
+| Return | -86.6% | +0.19% | **+1.72%** |
+| Final value | $1,339 | $10,019 | **$10,172** |
+| Realized PnL | — | $18.92 | **$175.90** |
+| Total trades | 11,457 | 128 | **392** |
+| Settlements | 8,679 | 41 | **379** |
+| Sharpe ratio | — | — | **6.52** |
+| Max drawdown | — | — | **0.09%** |
+
+**Infrastructure notes:**
+- Added `scripts/reclassify_pairs.py` with `--model`, `--base-url`, `--api-key` CLI args for easy model switching
+- OpenRouter API key configured on NAS for future M2.7 shadow comparison
+- Backtest optimizer now rebuilds constraint matrix from vectors/type with fresh prices each day (was reading stale metadata shell)
+
 ### Remaining known issues (deferred)
 - Temporal deadline implications not caught by rule-based or vectors (e.g., "token launch by Sep" / "by Dec") — rare
 - ~2-3 borderline primary election pairs where "advance" may or may not be ME
-- MiniMax M2.7 shadow comparison not yet run (OpenRouter key not configured in .env)
-- Backtest re-run with new classifier deferred to next session
+- Multi-outcome markets (non-binary) fall through resolution vectors as "degenerate" — team names not Yes/No
+- MiniMax M2.7 shadow comparison ready to run (OpenRouter key now configured)
 
 ---
 
@@ -591,6 +616,7 @@ Spot-check found resolution vectors missed "singular winner" ME (e.g., "Will X w
 | `services/detector/verification.py` | ME without shared event_id = non-verifiable, vector consistency check, tighter price threshold |
 | `services/detector/pipeline.py` | Wire new classification path, store vectors, uncertainty filter, shadow mode, preserve `constraint_matrix["type"]` |
 | `services/optimizer/pipeline.py` | Update conditional skip logic to evaluate vector-derived conditionals with non-trivial matrices |
+| `scripts/reclassify_pairs.py` | New — batch reclassification with multi-model support (--model, --base-url, --api-key) |
 | `research_github_polymarket.md` | Reference — GitHub project research notes |
 
 ---
