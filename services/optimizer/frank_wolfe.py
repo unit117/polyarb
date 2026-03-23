@@ -7,6 +7,7 @@ by minimizing D_KL(q || p) subject to q ∈ M.
 If q* ≠ p, the gap reveals arbitrage: the market prices are inconsistent
 with the logical constraints between markets.
 """
+from __future__ import annotations
 
 import numpy as np
 import structlog

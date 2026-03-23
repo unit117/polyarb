@@ -9,6 +9,7 @@ where M is the marginal polytope defined by:
 
 This is the core inner loop of Frank-Wolfe — called once per iteration.
 """
+from __future__ import annotations
 
 import numpy as np
 import structlog

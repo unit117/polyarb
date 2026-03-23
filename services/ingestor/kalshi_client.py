@@ -5,6 +5,7 @@ to stay consistent with the GammaClient/ClobClient pattern and avoid
 the SDK's aiohttp dependency. Authentication follows Kalshi's
 RSA-SHA256 signing scheme.
 """
+from __future__ import annotations
 
 import asyncio
 import base64

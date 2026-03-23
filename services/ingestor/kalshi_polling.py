@@ -1,4 +1,5 @@
 """Kalshi market polling — mirrors MarketPoller pattern for Kalshi venue."""
+from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone

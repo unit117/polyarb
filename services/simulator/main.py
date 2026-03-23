@@ -62,26 +62,54 @@ async def _restore_portfolio() -> Portfolio:
         for t in trades.scalars().all():
             key = f"{t.market_id}:{t.outcome}"
             size_d = Decimal(str(t.size))
+            price_d = Decimal(str(t.vwap_price))
             if t.side in ("SETTLE", "PURGE"):
                 portfolio.cost_basis.pop(key, None)
                 replay_positions.pop(key, None)
             elif t.side == "BUY":
-                portfolio.cost_basis[key] = portfolio.cost_basis.get(
-                    key, Decimal("0")
-                ) + size_d * Decimal(str(t.vwap_price))
+                current = replay_positions.get(key, Decimal("0"))
+                if current < 0:
+                    # Covering a short — reduce credit-received basis
+                    cover_size = min(size_d, abs(current))
+                    remainder = size_d - cover_size
+                    if key in portfolio.cost_basis and current != 0:
+                        avg_credit = portfolio.cost_basis[key] / abs(current)
+                        portfolio.cost_basis[key] -= cover_size * avg_credit
+                    new_pos = current + size_d
+                    if new_pos == 0:
+                        portfolio.cost_basis.pop(key, None)
+                    elif new_pos > 0:
+                        # Flipped to long — basis is cost of the long portion
+                        portfolio.cost_basis[key] = remainder * price_d
+                    # else: still short, just reduced
+                else:
+                    # Opening/adding to a long
+                    portfolio.cost_basis[key] = portfolio.cost_basis.get(
+                        key, Decimal("0")
+                    ) + size_d * price_d
                 replay_positions[key] = replay_positions.get(key, Decimal("0")) + size_d
             elif t.side == "SELL":
-                pos_before = replay_positions.get(key, Decimal("0"))
-                if pos_before > 0 and key in portfolio.cost_basis:
-                    # Closing/reducing a long — reduce cost basis proportionally
-                    avg = portfolio.cost_basis[key] / pos_before
-                    portfolio.cost_basis[key] -= size_d * avg
-                elif pos_before <= 0:
+                current = replay_positions.get(key, Decimal("0"))
+                if current > 0:
+                    # Closing/reducing a long (possibly flipping to short)
+                    close_size = min(size_d, current)
+                    remainder = size_d - close_size
+                    if key in portfolio.cost_basis and current > 0:
+                        avg_entry = portfolio.cost_basis[key] / current
+                        portfolio.cost_basis[key] -= close_size * avg_entry
+                    new_pos = current - size_d
+                    if new_pos == 0:
+                        portfolio.cost_basis.pop(key, None)
+                    elif new_pos < 0:
+                        # Flipped to short — basis is credit for the short portion
+                        portfolio.cost_basis[key] = remainder * price_d
+                    # else: still long, just reduced
+                elif current <= 0:
                     # Opening/increasing a short — cost basis tracks credit received
                     portfolio.cost_basis[key] = portfolio.cost_basis.get(
                         key, Decimal("0")
-                    ) + size_d * Decimal(str(t.vwap_price))
-                replay_positions[key] = pos_before - size_d
+                    ) + size_d * price_d
+                replay_positions[key] = current - size_d
 
         # Clean up cost basis for positions that no longer exist
         for key in list(portfolio.cost_basis.keys()):
