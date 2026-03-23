@@ -14,33 +14,15 @@ from typing import Optional
 import openai
 import structlog
 
+from services.detector.prompt_specs import (
+    LABEL_PROMPT_SPEC_V1,
+    RESOLUTION_VECTOR_PROMPT_SPEC_V1,
+    render_generic_prompt,
+)
+
 logger = structlog.get_logger()
 
 DEPENDENCY_TYPES = ("implication", "partition", "mutual_exclusion", "conditional", "cross_platform")
-
-CLASSIFIER_SYSTEM_PROMPT = """You classify the logical dependency between two prediction markets.
-
-Given two markets with their questions, descriptions, and outcomes, determine:
-1. dependency_type: one of "implication", "partition", "mutual_exclusion", "conditional", or "none"
-2. confidence: float 0-1
-3. correlation: "positive" or "negative" (REQUIRED when dependency_type is "conditional")
-
-Definitions:
-- implication: If market A resolves Yes, market B must resolve a specific way (or vice versa)
-- partition: Markets A and B together form an exhaustive partition of the same event space
-- mutual_exclusion: Markets A and B cannot both resolve Yes simultaneously
-- conditional: Market A's outcome probabilities are logically constrained by market B's outcome
-  - positive correlation: A=Yes makes B=Yes more likely (e.g., "Win Iowa" → "Win Election")
-  - negative correlation: A=Yes makes B=Yes less likely (e.g., "Team A wins" → "Team B wins")
-
-CRITICAL — price-threshold markets:
-- "X above $A" and "X above $B" where A > B: this is IMPLICATION, not mutual_exclusion.
-  If X is above $134, it is necessarily also above $128. Both CAN resolve Yes simultaneously.
-- "X above $A" and "X above $B" on DIFFERENT dates or time windows: these are INDEPENDENT (none).
-  The price can be above $128 on Monday and below $128 on Tuesday.
-- Only use mutual_exclusion when the events truly cannot BOTH happen (e.g., "Team A wins" vs "Team B wins" in the same game).
-
-Respond ONLY with valid JSON: {"dependency_type": "...", "confidence": 0.XX, "correlation": "positive"|"negative"|null, "reasoning": "..."}"""
 
 
 def _check_same_event(market_a: dict, market_b: dict) -> dict | None:
@@ -550,23 +532,12 @@ async def classify_llm(
     market_b: dict,
 ) -> dict:
     """Use LLM to classify the dependency between two markets."""
-    user_prompt = f"""Market A:
-- Question: {market_a['question']}
-- Description: {market_a.get('description', 'N/A')}
-- Outcomes: {market_a.get('outcomes', [])}
-
-Market B:
-- Question: {market_b['question']}
-- Description: {market_b.get('description', 'N/A')}
-- Outcomes: {market_b.get('outcomes', [])}"""
+    rendered_prompt = render_generic_prompt(LABEL_PROMPT_SPEC_V1, market_a, market_b)
 
     try:
         response = await client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=list(rendered_prompt.messages),
             temperature=0.1,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
             max_tokens=1024 if "minimax" in model else 256,
@@ -600,6 +571,8 @@ Market B:
         # Strip think tags in case label-based fallback hits a reasoning model
         raw = _strip_think_tags(raw)
         result = json.loads(raw)
+        result["prompt_version"] = rendered_prompt.version
+        result["prompt_adapter"] = rendered_prompt.adapter
 
         # Calibrate LLM confidence: LLMs are systematically overconfident
         # Cap at 0.85 and apply 0.8x discount so raw >= 0.875 is needed
@@ -631,28 +604,14 @@ Market B:
             "llm_classification",
             dep_type=result["dependency_type"],
             confidence=result.get("confidence", 0),
+            prompt_version=rendered_prompt.version,
+            prompt_adapter=rendered_prompt.adapter,
         )
         return result
 
     except (json.JSONDecodeError, KeyError, openai.APIError) as e:
         logger.error("llm_classification_failed", error=str(e))
         return {"dependency_type": "none", "confidence": 0.0, "reasoning": str(e)}
-
-
-RESOLUTION_VECTOR_PROMPT = """You are a prediction market analyst. Given two binary markets A and B, determine ALL logically valid outcome combinations.
-
-Rules:
-- Each market resolves to exactly one outcome.
-- List every combination of (A_outcome, B_outcome) that is logically possible.
-- Only exclude a combination if it is LOGICALLY IMPOSSIBLE — not merely unlikely.
-- Correlation or probability does NOT make a combination invalid.
-- IMPORTANT: If both markets ask whether different entities will achieve the SAME singular outcome (e.g., "Will X win the award?" and "Will Y win the award?", or "Will X lead the league in stat?" and "Will Y lead the league in stat?"), then both cannot be Yes simultaneously — only one entity can win/lead. Exclude (Yes, Yes) in that case.
-
-Market A: "{question_a}" — Outcomes: {outcomes_a}
-Market B: "{question_b}" — Outcomes: {outcomes_b}
-
-Return strictly valid JSON with no additional text:
-{{"valid_outcomes": [{{"a": "Yes", "b": "Yes"}}, {{"a": "Yes", "b": "No"}}, ...], "reasoning": "<one sentence explaining the logical relationship>", "confidence": <float 0.0-1.0>}}"""
 
 
 def _strip_think_tags(raw: str) -> str:
@@ -750,17 +709,16 @@ async def classify_llm_resolution(
     if len(outcomes_a) != 2 or len(outcomes_b) != 2:
         return None
 
-    prompt = RESOLUTION_VECTOR_PROMPT.format(
-        question_a=market_a["question"],
-        outcomes_a=outcomes_a,
-        question_b=market_b["question"],
-        outcomes_b=outcomes_b,
+    rendered_prompt = render_generic_prompt(
+        RESOLUTION_VECTOR_PROMPT_SPEC_V1,
+        {**market_a, "outcomes": outcomes_a},
+        {**market_b, "outcomes": outcomes_b},
     )
 
     try:
         kwargs = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": list(rendered_prompt.messages),
             "temperature": 0.0,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
             "max_tokens": 2048 if "minimax" in model else 512,
@@ -822,6 +780,8 @@ async def classify_llm_resolution(
             "reasoning": result.get("reasoning", ""),
             "valid_outcomes": valid_outcomes,
             "classification_source": "llm_vector",
+            "prompt_version": rendered_prompt.version,
+            "prompt_adapter": rendered_prompt.adapter,
         }
 
         logger.info(
@@ -829,6 +789,8 @@ async def classify_llm_resolution(
             dep_type=derived["dependency_type"],
             n_valid=len(valid_outcomes),
             direction=derived.get("implication_direction"),
+            prompt_version=rendered_prompt.version,
+            prompt_adapter=rendered_prompt.adapter,
         )
         return classification
 
