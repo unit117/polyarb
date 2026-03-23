@@ -128,6 +128,7 @@ async def main() -> None:
                     settings.classifier_model,
                     market_a_dict,
                     market_b_dict,
+                    prompt_adapter=settings.classifier_prompt_adapter,
                 )
                 if llm_result["dependency_type"] != "none":
                     old_type = pair.dependency_type

@@ -49,6 +49,7 @@ async def main() -> None:
         similarity_top_k=settings.similarity_top_k,
         batch_size=settings.detector_batch_size,
         classifier_model=settings.classifier_model,
+        classifier_prompt_adapter=settings.classifier_prompt_adapter,
     )
 
     logger.info(
@@ -57,6 +58,7 @@ async def main() -> None:
         top_k=settings.similarity_top_k,
         interval=settings.detection_interval_seconds,
         classifier_model=settings.classifier_model,
+        classifier_prompt_adapter=settings.classifier_prompt_adapter,
     )
 
     # Run detection on three triggers:

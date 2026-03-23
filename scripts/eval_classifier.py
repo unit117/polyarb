@@ -269,6 +269,7 @@ async def _classify_with_model(
     model: str,
     pair: dict,
     use_vectors: bool = True,
+    prompt_adapter: str = "auto",
 ) -> dict:
     """Classify a single pair with a given model. Returns classification dict."""
     from services.detector.classifier import (
@@ -288,12 +289,24 @@ async def _classify_with_model(
     }
 
     if use_vectors:
-        result = await classify_llm_resolution(client, model, market_a, market_b)
+        result = await classify_llm_resolution(
+            client,
+            model,
+            market_a,
+            market_b,
+            prompt_adapter=prompt_adapter,
+        )
         if result:
             return result
 
     # Fallback to label-based
-    result = await classify_llm(client, model, market_a, market_b)
+    result = await classify_llm(
+        client,
+        model,
+        market_a,
+        market_b,
+        prompt_adapter=prompt_adapter,
+    )
     result["classification_source"] = "llm_label"
     return result
 
@@ -303,6 +316,8 @@ async def evaluate(
     compare_model: str = "",
     compare_base_url: str = "",
     use_vectors: bool = True,
+    prompt_adapter: str = "auto",
+    compare_prompt_adapter: str = "auto",
 ) -> None:
     """Evaluate classifier accuracy against hand-labeled ground truth."""
     if not LABELED_PAIRS_PATH.exists():
@@ -331,9 +346,18 @@ async def evaluate(
             **({"base_url": base_url} if base_url else {}),
         )
 
-        print(f"\n--- Re-classifying with {model} (vectors={use_vectors}) ---")
+        print(
+            f"\n--- Re-classifying with {model} "
+            f"(vectors={use_vectors}, prompt_adapter={prompt_adapter}) ---"
+        )
         for p in labeled:
-            result = await _classify_with_model(client, model, p, use_vectors)
+            result = await _classify_with_model(
+                client,
+                model,
+                p,
+                use_vectors,
+                prompt_adapter=prompt_adapter,
+            )
             p[f"reclassified_{model}"] = result.get("dependency_type", "none")
             p[f"reclassified_{model}_source"] = result.get("classification_source", "")
 
@@ -347,10 +371,17 @@ async def evaluate(
             **({"base_url": compare_base_url} if compare_base_url else {}),
         )
 
-        print(f"\n--- Shadow comparison with {compare_model} ---")
+        print(
+            f"\n--- Shadow comparison with {compare_model} "
+            f"(prompt_adapter={compare_prompt_adapter}) ---"
+        )
         for p in labeled:
             result = await _classify_with_model(
-                compare_client, compare_model, p, use_vectors
+                compare_client,
+                compare_model,
+                p,
+                use_vectors,
+                prompt_adapter=compare_prompt_adapter,
             )
             p[f"shadow_{compare_model}"] = result.get("dependency_type", "none")
 
@@ -436,7 +467,11 @@ def _score_reclassifications(
     print(f"  Independent-pair FPR: {fp_indep}/{indep_total} ({fpr:.1f}%)")
 
 
-async def autolabel(model: str = "gpt-4.1-mini", use_vectors: bool = True) -> None:
+async def autolabel(
+    model: str = "gpt-4.1-mini",
+    use_vectors: bool = True,
+    prompt_adapter: str = "auto",
+) -> None:
     """Auto-label pairs using the full 3-tier classify_pair pipeline.
 
     Runs rule-based → resolution vectors → LLM fallback on each pair and
@@ -452,7 +487,10 @@ async def autolabel(model: str = "gpt-4.1-mini", use_vectors: bool = True) -> No
         sys.exit(1)
 
     pairs = json.loads(LABELED_PAIRS_PATH.read_text())
-    print(f"Auto-labeling {len(pairs)} pairs with {model} (vectors={use_vectors})")
+    print(
+        f"Auto-labeling {len(pairs)} pairs with {model} "
+        f"(vectors={use_vectors}, prompt_adapter={prompt_adapter})"
+    )
 
     from services.detector.classifier import classify_pair
 
@@ -484,7 +522,13 @@ async def autolabel(model: str = "gpt-4.1-mini", use_vectors: bool = True) -> No
         }
 
         try:
-            result = await classify_pair(client, model, market_a, market_b)
+            result = await classify_pair(
+                client,
+                model,
+                market_a,
+                market_b,
+                prompt_adapter=prompt_adapter,
+            )
             label = result.get("dependency_type", "none")
             source = result.get("classification_source", "unknown")
             reasoning = result.get("reasoning", "")
@@ -535,10 +579,28 @@ def main():
     eval_p.add_argument("--compare", default="", help="Shadow comparison model")
     eval_p.add_argument("--compare-base-url", default="", help="Base URL for comparison model")
     eval_p.add_argument("--no-vectors", action="store_true", help="Disable resolution vectors")
+    eval_p.add_argument(
+        "--prompt-adapter",
+        choices=["auto", "openai_generic", "claude_xml"],
+        default="auto",
+        help="Prompt adapter for the primary model",
+    )
+    eval_p.add_argument(
+        "--compare-prompt-adapter",
+        choices=["auto", "openai_generic", "claude_xml"],
+        default="auto",
+        help="Prompt adapter for the comparison model",
+    )
 
     auto_p = sub.add_parser("autolabel", help="Auto-label pairs using 3-tier pipeline")
     auto_p.add_argument("--model", default="gpt-4.1-mini", help="Model to classify with")
     auto_p.add_argument("--no-vectors", action="store_true", help="Disable resolution vectors")
+    auto_p.add_argument(
+        "--prompt-adapter",
+        choices=["auto", "openai_generic", "claude_xml"],
+        default="auto",
+        help="Prompt adapter for the autolabel model",
+    )
 
     args = parser.parse_args()
 
@@ -550,11 +612,14 @@ def main():
             compare_model=args.compare,
             compare_base_url=args.compare_base_url,
             use_vectors=not args.no_vectors,
+            prompt_adapter=args.prompt_adapter,
+            compare_prompt_adapter=args.compare_prompt_adapter,
         ))
     elif args.command == "autolabel":
         asyncio.run(autolabel(
             model=args.model,
             use_vectors=not args.no_vectors,
+            prompt_adapter=args.prompt_adapter,
         ))
     else:
         parser.print_help()
