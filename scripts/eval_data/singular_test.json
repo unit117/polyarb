@@ -1,0 +1,226 @@
+[
+  {
+    "pair_id": 19747,
+    "market_a_id": 109675,
+    "market_b_id": 109688,
+    "question_a": "Will Tai Baribo win the 2026 MLS Golden Boot?",
+    "question_b": "Will Marco Pa\u0161ali\u0107 win the 2026 MLS Golden Boot?",
+    "description_a": "This market will resolve to the player who wins the 2026 MLS Golden Boot.\n\nIn the event of a tie, this market will resolve according to the official winner as determined by MLS rules. If multiple winners are announced then this market will resolve to the player whose listed last name comes first alphabetically.\n\nIf the 2026 MLS season is cancelled, postponed after December 31, 2026 ET, or there is otherwise no winner declared within that timeframe, this market will resolve to \u201cOther\u201d.\n\nThe resolution source for this market will be official information from Major League Soccer; however, a consensus of credible reporting may also be used.",
+    "description_b": "This market will resolve to the player who wins the 2026 MLS Golden Boot.\n\nIn the event of a tie, this market will resolve according to the official winner as determined by MLS rules. If multiple winners are announced then this market will resolve to the player whose listed last name comes first alphabetically.\n\nIf the 2026 MLS season is cancelled, postponed after December 31, 2026 ET, or there is otherwise no winner declared within that timeframe, this market will resolve to \u201cOther\u201d.\n\nThe resolution source for this market will be official information from Major League Soccer; however, a consensus of credible reporting may also be used.",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.9,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since both markets are independent binary outcomes about different players winning the same award, all combinations are logically possible unless explicitly stated otherwise.",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 5264,
+    "market_a_id": 101045,
+    "market_b_id": 101048,
+    "question_a": "Will Kawhi Leonard lead the NBA in points during the 2025\u201326 NBA season?",
+    "question_b": "Will LeBron James lead the NBA in points during the 2025\u201326 NBA season?",
+    "description_a": "This market will resolve according to the player that finishes the 2025\u201326 NBA regular season with the highest points per-game average of any qualified player.\n\nIn the event of a tie for the highest points per-game average, this market will resolve in favor of the player who appeared in the greater number of games. If the tied players also played the same number of games, the market will resolve in favor of the player whose listed last name comes first alphabetically.\n\nQualification for inclusion in official NBA leaderboards (such as minimum games or statistical thresholds) will be determined according to NBA rules and applied exactly as reflected in the official leaderboard.\n\nThe resolution source will be the NBA (NBA.com/stats).",
+    "description_b": "This market will resolve according to the player that finishes the 2025\u201326 NBA regular season with the highest points per-game average of any qualified player.\n\nIn the event of a tie for the highest points per-game average, this market will resolve in favor of the player who appeared in the greater number of games. If the tied players also played the same number of games, the market will resolve in favor of the player whose listed last name comes first alphabetically.\n\nQualification for inclusion in official NBA leaderboards (such as minimum games or statistical thresholds) will be determined according to NBA rules and applied exactly as reflected in the official leaderboard.\n\nThe resolution source will be the NBA (NBA.com/stats).",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.85,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Both players can logically either lead or not lead in points independently, so all combinations are possible.",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 17622,
+    "market_a_id": 109800,
+    "market_b_id": 109802,
+    "question_a": "Will George Kirby win the 2026 AL Cy Young Award?",
+    "question_b": "Will Kevin Gausman win the 2026 AL Cy Young Award?",
+    "description_a": "This market will resolve to the player who wins the 2026 American League Cy Young Award.\n\nIn the event of a tie, this market will resolve according to the official winner as determined by MLB rules. If multiple winners are announced then this market will resolve to the player whose listed last name comes first alphabetically.\n\nIf the 2026 MLB season is cancelled, postponed after December 31, 2026, 11:59 PM ET, or there is otherwise no winner declared within that timeframe, this market will resolve to \u201cOther\u201d.\n\nThe resolution source for this market will be official information from Major League Baseball; however, a consensus of credible reporting may also be used.",
+    "description_b": "This market will resolve to the player who wins the 2026 American League Cy Young Award.\n\nIn the event of a tie, this market will resolve according to the official winner as determined by MLB rules. If multiple winners are announced then this market will resolve to the player whose listed last name comes first alphabetically.\n\nIf the 2026 MLB season is cancelled, postponed after December 31, 2026, 11:59 PM ET, or there is otherwise no winner declared within that timeframe, this market will resolve to \u201cOther\u201d.\n\nThe resolution source for this market will be official information from Major League Baseball; however, a consensus of credible reporting may also be used.",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.9,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since the AL Cy Young Award can be shared or multiple awards can exist in a year, all combinations of wins and losses for George Kirby and Kevin Gausman are logically possible.",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 15420,
+    "market_a_id": 101068,
+    "market_b_id": 101086,
+    "question_a": "Will Karl-Anthony Towns lead the NBA in rebounds during the 2025\u201326 NBA season?",
+    "question_b": "Will Chet Holmgren lead the NBA in rebounds during the 2025\u201326 NBA season?",
+    "description_a": "This market will resolve according to the player that finishes the 2025\u201326 NBA regular season with the highest rebounds per-game average of any qualified player.\n\nIn the event of a tie for the highest rebounds per-game average, this market will resolve in favor of the player who appeared in the greater number of games. If the tied players also played the same number of games, the market will resolve in favor of the player whose listed last name comes first alphabetically.\n\nQualification for inclusion in official NBA leaderboards (such as minimum games or statistical thresholds) will be determined according to NBA rules and applied exactly as reflected in the official leaderboard.\n\nThe resolution source will be the NBA (NBA.com/stats).",
+    "description_b": "This market will resolve according to the player that finishes the 2025\u201326 NBA regular season with the highest rebounds per-game average of any qualified player.\n\nIn the event of a tie for the highest rebounds per-game average, this market will resolve in favor of the player who appeared in the greater number of games. If the tied players also played the same number of games, the market will resolve in favor of the player whose listed last name comes first alphabetically.\n\nQualification for inclusion in official NBA leaderboards (such as minimum games or statistical thresholds) will be determined according to NBA rules and applied exactly as reflected in the official leaderboard.\n\nThe resolution source will be the NBA (NBA.com/stats).",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.85,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since only one player can lead the NBA in rebounds, both cannot be 'Yes' simultaneously, but without explicit exclusivity stated, all combinations remain logically possible.",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 14177,
+    "market_a_id": 120392,
+    "market_b_id": 120405,
+    "question_a": "Will Fernando Alonso win the 2026 F1 Japanese Grand Prix?",
+    "question_b": "Will Lewis Hamilton win the 2026 F1 Japanese Grand Prix?",
+    "description_a": "This is a polymarket on the winner of the 2026 F1 Japanese Grand Prix, scheduled for Mar 29, 2026.\n\nIf the 2026 F1 Japanese Grand Prix is canceled or rescheduled to a date after Apr 5, 2026, this market will resolve to \u201cOther.\u201d\n\nThis market will resolve in favor of the driver who is officially listed in first place in the Final Classification published by the FIA following the conclusion of the race. The Final Classification is typically released 30-60 minutes after the race ends and includes any applied time penalties and official adjustments.\n\nDisqualifications or changes made after the publication of the Final Classification will not affect market resolution. The timing of the podium ceremony does not determine the result for this market \u2014 only the FIA's published classification will be used to resolve this market.\n\nThe resolution source will be the official Formula 1 website and a consensus of credible sports news reporting.",
+    "description_b": "This is a polymarket on the winner of the 2026 F1 Japanese Grand Prix, scheduled for Mar 29, 2026.\n\nIf the 2026 F1 Japanese Grand Prix is canceled or rescheduled to a date after Apr 5, 2026, this market will resolve to \u201cOther.\u201d\n\nThis market will resolve in favor of the driver who is officially listed in first place in the Final Classification published by the FIA following the conclusion of the race. The Final Classification is typically released 30-60 minutes after the race ends and includes any applied time penalties and official adjustments.\n\nDisqualifications or changes made after the publication of the Final Classification will not affect market resolution. The timing of the podium ceremony does not determine the result for this market \u2014 only the FIA's published classification will be used to resolve this market.\n\nThe resolution source will be the official Formula 1 website and a consensus of credible sports news reporting.",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.9,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since only one driver can win the race, both cannot win simultaneously, but all other combinations are logically possible.",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 11248,
+    "market_a_id": 103869,
+    "market_b_id": 103871,
+    "question_a": "Will Gary L. Rogge win the 2026 Nebraska Governor Republican primary election?",
+    "question_b": "Will John Walz win the 2026 Nebraska Governor Republican primary election?",
+    "description_a": "This market will resolve according to the winner of the Republican Primary for Governor of Nebraska, scheduled to take place on May 12, 2026. Resolution will be based on the overall winner of the primary, including any potential second round or run-off.\n\nIf no 2026 Nebraska Gubernatorial Republican Primary takes place, this market will resolve to \u201cOther.\u201d\n\nThe resolution source for this market will be the first official announcement of the results from the Nebraska Republican Party; however, an overwhelming consensus of credible reporting may suffice.",
+    "description_b": "This market will resolve according to the winner of the Republican Primary for Governor of Nebraska, scheduled to take place on May 12, 2026. Resolution will be based on the overall winner of the primary, including any potential second round or run-off.\n\nIf no 2026 Nebraska Gubernatorial Republican Primary takes place, this market will resolve to \u201cOther.\u201d\n\nThe resolution source for this market will be the first official announcement of the results from the Nebraska Republican Party; however, an overwhelming consensus of credible reporting may suffice.",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.9,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since both markets are about winning the same single election, it is logically impossible for both to win simultaneously, so the combination (a: Yes, b: Yes) is invalid; all other combinations are log",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 17871,
+    "market_a_id": 99546,
+    "market_b_id": 99564,
+    "question_a": "Will Australia win the 2026 FIFA World Cup?",
+    "question_b": "Will Croatia win the 2026 FIFA World Cup?",
+    "description_a": "This market will resolve according to the national team that wins the 2026 FIFA World Cup.\n\nIf at any point it becomes impossible for this team to win the FIFA World Cup based on the rules of FIFA (e.g., they are eliminated in the knockout stage), this market will resolve immediately to \u201cNo\u201d.\n\nIf the 2026 FIFA World Cup is permanently canceled or has not been completed by October 13, 2026, 11:59 PM this market will resolve to \u201cOther\u201d.\n\nThe primary resolution source will be official information from FIFA, however, a consensus of credible reporting may also be used.",
+    "description_b": "This market will resolve according to the national team that wins the 2026 FIFA World Cup.\n\nIf at any point it becomes impossible for this team to win the FIFA World Cup based on the rules of FIFA (e.g., they are eliminated in the knockout stage), this market will resolve immediately to \u201cNo\u201d.\n\nIf the 2026 FIFA World Cup is permanently canceled or has not been completed by October 13, 2026, 11:59 PM this market will resolve to \u201cOther\u201d.\n\nThe primary resolution source will be official information from FIFA, however, a consensus of credible reporting may also be used.",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.9,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since both markets are independent binary outcomes about different teams winning, all combinations are logically possible because multiple winners are not logically excluded by the market definitions ",
+    "autolabel_confidence": 0.9
+  },
+  {
+    "pair_id": 18627,
+    "market_a_id": 101797,
+    "market_b_id": 101813,
+    "question_a": "Will Matt Duchene win the 2025\u20132026 NHL Maurice 'Rocket' Richard Trophy?",
+    "question_b": "Will Adam Fantilli win the 2025\u20132026 NHL Maurice 'Rocket' Richard Trophy?",
+    "description_a": "This market will resolve according to the player who is awarded the 2025\u201326 NHL Maurice 'Rocket' Richard Trophy.\n\nIf the listed player is not announced as a finalist for the 2025\u201326 Maurice 'Rocket' Richard Trophy, this market will resolve to \"No\".\n\nThe primary resolution source for this market will be official information from the NHL. However, a consensus of credible reporting may also be used.",
+    "description_b": "This market will resolve according to the player who is awarded the 2025\u201326 NHL Maurice 'Rocket' Richard Trophy.\n\nIf the listed player is not announced as a finalist for the 2025\u201326 Maurice 'Rocket' Richard Trophy, this market will resolve to \"No\".\n\nThe primary resolution source for this market will be official information from the NHL. However, a consensus of credible reporting may also be used.",
+    "outcomes_a": [
+      "Yes",
+      "No"
+    ],
+    "outcomes_b": [
+      "Yes",
+      "No"
+    ],
+    "event_id_a": null,
+    "event_id_b": null,
+    "current_dependency_type": "mutual_exclusion",
+    "current_confidence": 0.85,
+    "verified": false,
+    "ground_truth_type": "none",
+    "correct": false,
+    "notes": "",
+    "autolabel_source": "llm_vector",
+    "autolabel_reasoning": "Since the markets are independent binary outcomes and there is no logical rule preventing both, either, or neither player from winning, all combinations are logically possible.",
+    "autolabel_confidence": 0.9
+  }
+]
