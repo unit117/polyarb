@@ -1,16 +1,9 @@
-"""Live trading executor — mirrors paper trades to Polymarket CLOB API.
+"""Thin Polymarket venue adapter for live order submission and reconciliation."""
 
-Safety-first design:
-- Off by default (live_trading_enabled=False)
-- Dry-run mode logs orders without submitting (live_trading_dry_run=True)
-- Min-edge filter skips low-conviction trades
-- Max daily loss auto-disables live trading
-- Max position size hard cap
-- Balance check before every order
-"""
+from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal
 
 import structlog
 
@@ -18,179 +11,231 @@ logger = structlog.get_logger()
 
 
 class LiveExecutor:
-    """Execute real trades on Polymarket via CLOB API."""
+    """Submit and inspect real trades on Polymarket via the official SDK."""
 
     def __init__(
         self,
-        api_key: str,
         private_key: str,
         chain_id: int,
-        bankroll: float,
-        max_position_size: float,
-        scale_factor: float,
-        min_edge: float,
-        max_daily_loss_pct: float,
         dry_run: bool = True,
+        host: str = "https://clob.polymarket.com",
+        signature_type: int = 0,
+        funder: str | None = None,
     ):
-        self.api_key = api_key
         self.private_key = private_key
         self.chain_id = chain_id
-        self.bankroll = Decimal(str(bankroll))
-        self.max_position_size = Decimal(str(max_position_size))
-        self.scale_factor = Decimal(str(scale_factor))
-        self.min_edge = Decimal(str(min_edge))
-        self.max_daily_loss_pct = Decimal(str(max_daily_loss_pct))
         self.dry_run = dry_run
-
-        # State tracking
-        self.daily_pnl = Decimal("0")
-        self.daily_reset_date: str = ""
-        self.disabled = False
+        self.host = host
+        self.signature_type = signature_type
+        self.funder = funder
         self.client = None
+        self.ready = False
+        self.account_address: str | None = None
 
     async def initialize(self) -> None:
-        """Initialize the CLOB client. Requires py-clob-client."""
-        if not self.api_key or not self.private_key:
-            logger.warning("live_executor_no_credentials", msg="API key or private key not set")
-            self.disabled = True
+        """Initialize the authenticated CLOB client."""
+        if self.dry_run:
+            self.ready = True
+            logger.info(
+                "live_executor_initialized",
+                dry_run=True,
+                submission_mode="dry_run",
+            )
+            return
+
+        if not self.private_key:
+            logger.warning(
+                "live_executor_no_credentials",
+                msg="Private key not set",
+            )
+            self.ready = False
             return
 
         try:
             from py_clob_client.client import ClobClient
 
             self.client = ClobClient(
-                host="https://clob.polymarket.com",
-                key=self.private_key,
+                self.host,
                 chain_id=self.chain_id,
-                creds={"apiKey": self.api_key},
+                key=self.private_key,
+                signature_type=self.signature_type,
+                funder=self.funder or None,
             )
-            logger.info("live_executor_initialized", dry_run=self.dry_run)
+            creds = await asyncio.to_thread(self.client.create_or_derive_api_creds)
+            await asyncio.to_thread(self.client.set_api_creds, creds)
+            self.account_address = self.client.get_address()
+            self.ready = True
+            logger.info(
+                "live_executor_initialized",
+                dry_run=False,
+                submission_mode="live",
+                account_address=self.account_address,
+            )
         except ImportError:
             logger.warning(
                 "live_executor_missing_dependency",
                 msg="Install py-clob-client: pip install py-clob-client",
             )
-            self.disabled = True
+            self.ready = False
         except Exception:
             logger.exception("live_executor_init_failed")
-            self.disabled = True
+            self.ready = False
 
-    def _check_daily_reset(self) -> None:
-        """Reset daily PnL tracker at midnight UTC."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if today != self.daily_reset_date:
-            self.daily_pnl = Decimal("0")
-            self.daily_reset_date = today
-            # Re-enable if previously auto-disabled by daily loss
-            if self.disabled:
-                logger.info("live_executor_daily_reset", msg="Re-enabling after daily reset")
-                self.disabled = False
-
-    def _check_kill_switch(self) -> bool:
-        """Return True if trading should be blocked."""
-        if self.disabled:
-            return True
-
-        self._check_daily_reset()
-
-        # Max daily loss check
-        if self.bankroll > 0:
-            loss_pct = abs(min(self.daily_pnl, Decimal("0"))) / self.bankroll * 100
-            if loss_pct >= self.max_daily_loss_pct:
-                logger.warning(
-                    "live_executor_daily_loss_limit",
-                    daily_pnl=float(self.daily_pnl),
-                    loss_pct=float(loss_pct),
-                )
-                self.disabled = True
-                return True
-
-        return False
-
-    async def execute_trade(
+    async def submit_order(
         self,
         token_id: str,
         side: str,
         size: float,
         price: float,
-        estimated_profit: float,
     ) -> dict:
-        """Execute a live trade (or log in dry-run mode).
-
-        Args:
-            token_id: Polymarket CLOB token ID
-            side: "BUY" or "SELL"
-            size: Paper trade size (will be scaled by scale_factor)
-            price: Target price
-            estimated_profit: Estimated profit from optimizer
-
-        Returns:
-            Result dict with status and details.
-        """
-        if self._check_kill_switch():
-            return {"status": "blocked", "reason": "kill_switch"}
-
-        # Min edge filter
-        if Decimal(str(estimated_profit)) < self.min_edge:
-            return {"status": "skipped", "reason": "below_min_edge"}
-
-        # Scale size from paper to live
-        live_size = Decimal(str(size)) * self.scale_factor
-
-        # Hard cap
-        position_value = live_size * Decimal(str(price))
-        if position_value > self.max_position_size:
-            live_size = self.max_position_size / Decimal(str(price))
-
-        if live_size <= Decimal("0.01"):
-            return {"status": "skipped", "reason": "size_too_small"}
-
+        """Submit an immediate-or-cancel style order via the venue client."""
         trade_info = {
             "token_id": token_id,
             "side": side,
-            "size": float(live_size),
+            "size": size,
             "price": price,
-            "estimated_profit": estimated_profit,
         }
 
-        if self.dry_run:
-            logger.info("live_executor_dry_run", **trade_info)
-            return {"status": "dry_run", **trade_info}
+        if not self.ready or not self.client:
+            return {"status": "rejected", "reason": "client_not_initialized"}
 
-        if not self.client:
-            return {"status": "error", "reason": "client_not_initialized"}
-
-        # Submit order via CLOB API
         try:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
             from py_clob_client.order_builder.constants import BUY as CLOB_BUY, SELL as CLOB_SELL
 
             order_side = CLOB_BUY if side == "BUY" else CLOB_SELL
-
-            order = self.client.create_and_post_order(
+            amount = size * price if side == "BUY" else size
+            order_args = MarketOrderArgs(
                 token_id=token_id,
-                price=price,
-                size=float(live_size),
+                amount=amount,
                 side=order_side,
+                price=price,
+                order_type=OrderType.FAK,
+            )
+            signed_order = await asyncio.to_thread(
+                self.client.create_market_order,
+                order_args,
+            )
+            order = await asyncio.to_thread(
+                self.client.post_order,
+                signed_order,
+                OrderType.FAK,
             )
 
             logger.info("live_executor_order_submitted", order=order, **trade_info)
-
             return {
                 "status": "submitted",
                 "order": order,
                 **trade_info,
             }
+        except Exception as exc:
+            logger.exception("live_executor_order_failed", error=str(exc), **trade_info)
+            return {"status": "rejected", "reason": str(exc), **trade_info}
 
-        except Exception as e:
-            logger.exception("live_executor_order_failed", error=str(e), **trade_info)
-            return {"status": "error", "reason": str(e), **trade_info}
+    async def fetch_order_state(
+        self,
+        order_id: str,
+        *,
+        token_id: str,
+        submitted_at: datetime,
+    ) -> dict:
+        """Fetch the latest order and trade state for a submitted live order."""
+        if not self.ready or not self.client:
+            return {"order": None, "trades": []}
 
-    def kill(self) -> None:
-        """Emergency kill switch — instantly disable all live trading."""
-        self.disabled = True
-        logger.warning("live_executor_killed", msg="Live trading manually disabled")
+        order = None
+        try:
+            order = await asyncio.to_thread(self.client.get_order, order_id)
+        except Exception:
+            logger.exception("live_executor_get_order_failed", order_id=order_id)
 
-    def enable(self) -> None:
-        """Re-enable live trading after kill switch."""
-        self.disabled = False
-        logger.info("live_executor_enabled", msg="Live trading re-enabled")
+        if not order:
+            try:
+                from py_clob_client.clob_types import OpenOrderParams
+
+                open_orders = await asyncio.to_thread(
+                    self.client.get_orders,
+                    OpenOrderParams(id=order_id),
+                )
+                if open_orders:
+                    order = open_orders[0]
+            except Exception:
+                logger.exception("live_executor_get_open_order_failed", order_id=order_id)
+
+        trades = await self._fetch_related_trades(
+            order_id=order_id,
+            token_id=token_id,
+            submitted_at=submitted_at,
+            order=order,
+        )
+        return {"order": order, "trades": trades}
+
+    async def _fetch_related_trades(
+        self,
+        *,
+        order_id: str,
+        token_id: str,
+        submitted_at: datetime,
+        order: dict | None,
+    ) -> list[dict]:
+        try:
+            from py_clob_client.clob_types import TradeParams
+        except Exception:
+            return []
+
+        trade_ids = _extract_trade_ids(order)
+        trades: list[dict] = []
+
+        if trade_ids:
+            for trade_id in trade_ids:
+                try:
+                    rows = await asyncio.to_thread(
+                        self.client.get_trades,
+                        TradeParams(id=trade_id),
+                    )
+                    trades.extend(rows or [])
+                except Exception:
+                    logger.exception(
+                        "live_executor_get_trade_failed",
+                        order_id=order_id,
+                        trade_id=trade_id,
+                    )
+            return trades
+
+        after = int(submitted_at.replace(tzinfo=timezone.utc).timestamp()) - 60
+        try:
+            rows = await asyncio.to_thread(
+                self.client.get_trades,
+                TradeParams(asset_id=token_id, after=after),
+            )
+        except Exception:
+            logger.exception(
+                "live_executor_get_trades_failed",
+                order_id=order_id,
+                token_id=token_id,
+            )
+            return []
+
+        return [row for row in rows or [] if _trade_matches_order(row, order_id)]
+
+
+def _extract_trade_ids(order: dict | None) -> list[str]:
+    if not isinstance(order, dict):
+        return []
+    trade_ids = order.get("associate_trades") or order.get("associated_trades") or []
+    return [str(trade_id) for trade_id in trade_ids if trade_id is not None]
+
+
+def _trade_matches_order(trade: dict, order_id: str) -> bool:
+    if not isinstance(trade, dict):
+        return False
+    if str(trade.get("taker_order_id") or "") == order_id:
+        return True
+
+    maker_orders = trade.get("maker_orders") or []
+    for maker_order in maker_orders:
+        if not isinstance(maker_order, dict):
+            continue
+        if str(maker_order.get("order_id") or maker_order.get("orderID") or "") == order_id:
+            return True
+    return False

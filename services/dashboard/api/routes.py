@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import case, cast, func, select, desc, Float
 from sqlalchemy.orm import joinedload, load_only
 
 from shared.config import settings
 from shared.db import SessionFactory
+from shared.live_runtime import set_live_kill_switch
 from shared.models import (
     ArbitrageOpportunity,
     Market,
@@ -17,20 +18,13 @@ from shared.models import (
     PortfolioSnapshot,
     PriceSnapshot,
 )
+from services.dashboard.api.live_status import build_live_status
 
 router = APIRouter()
 
-# Live executor reference (set by main.py if live trading is enabled)
-_live_executor = None
-
-
-def set_live_executor(executor) -> None:
-    global _live_executor
-    _live_executor = executor
-
 
 @router.get("/stats")
-async def get_stats(source: str | None = None):
+async def get_stats(request: Request, source: str | None = None):
     """System-wide statistics, optionally filtered by source (paper/live)."""
     async with SessionFactory() as session:
         markets = await session.scalar(
@@ -76,6 +70,8 @@ async def get_stats(source: str | None = None):
             "total_positions": len(latest_portfolio.positions) if latest_portfolio.positions else 0,
         }
 
+    live_status = await build_live_status(request.app.state.redis, SessionFactory)
+
     return {
         "active_markets": markets,
         "market_pairs": pairs,
@@ -83,9 +79,9 @@ async def get_stats(source: str | None = None):
         "total_trades": trades,
         "portfolio": portfolio,
         "live_trading": {
-            "enabled": settings.live_trading_enabled,
-            "active": _live_executor is not None and not _live_executor.disabled,
-            "dry_run": settings.live_trading_dry_run,
+            "enabled": live_status["enabled"],
+            "active": live_status["active"],
+            "dry_run": live_status["dry_run"],
         },
     }
 
@@ -752,33 +748,20 @@ def _align_series(
 
 
 @router.get("/live/status")
-async def get_live_status():
+async def get_live_status(request: Request):
     """Live trading status."""
-    return {
-        "configured": bool(settings.live_trading_api_key),
-        "enabled": settings.live_trading_enabled,
-        "dry_run": settings.live_trading_dry_run,
-        "active": _live_executor is not None and not _live_executor.disabled,
-        "bankroll": settings.live_trading_bankroll,
-        "max_position_size": settings.live_trading_max_position_size,
-        "scale_factor": settings.live_trading_scale_factor,
-        "min_edge": settings.live_trading_min_edge,
-    }
+    return await build_live_status(request.app.state.redis, SessionFactory)
 
 
 @router.post("/live/kill")
-async def kill_live_trading():
+async def kill_live_trading(request: Request):
     """Emergency kill switch for live trading."""
-    if _live_executor:
-        _live_executor.kill()
-        return {"status": "killed", "msg": "Live trading disabled"}
-    return {"status": "not_active", "msg": "No live executor running"}
+    await set_live_kill_switch(request.app.state.redis, True)
+    return {"status": "killed", "msg": "Live trading disabled"}
 
 
 @router.post("/live/enable")
-async def enable_live_trading():
+async def enable_live_trading(request: Request):
     """Re-enable live trading after kill switch."""
-    if _live_executor:
-        _live_executor.enable()
-        return {"status": "enabled", "msg": "Live trading re-enabled"}
-    return {"status": "not_active", "msg": "No live executor running"}
+    await set_live_kill_switch(request.app.state.redis, False)
+    return {"status": "enabled", "msg": "Live trading re-enabled"}

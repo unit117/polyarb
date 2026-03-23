@@ -7,3 +7,4 @@ pydantic>=2.0
 pydantic-settings>=2.0
 structlog>=24.0
 pgvector>=0.3
+py-clob-client>=0.34

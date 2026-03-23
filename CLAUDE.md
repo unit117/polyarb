@@ -169,3 +169,4 @@ Ports 5432, 5433, 6379, 8080 are already in use on NAS — do not reassign.
 - Becker dataset default `--max-markets 5000` only yields ~597 pairs — increase for broader coverage
 - Pair verification was tightened after E1 catastrophe: mutual_exclusion requires same event_id + no identical question text
 - Only first outcome's order book is fetched even when `FETCH_ORDER_BOOKS=true`
+- Live kill switch (`polyarb:live_kill_switch`) is stored in Redis — it does not survive a Redis restart unless RDB/AOF persistence is enabled. Must be manually re-set after infrastructure restarts if it was active.

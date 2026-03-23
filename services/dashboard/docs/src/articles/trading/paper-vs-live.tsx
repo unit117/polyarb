@@ -41,6 +41,7 @@ export default function PaperVsLive() {
         <li>All circuit breakers must pass before each trade</li>
         <li>Kill switch checked in Redis before every execution</li>
         <li>Separate portfolio tracking (<Code>source = "live"</Code>)</li>
+        <li>Dry-run writes audit intent only; real live ledger rows are fill-driven</li>
         <li>Live trading is disabled by default and must be explicitly enabled</li>
       </UL>
 
@@ -56,6 +57,23 @@ export default function PaperVsLive() {
         Both modes run independently — paper trading continues even when live trading is active.
       </P>
 
+      <H2>Live Audit Trail</H2>
+
+      <P>
+        Live trading now has three separate layers of records:
+      </P>
+
+      <UL>
+        <li><Code>live_orders</Code> for intent and order lifecycle</li>
+        <li><Code>live_fills</Code> for reconciled venue-confirmed fills</li>
+        <li><Code>paper_trades(source = "live")</Code> for dashboard-facing live ledger rows derived only from confirmed fills and settlements</li>
+      </UL>
+
+      <P>
+        In dry-run mode, only <Code>live_orders</Code> rows are written with <Code>status = "dry_run"</Code>.
+        No fake live fills or live ledger trades are created.
+      </P>
+
       <Table
         headers={["Feature", "Paper", "Live"]}
         rows={[
@@ -63,7 +81,7 @@ export default function PaperVsLive() {
           ["Risk", "None — virtual money", "Real capital at risk"],
           ["Fees", "Modeled accurately", "Actual venue fees"],
           ["Slippage", "VWAP estimate from orderbook", "Actual execution slippage"],
-          ["Portfolio tracking", "paper_trades table", "paper_trades with source=live"],
+          ["Portfolio tracking", "paper_trades with source=paper", "live_orders + live_fills + paper_trades with source=live"],
           ["Circuit breakers", "Applied", "Applied (stricter)"],
           ["Default state", "Always active", "Disabled by default"],
         ]}

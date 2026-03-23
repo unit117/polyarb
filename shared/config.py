@@ -91,11 +91,15 @@ class Settings(BaseSettings):
     live_trading_api_key: str = ""
     live_trading_private_key: str = ""
     live_trading_chain_id: int = 137
+    live_trading_signature_type: int = 0
+    live_trading_funder: str = ""
     live_trading_bankroll: float = 100.0
     live_trading_max_position_size: float = 10.0
-    live_trading_scale_factor: float = 0.01
     live_trading_min_edge: float = 0.03
     live_trading_max_daily_loss_pct: float = 10.0
+    live_snapshot_interval_seconds: int = 300
+    live_status_heartbeat_seconds: int = 30
+    live_reconcile_interval_seconds: int = 5
 
     @property
     def database_url(self) -> str:
