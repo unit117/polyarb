@@ -117,7 +117,7 @@ Add two new tables via Alembic. Start minimal — expand columns in later migrat
 - `side`
 - `requested_size`
 - `requested_price`
-- `status` — `dry_run`, `submitted`, `filled`, `partially_filled`, `cancelled`, `rejected`, `expired`
+- `status` — `dry_run`, `submitted`, `filled`, `partially_filled`, `cancelled`, `rejected`, `expired`, `settled`
 - `dry_run` — boolean
 - `venue_order_id` — nullable, set on submission
 - `submitted_at`
@@ -518,7 +518,8 @@ Make the UI and docs match reality.
    - `live_orders` populated
    - `live_fills` empty in dry-run
    - `paper_trades(source="live") = 0`
-   - `portfolio_snapshots(source="live") = 0`
+   - `portfolio_snapshots(source="live")` populated, with recent timestamps advancing every ~5 minutes
+   - live snapshots show no live positions and no live fills, but still reflect the live portfolio bankroll and current mark-to-market timestamp
 4. Turn off dry-run with a tiny bankroll
 5. Verify:
    - live fills create `live_fills`
