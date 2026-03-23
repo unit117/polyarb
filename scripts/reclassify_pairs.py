@@ -73,7 +73,6 @@ async def reclassify_all(
         "reclassified": 0,
         "unchanged": 0,
         "errors": 0,
-        "unverified": 0,
         "changes": [],  # list of {pair_id, old_type, new_type, old_source, new_source}
     }
     source_counts = Counter()
@@ -241,7 +240,15 @@ async def main():
     parser.add_argument("--model", type=str, default=None, help="Model override (e.g. openai/gpt-4.1-mini, minimax/minimax-m2.7)")
     parser.add_argument("--base-url", type=str, default=None, help="API base URL (e.g. https://openrouter.ai/api/v1)")
     parser.add_argument("--api-key", type=str, default=None, help="API key override (for OpenRouter etc)")
+    parser.add_argument("--force", action="store_true", help="Required to run against the live DB (safety guard)")
     args = parser.parse_args()
+
+    # Safety: refuse to mutate the live DB without --force
+    if not args.dry_run and settings.postgres_db != "polyarb_backtest" and not args.force:
+        print("ERROR: Refusing to write to live DB without --force flag.")
+        print(f"  Current DB: {settings.postgres_db}")
+        print("  Use --dry-run to preview changes, or --force to proceed.")
+        sys.exit(1)
 
     stats = await reclassify_all(
         dry_run=args.dry_run,
@@ -261,7 +268,6 @@ async def main():
     print(f"Unchanged:      {stats['unchanged']}")
     print(f"Skipped:        {stats['skipped']}")
     print(f"Errors:         {stats['errors']}")
-    print(f"Unverified:     {stats['unverified']}")
 
     if stats["changes"]:
         print(f"\n{'─' * 60}")

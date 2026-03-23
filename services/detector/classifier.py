@@ -568,10 +568,37 @@ Market B:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=256,
+            # Reasoning models (M2.7) need more tokens for mandatory <think> block
+            max_tokens=1024 if "minimax" in model else 256,
         )
 
-        raw = response.choices[0].message.content.strip()
+        msg = response.choices[0].message
+        content = msg.content
+        if not content:
+            # Reasoning-only response (e.g. M2.7 exhausted token budget on <think>).
+            # Fail closed — reasoning text is CoT, not a valid JSON answer.
+            extras = getattr(msg, "model_extra", {}) or {}
+            has_reasoning = bool(
+                getattr(msg, "reasoning_content", None)
+                or getattr(msg, "reasoning", None)
+                or extras.get("reasoning")
+                or extras.get("reasoning_content")
+            )
+            try:
+                dump = response.model_dump() if hasattr(response, "model_dump") else repr(response)
+            except Exception:
+                dump = repr(response)
+            logger.warning(
+                "llm_empty_content_debug",
+                model=model,
+                has_reasoning=has_reasoning,
+                finish_reason=response.choices[0].finish_reason,
+                response_dump=str(dump)[:2000],
+            )
+            return {"dependency_type": "none", "confidence": 0.0, "reasoning": "empty response (reasoning only)" if has_reasoning else "empty response"}
+        raw = content.strip()
+        # Strip think tags in case label-based fallback hits a reasoning model
+        raw = _strip_think_tags(raw)
         result = json.loads(raw)
 
         # Calibrate LLM confidence: LLMs are systematically overconfident
@@ -735,14 +762,39 @@ async def classify_llm_resolution(
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
-            "max_tokens": 512,
+            # Reasoning models (M2.7) need more tokens for mandatory <think> block
+            "max_tokens": 2048 if "minimax" in model else 512,
         }
         # Use JSON response format when model supports it
         if "minimax" not in model:
             kwargs["response_format"] = {"type": "json_object"}
 
         response = await client.chat.completions.create(**kwargs)
-        raw = response.choices[0].message.content.strip()
+        msg = response.choices[0].message
+        content = msg.content
+        # Reasoning-only response (e.g. M2.7 exhausted token budget on <think>):
+        # fail closed — CoT text is not a valid JSON answer.
+        if not content:
+            extras = getattr(msg, "model_extra", {}) or {}
+            has_reasoning = bool(
+                getattr(msg, "reasoning_content", None)
+                or getattr(msg, "reasoning", None)
+                or extras.get("reasoning")
+                or extras.get("reasoning_content")
+            )
+            try:
+                dump = response.model_dump() if hasattr(response, "model_dump") else repr(response)
+            except Exception:
+                dump = repr(response)
+            logger.warning(
+                "resolution_vector_empty_debug",
+                model=model,
+                has_reasoning=has_reasoning,
+                finish_reason=response.choices[0].finish_reason,
+                response_dump=str(dump)[:2000],
+            )
+            return None
+        raw = content.strip()
 
         # Strip <think> tags (MiniMax M2.7 mandatory reasoning)
         cleaned = _strip_think_tags(raw)
