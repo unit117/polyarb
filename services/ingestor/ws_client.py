@@ -4,6 +4,7 @@ Connects to wss://ws-subscriptions-clob.polymarket.com/ws/market and
 converts price_change / last_trade_price events into PriceSnapshot rows,
 publishing CHANNEL_SNAPSHOT_CREATED exactly like the polling path.
 """
+from __future__ import annotations
 
 import asyncio
 import json

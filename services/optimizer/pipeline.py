@@ -1,4 +1,5 @@
 """Optimizer pipeline: loads opportunities, runs Frank-Wolfe, persists results."""
+from __future__ import annotations
 
 from decimal import Decimal
 

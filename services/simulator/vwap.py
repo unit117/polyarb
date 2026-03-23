@@ -3,6 +3,7 @@
 Computes the realistic fill price by walking through order book levels,
 accounting for the depth consumed at each level.
 """
+from __future__ import annotations
 
 from decimal import Decimal
 

@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -33,18 +34,18 @@ class Market(Base):
     venue: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default="polymarket"
     )
-    event_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    event_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     question: Mapped[str] = mapped_column(Text)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     outcomes: Mapped[dict] = mapped_column(JSONB)
     token_ids: Mapped[dict] = mapped_column(JSONB)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    end_date: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
-    volume: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    liquidity: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    embedding: Mapped[list | None] = mapped_column(Vector(384), nullable=True)
-    resolved_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
-    resolved_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    end_date: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
+    volume: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
+    liquidity: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
+    embedding: Mapped[Optional[list]] = mapped_column(Vector(384), nullable=True)
+    resolved_outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, server_default=func.now()
     )
@@ -75,8 +76,8 @@ class PriceSnapshot(Base):
         TIMESTAMPTZ, server_default=func.now()
     )
     prices: Mapped[dict] = mapped_column(JSONB)
-    order_book: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    midpoints: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    order_book: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    midpoints: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     market: Mapped["Market"] = relationship(back_populates="snapshots")
 
@@ -97,10 +98,10 @@ class MarketPair(Base):
     market_b_id: Mapped[int] = mapped_column(ForeignKey("markets.id"))
     dependency_type: Mapped[str] = mapped_column(String)
     confidence: Mapped[float] = mapped_column(Float)
-    constraint_matrix: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    resolution_vectors: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    implication_direction: Mapped[str | None] = mapped_column(String, nullable=True)
-    classification_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    constraint_matrix: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    resolution_vectors: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    implication_direction: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    classification_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, server_default=func.now()
     )
@@ -128,14 +129,14 @@ class ArbitrageOpportunity(Base):
     )
     type: Mapped[str] = mapped_column(String)
     theoretical_profit: Mapped[Decimal] = mapped_column(Numeric)
-    estimated_profit: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
-    optimal_trades: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    fw_iterations: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    bregman_gap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_profit: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
+    optimal_trades: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    fw_iterations: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bregman_gap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String, default="detected")
-    pending_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
-    expired_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
-    dependency_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    pending_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
+    expired_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
+    dependency_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     pair: Mapped["MarketPair"] = relationship(back_populates="opportunities")
 
@@ -148,7 +149,7 @@ class PaperTrade(Base):
     __tablename__ = "paper_trades"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    opportunity_id: Mapped[int | None] = mapped_column(
+    opportunity_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("arbitrage_opportunities.id"), nullable=True, index=True
     )
     market_id: Mapped[int] = mapped_column(ForeignKey("markets.id"), index=True)
@@ -164,7 +165,7 @@ class PaperTrade(Base):
     )
     status: Mapped[str] = mapped_column(String, default="filled")
     source: Mapped[str] = mapped_column(String, server_default="paper")
-    venue: Mapped[str | None] = mapped_column(
+    venue: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, server_default="polymarket"
     )
 

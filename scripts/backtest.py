@@ -122,7 +122,7 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
             "question": market_b.question,
             "outcomes": market_b.outcomes if isinstance(market_b.outcomes, list) else [],
         }
-        imp_direction = constraint.get("implication_direction")
+        imp_direction = pair.implication_direction or constraint.get("implication_direction")
         verification = verify_pair(
             dependency_type=pair.dependency_type,
             market_a=market_a_dict,
@@ -203,7 +203,7 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
 
     # Rebuild constraint matrix with current prices (same as detection step)
     # to ensure the optimizer gets a proper feasibility matrix + profit bound
-    imp_direction = constraint.get("implication_direction")
+    imp_direction = pair.implication_direction or constraint.get("implication_direction")
     if pair.resolution_vectors:
         fresh = build_constraint_matrix_from_vectors(
             pair.resolution_vectors, outcomes_a, outcomes_b,
