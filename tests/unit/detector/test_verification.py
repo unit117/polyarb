@@ -14,6 +14,7 @@ class TestConfidenceCheck:
             {"Yes": 0.7, "No": 0.3},
             {"Yes": 0.8, "No": 0.2},
             confidence=0.90,
+            implication_direction="a_implies_b",
         )
         assert result["verified"] is True
 
@@ -25,6 +26,7 @@ class TestConfidenceCheck:
             {"Yes": 0.5, "No": 0.5},
             {"Yes": 0.5, "No": 0.5},
             confidence=0.50,
+            implication_direction="a_implies_b",
         )
         assert result["verified"] is False
         assert any("low_confidence" in r for r in result["reasons"])
@@ -181,6 +183,7 @@ class TestPriceConsistency:
             {"Yes": 0.9, "No": 0.1},
             {"Yes": 0.2, "No": 0.8},
             confidence=0.90,
+            implication_direction="a_implies_b",
         )
         # P(A)=0.9 >> P(B)=0.2, diff=0.7 > 0.50 → fail
         assert result["verified"] is False
@@ -286,6 +289,18 @@ class TestStructuralEdgeCases:
         # No event_id, no outcome overlap (Yes≠True/False), both binary → structural fail
         assert result["verified"] is False
         assert any("partition" in r for r in result["reasons"])
+
+    def test_implication_missing_direction_fails(self):
+        result = verify_pair(
+            "implication",
+            {"outcomes": ["Yes", "No"]},
+            {"outcomes": ["Yes", "No"]},
+            {"Yes": 0.7, "No": 0.3},
+            {"Yes": 0.8, "No": 0.2},
+            confidence=0.90,
+        )
+        assert result["verified"] is False
+        assert any("missing implication_direction" in r for r in result["reasons"])
 
     def test_implication_too_few_outcomes_fails(self):
         result = verify_pair(

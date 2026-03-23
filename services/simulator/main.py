@@ -49,30 +49,39 @@ async def _restore_portfolio() -> Portfolio:
             for key, shares in latest.positions.items():
                 portfolio.positions[key] = Decimal(str(shares))
 
-        # Rebuild cost basis from trade history
+        # Rebuild cost basis from the FULL trade history.
+        # cost_basis is not stored in the snapshot, so we must replay all
+        # trades to reconstruct it.  We maintain a separate running position
+        # tracker for the replay so SELL logic correctly computes the
+        # pre-trade position (the snapshot positions reflect end-state and
+        # must not be mixed into the replay).
         trades = await session.execute(
             select(PaperTrade).order_by(PaperTrade.executed_at)
         )
+        replay_positions: dict[str, Decimal] = {}
         for t in trades.scalars().all():
             key = f"{t.market_id}:{t.outcome}"
+            size_d = Decimal(str(t.size))
             if t.side in ("SETTLE", "PURGE"):
-                # Settlement/purge trades already closed the position
                 portfolio.cost_basis.pop(key, None)
+                replay_positions.pop(key, None)
             elif t.side == "BUY":
                 portfolio.cost_basis[key] = portfolio.cost_basis.get(
                     key, Decimal("0")
-                ) + Decimal(str(t.size)) * Decimal(str(t.vwap_price))
+                ) + size_d * Decimal(str(t.vwap_price))
+                replay_positions[key] = replay_positions.get(key, Decimal("0")) + size_d
             elif t.side == "SELL":
-                pos = portfolio.positions.get(key, Decimal("0")) + Decimal(str(t.size))
-                if pos > 0 and key in portfolio.cost_basis:
+                pos_before = replay_positions.get(key, Decimal("0"))
+                if pos_before > 0 and key in portfolio.cost_basis:
                     # Closing/reducing a long — reduce cost basis proportionally
-                    avg = portfolio.cost_basis[key] / pos
-                    portfolio.cost_basis[key] -= Decimal(str(t.size)) * avg
-                elif pos <= 0:
+                    avg = portfolio.cost_basis[key] / pos_before
+                    portfolio.cost_basis[key] -= size_d * avg
+                elif pos_before <= 0:
                     # Opening/increasing a short — cost basis tracks credit received
                     portfolio.cost_basis[key] = portfolio.cost_basis.get(
                         key, Decimal("0")
-                    ) + Decimal(str(t.size)) * Decimal(str(t.vwap_price))
+                    ) + size_d * Decimal(str(t.vwap_price))
+                replay_positions[key] = pos_before - size_d
 
         # Clean up cost basis for positions that no longer exist
         for key in list(portfolio.cost_basis.keys()):

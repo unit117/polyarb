@@ -698,7 +698,9 @@ def _rebuild_constraint_for_pair(
     """
     constraint = pair.constraint_matrix or {}
     correlation = constraint.get("correlation")
-    imp_direction = constraint.get("implication_direction")
+    # Prefer the column value (set by rule-based classifier) over the
+    # constraint JSON (which may be stale or null-defaulted to a_implies_b).
+    imp_direction = pair.implication_direction or constraint.get("implication_direction")
 
     if pair.resolution_vectors:
         return build_constraint_matrix_from_vectors(

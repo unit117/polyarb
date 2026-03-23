@@ -285,6 +285,24 @@ async def simulate_opportunity(
 
     trades_executed = 0
 
+    # Half-Kelly sizing — same formula as live pipeline
+    net_profit = opp.optimal_trades.get("estimated_profit", 0)
+    if net_profit <= 0:
+        opp.status = "simulated"
+        return {"status": "simulated", "trades_executed": 0}
+    kelly_fraction = min(net_profit * 0.5, 1.0)
+
+    # Drawdown scaling — same as live pipeline
+    total_value = float(portfolio.cash) + sum(
+        float(s) * 0.5 for s in portfolio.positions.values()  # rough mark
+    )
+    drawdown = 1.0 - (total_value / float(portfolio.initial_capital))
+    if drawdown > 0.05:
+        drawdown_scale = max(0.5, 1.0 - (drawdown - 0.05) / 0.10)
+        kelly_fraction *= drawdown_scale
+
+    base_size = kelly_fraction * max_position_size
+
     # Pass 1: compute fills for all legs to determine proportional scaling
     leg_fills = []
     for trade in opp.optimal_trades["trades"]:
@@ -297,7 +315,7 @@ async def simulate_opportunity(
         order_book = snapshot.order_book if snapshot else None
         midpoint = trade.get("market_price", 0.5)
 
-        size = min(trade["edge"] * max_position_size, max_position_size)
+        size = base_size
         fill = compute_vwap(order_book, trade["side"], size, midpoint)
         leg_fills.append({"fill": fill, "requested_size": size, "market": market, "midpoint": midpoint})
 

@@ -206,6 +206,9 @@ def _check_price_consistency(
     if dependency_type == "implication":
         # For A→B (a_implies_b), P(A) should be ≤ P(B) + tolerance
         # For B→A (b_implies_a), P(B) should be ≤ P(A) + tolerance
+        if not implication_direction:
+            reasons.append("implication: missing implication_direction — cannot verify")
+            return False
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         if implication_direction == "b_implies_a":

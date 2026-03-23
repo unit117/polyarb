@@ -46,7 +46,14 @@ def build_constraint_matrix(
             )
 
     if dependency_type == "implication":
-        matrix = _implication_matrix(n_a, n_b, direction=implication_direction or "a_implies_b")
+        if not implication_direction:
+            logger.warning(
+                "implication_direction_missing",
+                msg="No direction specified; defaulting to unconstrained matrix",
+            )
+            matrix = _unconstrained_matrix(n_a, n_b)
+        else:
+            matrix = _implication_matrix(n_a, n_b, direction=implication_direction)
     elif dependency_type == "partition":
         matrix = _partition_matrix(outcomes_a, outcomes_b)
     elif dependency_type == "mutual_exclusion":
@@ -343,14 +350,17 @@ def _compute_profit_bound(
         # Use the matrix to determine direction:
         # a_implies_b: matrix[0][1]=0, constraint is P(A) ≤ P(B), arb when P(A) > P(B)
         # b_implies_a: matrix[1][0]=0, constraint is P(B) ≤ P(A), arb when P(B) > P(A)
-        if len(matrix) >= 2 and len(matrix[0]) >= 2 and matrix[1][0] == 0:
-            # b_implies_a direction
-            if p_b > p_a:
-                return round(p_b - p_a, 6)
-        else:
-            # a_implies_b direction (default)
-            if p_a > p_b:
-                return round(p_a - p_b, 6)
+        # unconstrained (all ones): no provable direction → no arb
+        if len(matrix) >= 2 and len(matrix[0]) >= 2:
+            if matrix[1][0] == 0:
+                # b_implies_a direction
+                if p_b > p_a:
+                    return round(p_b - p_a, 6)
+            elif matrix[0][1] == 0:
+                # a_implies_b direction
+                if p_a > p_b:
+                    return round(p_a - p_b, 6)
+            # else: unconstrained — no provable arb
         return 0.0
 
     if dependency_type == "mutual_exclusion":
