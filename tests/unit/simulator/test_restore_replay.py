@@ -14,7 +14,7 @@ from services.simulator.portfolio import Portfolio
 def replay_cost_basis(trades: list[dict]) -> dict[str, Decimal]:
     """Pure-function equivalent of the _restore_portfolio replay loop.
 
-    Each trade dict has keys: market_id, outcome, side, size, vwap_price.
+    Each trade dict has keys: market_id, outcome, side, size, vwap_price, fees.
     Returns the reconstructed cost_basis dict.
     """
     cost_basis: dict[str, Decimal] = {}
@@ -24,6 +24,7 @@ def replay_cost_basis(trades: list[dict]) -> dict[str, Decimal]:
         key = f"{t['market_id']}:{t['outcome']}"
         size_d = Decimal(str(t["size"]))
         price_d = Decimal(str(t["vwap_price"]))
+        fees_d = Decimal(str(t.get("fees", 0.0)))
 
         if t["side"] in ("SETTLE", "PURGE"):
             cost_basis.pop(key, None)
@@ -56,9 +57,12 @@ def replay_cost_basis(trades: list[dict]) -> dict[str, Decimal]:
                 if new_pos == 0:
                     cost_basis.pop(key, None)
                 elif new_pos < 0:
-                    cost_basis[key] = remainder * price_d
+                    proportional_short_fees = (
+                        fees_d * remainder / size_d if size_d > 0 else Decimal("0")
+                    )
+                    cost_basis[key] = remainder * price_d - proportional_short_fees
             elif current <= 0:
-                cost_basis[key] = cost_basis.get(key, Decimal("0")) + size_d * price_d
+                cost_basis[key] = cost_basis.get(key, Decimal("0")) + size_d * price_d - fees_d
             replay_positions[key] = current - size_d
 
     return cost_basis
@@ -70,7 +74,7 @@ def execute_trades(trades: list[dict]) -> dict[str, Decimal]:
     for t in trades:
         p.execute_trade(
             t["market_id"], t["outcome"], t["side"],
-            t["size"], t["vwap_price"], 0.0,
+            t["size"], t["vwap_price"], t.get("fees", 0.0),
         )
     return dict(p.cost_basis)
 
@@ -152,3 +156,43 @@ class TestReplayMatchesExecute:
         ]
         replay = replay_cost_basis(trades)
         assert "1:Yes" not in replay
+
+    def test_short_open_preserves_net_credit_after_fees(self):
+        """Short basis should be credit received net of entry fees."""
+        trades = [
+            {
+                "market_id": 1,
+                "outcome": "Yes",
+                "side": "SELL",
+                "size": 10,
+                "vwap_price": 0.60,
+                "fees": 1.0,
+            },
+        ]
+        replay = replay_cost_basis(trades)
+        live = execute_trades(trades)
+        assert float(replay["1:Yes"]) == pytest.approx(float(live["1:Yes"]), abs=0.01)
+
+    def test_long_to_short_flip_apportions_fees_to_short_remainder(self):
+        """Only the short remainder should absorb SELL fees during a flip."""
+        trades = [
+            {
+                "market_id": 1,
+                "outcome": "Yes",
+                "side": "BUY",
+                "size": 10,
+                "vwap_price": 0.50,
+                "fees": 0.0,
+            },
+            {
+                "market_id": 1,
+                "outcome": "Yes",
+                "side": "SELL",
+                "size": 15,
+                "vwap_price": 0.60,
+                "fees": 1.5,
+            },
+        ]
+        replay = replay_cost_basis(trades)
+        live = execute_trades(trades)
+        assert float(replay["1:Yes"]) == pytest.approx(float(live["1:Yes"]), abs=0.01)
