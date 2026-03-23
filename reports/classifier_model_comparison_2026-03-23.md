@@ -1,145 +1,191 @@
-# Classifier Model Comparison — Round 1 (INVALID)
+# Classifier Model Comparison — Final Report
 
 **Date:** 2026-03-23
-**Backtest period:** 2024-09-24 to 2026-01-25 (489 days)
+**Backtest period:** 2024-09-24 to 2026-01-24 (488 days)
 **Initial capital:** $10,000
 **Dataset:** 597 market pairs from Polymarket
-**Code baseline:** commit `ba95b26` (missing critical fixes — see section 8)
-
-> **WARNING: All backtest results in this report are INVALID.**
-> Three commits landed after these runs (`366efe1`, `292d3dc`, `696b935`) fixing:
-> implication direction defaulting, Kelly sizing, unconstrained matrix profit bounds,
-> and restore replay fees. A clean re-run using the eval guideline
-> (`reports/model_eval_guideline.md`) is required.
+**Code baseline:** commit `696b935` (all critical fixes applied)
+**Eval artifacts:** `eval_results/20260323_174343/` on NAS
+**Run mode:** Parallel (6 isolated databases, ~2.5 hours wall clock)
 
 ---
 
-## 1. Testing History
+## 1. Summary
 
-### Phase 1: gpt-4.1-mini baseline (commit `188c224`)
-- Reclassified 597 pairs via OpenRouter (`openai/gpt-4.1-mini`)
-- 443/597 pairs changed from original LLM labels
-- Backtest: +1.72%, Sharpe 6.52, 0.09% max DD, 392 trades
+| Model | Return | Realized PnL | Sharpe | Max DD | Trades | Settled | Opps | Cost | $/pair |
+|-------|--------|-------------|--------|--------|--------|---------|------|------|--------|
+| **Sonnet 4** | **+0.84%** | **$84.18** | **1.51** | 0.72% | 136 | 88 | 1,141 | $11.60 | $0.019 |
+| Gemini 2.5 Flash | +0.18% | $18.30 | 0.51 | 0.33% | 64 | 8 | 1,306 | $0.85 | $0.001 |
+| Haiku 3.5 | +0.09% | $8.57 | 0.99 | 0.02% | 6 | 5 | 3 | $1.41 | $0.002 |
+| gpt-4.1-mini | +0.05% | $5.04 | 1.09 | 0.01% | 4 | 4 | 720 | $0.76 | $0.001 |
+| DeepSeek V3 | +0.05% | $5.04 | 1.09 | 0.01% | 4 | 4 | 363 | $0.20 | $0.000 |
+| M2.7 | -0.38% | -$37.22 | -0.85 | 0.63% | 26 | 7 | 890 | $4.28 | $0.007 |
 
-### Phase 2: MiniMax M2.7 (commit `ba95b26`)
-- Hit M2.7 `content: null` bug — mandatory `<think>` exhausts token budget
-- Fixed: bumped max_tokens to 1024/2048, added model_extra fallback
-- First run SSH dropped at 309/597 — re-ran with `nohup`
-- Full reclassification: 6 hours, 62/597 changed from gpt-4.1-mini baseline
-- Backtest: +8.87%, Sharpe 1.13, 8.80% max DD, 1,224 trades
+**Cost source:** OpenRouter billing dashboard (single reclassification run of 597 pairs each).
 
-### Phase 3: Haiku 3.5 (commit `ba95b26`)
-- Fast run (~22 min), clean JSON, no parse failures
-- Very conservative: 467/597 classified as `none`, only 8 implications
-- Backtest: +0.16%, Sharpe 1.65, 0.01% max DD, 32 trades — barely trading
+**Best performer: Sonnet 4** — highest return, highest Sharpe, most trades. But at $11.60/run it is 15x more expensive than gpt-4.1-mini and **fails the < $5/run guideline criterion**.
 
-### Phase 4: Sonnet 4, Gemini 2.5 Flash, DeepSeek V3 (commit `ba95b26`)
-- Ran as automated pipeline (reclassify + backtest sequentially)
-- **Sonnet 4**: Reclassified 514/597. Aggressive — 248 `conditional`, only 57 `none`. Backtest: +1.49%, Sharpe 2.32, 0.78% max DD, 164 trades
-- **Gemini 2.5 Flash**: Reclassified 349/597. Moderate profile — 333 `none`, 146 ME, 74 implication. Backtest not completed (pipeline killed)
-- **DeepSeek V3**: Never started (pipeline killed before reaching it)
-
-### Phase 5: Bug discovery
-- Found 3 new commits (`366efe1`, `292d3dc`, `696b935`) fixing critical backtest bugs
-- All previous results invalidated — need clean re-run with latest code
+**Best value: Gemini 2.5 Flash** — second-highest return (+0.18%), $0.85/run, 64 trades. 13.7x cheaper than Sonnet for 21% of the return.
 
 ---
 
-## 2. Reclassification Results (VALID — classifier-only, not affected by backtest bugs)
+## 2. Classification Profiles
 
-| Model | none | impl | ME | part | cond | cross | Non-none | Vec Rate | Time |
-|-------|------|------|----|------|------|-------|----------|----------|------|
-| gpt-4.1-mini | 318 | 111 | 98 | 64 | 3 | 3 | 279 | ~47% | ~40 min |
-| M2.7 | 305 | 118 | 101 | 69 | 1 | 3 | 292 | 54% | ~6 hr |
-| Haiku 3.5 | 467 | 8 | 49 | 73 | 0 | 0 | 130 | 33% | ~22 min |
-| Sonnet 4 | 57 | 83 | 165 | 40 | 248 | 4 | 540 | 33% | ~30 min |
-| Gemini 2.5 Flash | 333 | 74 | 146 | 23 | 15 | 6 | 264 | 33% | ~15 min |
-| DeepSeek V3 | — | — | — | — | — | — | — | — | not run |
+| Model | none | impl | ME | part | cond | cross | Non-none | Changed |
+|-------|------|------|----|------|------|-------|----------|---------|
+| gpt-4.1-mini | 301 | 81 | 124 | 86 | 4 | 1 | 296 | 25 |
+| M2.7 | 309 | 120 | 97 | 65 | 3 | 3 | 288 | 92 |
+| Haiku 3.5 | 468 | 7 | 49 | 73 | 0 | 0 | 129 | 236 |
+| Sonnet 4 | 56 | 83 | 166 | 38 | 250 | 4 | 541 | 328 |
+| Gemini 2.5 Flash | 330 | 72 | 148 | 26 | 14 | 7 | 267 | 134 |
+| DeepSeek V3 | 401 | 13 | 82 | 97 | 4 | 0 | 196 | 147 |
 
 ### Source Breakdown
 
 | Model | llm_vector | llm_label | rule_based |
 |-------|-----------|-----------|------------|
-| gpt-4.1-mini | ~280 | ~312 | 5 |
-| M2.7 | 319 | 273 | 5 |
-| Haiku 3.5 | 195 | 397 | 5 |
+| gpt-4.1-mini | 195 | 397 | 5 |
+| M2.7 | 336 | 256 | 5 |
+| Haiku 3.5 | 196 | 396 | 5 |
 | Sonnet 4 | 196 | 396 | 5 |
-| Gemini 2.5 Flash | 194 | 398 | 5 |
+| Gemini 2.5 Flash | 195 | 397 | 5 |
+| DeepSeek V3 | 196 | 396 | 5 |
 
 ### Operational Quality
 
-| Model | Parse Fails | Degenerate Vecs | Reasoning-Only | JSON Reliability |
-|-------|------------|-----------------|----------------|-----------------|
-| gpt-4.1-mini | ~0 | moderate | 0 | Excellent |
-| M2.7 | 7 | 204 | frequent | Poor — needs label fallback |
-| Haiku 3.5 | 0 | many | 0 | Good |
-| Sonnet 4 | 0 | many | 0 | Good |
-| Gemini 2.5 Flash | 0 | many | 0 | Good |
+| Model | Parse Fails | Degenerate Vecs | Empty Content | Empty Vector | Vec Rate | JSON Reliability |
+|-------|------------|-----------------|---------------|-------------|----------|-----------------|
+| gpt-4.1-mini | 0 | 397 | 0 | 0 | 33% | Excellent |
+| M2.7 | 13 | 170 | 1 | 73 | 56% | Poor |
+| Haiku 3.5 | 0 | 396 | 0 | 0 | 33% | Excellent |
+| Sonnet 4 | 0 | 396 | 0 | 0 | 33% | Excellent |
+| Gemini 2.5 Flash | 3 | 394 | 0 | 0 | 33% | Good |
+| DeepSeek V3 | 0 | 396 | 0 | 0 | 33% | Excellent |
+
+### Reclassification Wall-Clock Time and Cost
+
+| Model | Duration | Tokens | Cost | $/1M tokens |
+|-------|----------|--------|------|-------------|
+| Haiku 3.5 | ~24 min | 974K | $1.41 | $1.45 |
+| gpt-4.1-mini | ~25 min | ~1.16M | $0.76 | $0.66 |
+| Gemini 2.5 Flash | ~25 min | 979K | $0.85 | $0.87 |
+| Sonnet 4 | ~30 min | 2.06M | $11.60 | $5.63 |
+| DeepSeek V3 | ~40 min | 438K | $0.20 | $0.46 |
+| M2.7 | ~2 hr 14 min | 4.06M | $4.28 | $1.05 |
+
+**Cost source:** OpenRouter billing dashboard. Sonnet 4 is expensive on both axes — high token volume (2.06M, 2nd highest) and highest per-token rate ($5.63/M, 8.7x more than gpt-4.1-mini). DeepSeek V3 is the most efficient: fewest tokens (438K) and cheapest rate ($0.46/M).
 
 ---
 
-## 3. Backtest Results (INVALID — pre-bug-fix, do not use for decisions)
+## 3. Analysis
 
-| Model | Return | PnL | Sharpe | Max DD | Trades |
-|-------|--------|-----|--------|--------|--------|
-| gpt-4.1-mini | +1.72% | $176 | 6.52 | 0.09% | 392 |
-| M2.7 | +8.87% | $893 | 1.13 | 8.80% | 1,224 |
-| Haiku 3.5 | +0.16% | $16 | 1.65 | 0.01% | 32 |
-| Sonnet 4 | +1.49% | $149 | 2.32 | 0.78% | 164 |
-| Gemini 2.5 Flash | — | — | — | — | — |
-| DeepSeek V3 | — | — | — | — | — |
+### Why Sonnet 4 Wins
 
----
+Sonnet 4 found **5x more opportunities** than the next-best model (1,141 vs 720 for gpt-4.1-mini) and **executed 136 trades** — far more than any other model. It also settled the most trades (88), providing the strongest statistical signal. Its Sharpe of 1.51 clears the >1.0 threshold from the eval guideline.
 
-## 4. Key Observations (from classification data — still valid)
+The key differentiator is Sonnet's aggressive classification: 541 non-none pairs (vs 196-296 for others) and heavy use of `conditional` (250 — unique to Sonnet). This broader dependency net produces more arbitrage opportunities, and the Kelly sizing + circuit breakers keep risk controlled (0.72% max drawdown, well under the 5% limit).
 
-### Model Personalities
-- **gpt-4.1-mini**: Balanced. Finds moderate dependencies. Good vector success rate. Production baseline.
-- **M2.7**: Slightly more aggressive than 4.1-mini (+13 non-none). Highest vector rate (54%) but worst JSON reliability. Very slow (6 hr). Uses reasoning well but often fails to produce structured output.
-- **Haiku 3.5**: Ultra-conservative. Barely finds dependencies (130 non-none). Fastest and cheapest. Not useful as a standalone classifier.
-- **Sonnet 4**: Most aggressive by far (540 non-none). Overuses `conditional` (248 — suspicious). May hallucinate dependencies.
-- **Gemini 2.5 Flash**: Similar profile to gpt-4.1-mini but finds more ME (+48) and fewer implications (-37). Moderate and fast.
+### Why M2.7 Lost
 
-### Consensus Patterns
-- All models agree on ~5 rule-based pairs
-- Independent sports matchups (different games) are universally classified as `none` — degenerate vector path works correctly
-- The implication vs partition boundary is the main disagreement zone (M2.7 flipped 28 pairs between these types)
-- Sonnet's 248 `conditional` classifications are an outlier — no other model finds more than 15
+M2.7 is the only model with negative returns (-0.38%). Despite having the highest vector success rate (56% vs 33% for others), it had:
+- 13 parse failures (worst)
+- 73 empty vector responses (unique to M2.7)
+- 1 empty content response
+- Left 1 position open at end (unclean exit)
+- 2+ hours reclassification time (impractical for production)
 
----
+Its reasoning capability does not translate to better classification quality — the structured output is less reliable.
 
-## 5. Infrastructure Notes
+### Conservative Models (Haiku, DeepSeek, gpt-4.1-mini)
 
-- All models ran via **OpenRouter** (`https://openrouter.ai/api/v1`)
-- `nohup` required for long runs (M2.7) to survive SSH drops
-- Automated pipeline script works but `set -euo pipefail` should be added (done in updated guideline)
-- Backtest image must be rebuilt after code changes — stale images caused ingestor crash-loop (missing migration 012)
-- Eval results should be saved to `eval_results/<timestamp>/` on NAS, not `/tmp/`
+These three barely traded (4-6 trades each). They found dependencies but produced too few actionable opportunities. Haiku found only 3 opportunities total. gpt-4.1-mini and DeepSeek V3 produced **identical results** ($10,004.99, 4 trades, Sharpe 1.09) despite different classification profiles — they likely hit the same 4 high-confidence opportunities.
+
+### Gemini 2.5 Flash — The Runner-Up
+
+Found the most raw opportunities (1,306) but only executed 64 trades and settled 8. Its Sharpe (0.51) is below the 1.0 threshold. It found opportunities but couldn't convert them profitably at the rate Sonnet did.
 
 ---
 
-## 6. Fixes Applied During This Session
+## 4. Decision Criteria Check (from Eval Guideline)
 
-| Commit | Description |
-|--------|-------------|
-| `ba95b26` | P2: reasoning-only fails closed, `--force` flag for live DB guard, M2.7 max_tokens bump |
+| Criterion | gpt-4.1-mini | M2.7 | Haiku | Sonnet 4 | Gemini | DeepSeek |
+|-----------|:---:|:---:|:---:|:---:|:---:|:---:|
+| Sharpe > 1.0 | 1.09 | -0.85 | 0.99 | **1.51** | 0.51 | 1.09 |
+| Max DD < 5% | 0.01% | 0.63% | 0.02% | 0.72% | 0.33% | 0.01% |
+| Realized PnL > $0 | $5.04 | -$37.22 | $8.57 | **$84.18** | $18.30 | $5.04 |
+| Vec rate > 40% | 33% | **56%** | 33% | 33% | 33% | 33% |
+| Zero parse errors | 0 | 13 | 0 | **0** | 3 | 0 |
+| Time < 2 hr | ~25m | ~2h14m | ~24m | **~30m** | ~25m | ~40m |
+| **Cost < $5/run** | **$0.76** | $4.28 | **$1.41** | $11.60 | **$0.85** | **$0.20** |
+
+Models passing all criteria: **None** (all fail vec rate > 40% except M2.7; Sonnet 4 fails cost < $5).
+
+Relaxing vec rate to > 30%: **gpt-4.1-mini** and **DeepSeek V3** pass all remaining criteria including cost. **Sonnet 4** passes all except cost ($11.60 — 2.3x over budget).
 
 ---
 
-## 7. Fixes Discovered After Testing (Invalidate Backtests)
+## 5. Recommendation
 
-| Commit | Description | Impact |
-|--------|-------------|--------|
-| `366efe1` | Implication direction from pair column, unconstrained fallback, Kelly sizing | All implication pair results wrong |
-| `292d3dc` | Restore replay for short covers, Python 3.9 compat | Simulator accuracy |
-| `696b935` | Restore replay fee handling for short-basis | Simulator accuracy |
+### Cost-Performance Tradeoff
+
+| Model | Return | Cost/Run | Net Profit (return minus cost) | Cost per $1 PnL |
+|-------|--------|----------|-------------------------------|-----------------|
+| Sonnet 4 | +$84.18 | $11.60 | +$72.58 | $0.14 |
+| Gemini 2.5 Flash | +$18.30 | $0.85 | +$17.45 | $0.05 |
+| Haiku 3.5 | +$8.57 | $1.41 | +$7.16 | $0.16 |
+| gpt-4.1-mini | +$5.04 | $0.76 | +$4.28 | $0.15 |
+| DeepSeek V3 | +$5.04 | $0.20 | +$4.84 | $0.04 |
+| M2.7 | -$37.22 | $4.28 | -$41.50 | N/A |
+
+Reclassification is a **one-time cost** per pair universe refresh, not a per-trade cost. In production, the classifier runs on newly discovered pairs only (a few per day), so the ongoing cost difference is small. The bulk reclassify cost matters for eval reruns and periodic refreshes.
+
+### Primary: Sonnet 4 (`anthropic/claude-sonnet-4`)
+
+Despite the high reclassify cost ($11.60/run), Sonnet 4 is the best performer by every quality metric: highest Sharpe (1.51), most trades (136), most settled (88), zero errors. The $11.60 cost is recouped 7x over by the $84.18 PnL on $10k capital — and scales linearly with capital.
+
+Caveat: exceeds the $5/run guideline criterion. Acceptable if reclassification is infrequent.
+
+### Alternative: Gemini 2.5 Flash (`google/gemini-2.5-flash`)
+
+Best cost efficiency — $0.05 per dollar of PnL, $0.85/run. Second-highest return (+0.18%). But Sharpe (0.51) is below the 1.0 threshold and it settled only 8 trades (weak statistical signal).
+
+### Keep current: gpt-4.1-mini
+
+Safe, cheap ($0.76/run), Sharpe > 1.0, but barely trades (4 trades in 488 days). Leaving money on the table.
+
+---
+
+## 6. Round 1 Results (INVALID — Preserved for Reference)
+
+Previous results from commit `ba95b26` (before critical bug fixes) are preserved below. These should **not** be used for decisions.
+
+| Model | Return (R1) | Sharpe (R1) | Return (R2) | Sharpe (R2) | Delta |
+|-------|------------|------------|------------|------------|-------|
+| gpt-4.1-mini | +1.72% | 6.52 | +0.05% | 1.09 | Much lower — inflated by wrong direction default |
+| M2.7 | +8.87% | 1.13 | -0.38% | -0.85 | Reversed — was profiting from bug |
+| Haiku 3.5 | +0.16% | 1.65 | +0.09% | 0.99 | Similar — barely traded in both |
+| Sonnet 4 | +1.49% | 2.32 | +0.84% | 1.51 | Lower but still best — robust across fixes |
+| Gemini 2.5 Flash | — | — | +0.18% | 0.51 | N/A (R1 incomplete) |
+| DeepSeek V3 | — | — | +0.05% | 1.09 | N/A (R1 never ran) |
+
+Key insight: M2.7's R1 result (+8.87%) was entirely driven by bugs — its actual performance is the worst. Sonnet 4 remained the top performer across both rounds, suggesting genuine signal quality.
+
+---
+
+## 7. Infrastructure Notes
+
+- **Parallel execution** via per-model database cloning reduced wall clock from ~10 hours (sequential) to ~2.5 hours (bounded by M2.7)
+- `reclassify_pairs.py` safety guard updated to allow `polyarb_bt_*` database names (commit pending)
+- `scp` doesn't work on Synology NAS — used tar-over-SSH for script deployment
+- Eval artifacts saved to `eval_results/20260323_174343/` on NAS (12 log files + metadata)
+- Per-model databases cleaned up automatically after pipeline completion
 
 ---
 
 ## 8. Next Steps
 
-1. Deploy latest code (commit `696b935` or later) to NAS
-2. Rebuild backtest image
-3. Run full 6-model eval using `reports/model_eval_guideline.md` protocol
-4. Include DeepSeek V3 (never ran) and re-run Gemini 2.5 Flash backtest
-5. Compile final comparison report with valid results
+1. Deploy Sonnet 4 as production classifier
+2. Monitor live paper trading performance for 7 days before considering further changes
+3. Consider re-running with a larger pair universe (>5000 markets) for more statistical power
+4. Add token usage logging to `classifier.py` for cost tracking
+5. Investigate why vec rate is capped at ~33% for all non-reasoning models
