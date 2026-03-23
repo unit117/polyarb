@@ -1,0 +1,11 @@
+services:
+  agent:
+    build: .
+    env_file: .env
+    volumes:
+      # Mount the repo so the agent can read/edit code
+      - ../:/app/polyarb:rw
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AGENT_WORK_DIR=/app/polyarb
+      - AGENT_PERMISSION_MODE=bypassPermissions
