@@ -156,6 +156,9 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
         if profit <= 0:
             continue
 
+        # Update stored constraint matrix so optimizer reads fresh feasibility
+        pair.constraint_matrix = fresh
+
         opp = ArbitrageOpportunity(
             pair_id=pair.id,
             type="rebalancing",
@@ -188,9 +191,8 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
     constraint = pair.constraint_matrix
     outcomes_a = constraint.get("outcomes_a", [])
     outcomes_b = constraint.get("outcomes_b", [])
-    feasibility = constraint.get("matrix", [])
 
-    if not outcomes_a or not outcomes_b or not feasibility:
+    if not outcomes_a or not outcomes_b:
         return {"status": "invalid_constraints"}
 
     prices_a = await get_prices_at(session, pair.market_a_id, as_of)
@@ -198,6 +200,28 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
 
     if prices_a is None or prices_b is None:
         return {"status": "no_prices"}
+
+    # Rebuild constraint matrix with current prices (same as detection step)
+    # to ensure the optimizer gets a proper feasibility matrix + profit bound
+    imp_direction = constraint.get("implication_direction")
+    if pair.resolution_vectors:
+        fresh = build_constraint_matrix_from_vectors(
+            pair.resolution_vectors, outcomes_a, outcomes_b,
+            dependency_type=pair.dependency_type,
+            prices_a=prices_a, prices_b=prices_b,
+            correlation=constraint.get("correlation"),
+            implication_direction=imp_direction,
+        )
+    else:
+        fresh = build_constraint_matrix(
+            pair.dependency_type, outcomes_a, outcomes_b, prices_a, prices_b,
+            correlation=constraint.get("correlation"),
+            implication_direction=imp_direction,
+        )
+
+    feasibility = fresh.get("matrix", [])
+    if not feasibility:
+        return {"status": "invalid_constraints"}
 
     p_a = np.array([float(prices_a.get(o, 0.5)) for o in outcomes_a], dtype=np.float64)
     p_b = np.array([float(prices_b.get(o, 0.5)) for o in outcomes_b], dtype=np.float64)
@@ -211,7 +235,7 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
         ip_timeout_ms=settings.fw_ip_timeout_ms,
     )
 
-    theoretical_profit = float(constraint.get("profit_bound", 0.0))
+    theoretical_profit = float(fresh.get("profit_bound", 0.0))
     trade_info = compute_trades(
         result,
         outcomes_a,
