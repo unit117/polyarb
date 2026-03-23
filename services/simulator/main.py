@@ -63,6 +63,7 @@ async def _restore_portfolio() -> Portfolio:
             key = f"{t.market_id}:{t.outcome}"
             size_d = Decimal(str(t.size))
             price_d = Decimal(str(t.vwap_price))
+            fees_d = Decimal(str(t.fees or 0))
             if t.side in ("SETTLE", "PURGE"):
                 portfolio.cost_basis.pop(key, None)
                 replay_positions.pop(key, None)
@@ -101,14 +102,19 @@ async def _restore_portfolio() -> Portfolio:
                     if new_pos == 0:
                         portfolio.cost_basis.pop(key, None)
                     elif new_pos < 0:
-                        # Flipped to short — basis is credit for the short portion
-                        portfolio.cost_basis[key] = remainder * price_d
+                        # Flipped to short — basis is net credit for the short portion
+                        proportional_short_fees = (
+                            fees_d * remainder / size_d if size_d > 0 else Decimal("0")
+                        )
+                        portfolio.cost_basis[key] = (
+                            remainder * price_d - proportional_short_fees
+                        )
                     # else: still long, just reduced
                 elif current <= 0:
-                    # Opening/increasing a short — cost basis tracks credit received
+                    # Opening/increasing a short — basis tracks net credit received
                     portfolio.cost_basis[key] = portfolio.cost_basis.get(
                         key, Decimal("0")
-                    ) + size_d * price_d
+                    ) + size_d * price_d - fees_d
                 replay_positions[key] = current - size_d
 
         # Clean up cost basis for positions that no longer exist
