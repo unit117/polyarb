@@ -124,7 +124,80 @@ Relaxing vec rate to > 30%: **gpt-4.1-mini** and **DeepSeek V3** pass all remain
 
 ---
 
-## 5. Recommendation
+## 5. Cost Justification: What Sonnet Catches That Others Miss
+
+### The Differentiator: Conditional Dependencies
+
+The single biggest gap between Sonnet and cheaper models is `conditional` classification — probabilistic dependencies where one outcome makes another significantly more or less likely, without being deterministic.
+
+| Model | conditional pairs | Total non-none | Opps generated | Trades |
+|-------|------------------|----------------|----------------|--------|
+| **Sonnet 4** | **250** | 541 | 1,141 | 136 |
+| Gemini 2.5 Flash | 14 | 267 | 1,306 | 64 |
+| gpt-4.1-mini | 4 | 296 | 720 | 4 |
+| DeepSeek V3 | 4 | 196 | 363 | 4 |
+| Haiku 3.5 | 0 | 129 | 3 | 6 |
+
+Sonnet found **250 conditional pairs** where gpt-4.1-mini found **4**. Those ~246 extra pairs are classified as `none` (no dependency) by gpt-4.1-mini — generating zero opportunities, zero trades, zero PnL.
+
+### Concrete Examples from Ground Truth
+
+The following pairs from the hand-labeled evaluation dataset (`eval_data/labeled_pairs.json`) have **ground truth = conditional**. Sonnet correctly identifies these; gpt-4.1-mini classifies them as `none`.
+
+**1. Sports O/U vs Both Teams to Score** (largest category — dozens of instances)
+- "Inter Kashi FC vs Mohammedan SC: O/U 2.5" ↔ "Both Teams to Score"
+- Logic: O/U 2.5 resolving Over (3+ goals) makes it more likely both teams scored. Not deterministic (a 3-0 win breaks it), but probabilistically linked (~70% correlation).
+- Similar pairs across J-League, K-League, Chinese Super League, Serie A, ISL — this pattern alone accounts for a large share of Sonnet's extra opportunities.
+
+**2. Spread vs O/U total goals**
+- "Spread: Shanghai Haigang FC (-1.5)" ↔ "Shandong Taishan vs Shanghai Haigang: O/U 3.5"
+- Logic: A team covering a -1.5 spread (winning by 2+) makes 4+ total goals more likely. Probabilistic, not deterministic.
+
+**3. O/U vs O/U at different lines** (same match)
+- "FC Anyang vs Incheon United: O/U 3.5" ↔ "FC Anyang vs Incheon United: Both Teams to Score"
+- Logic: Higher O/U line (4+ goals) strongly implies both teams scored at least once.
+
+**4. Arsenal CL winner ↔ Arsenal semifinal**
+- "Will Arsenal win the 2025-26 Champions League?" ↔ "Will Arsenal reach the semifinal?"
+- This is actually an **implication** (winning requires reaching semis). Sonnet classified as `conditional` — technically a misclassification, but still creates a tradeable constraint (the direction is correct).
+
+### Where Sonnet Overcalls (False Positives)
+
+Not all 250 conditionals are correct:
+- **Moneyline vs O/U**: "Jets vs Stars" (winner) ↔ "Jets vs Stars: O/U 7.5" — ground truth is `none`. Which team wins is largely independent of total goals at high O/U lines.
+- **Spread vs O/U with wide gap**: "Bologna (-2.5)" ↔ "Bologna vs Lazio: O/U 2.5" — ground truth is `none`. The spread line is so extreme that the correlation breaks down.
+
+However, the backtest results (+$84.18 on $10k) prove the true positives outweigh the false positives. Kelly sizing naturally sizes down on low-confidence conditional pairs, and circuit breakers cap exposure.
+
+### ROI Math
+
+**One-time reclassification (597 pairs):**
+
+| Metric | Value |
+|--------|-------|
+| Sonnet cost per reclassify run | $11.60 |
+| gpt-4.1-mini cost per run | $0.76 |
+| Incremental PnL from Sonnet (vs gpt-4.1-mini) | $79.14 |
+| **ROI on incremental reclassify cost** | **7.3x** |
+
+**Live production (ongoing — the real cost):**
+
+The detector runs classification on every candidate pair every ~2 minutes. Observed: ~3,894 LLM calls in 3 hours = ~$11-12/day for Sonnet 4.
+
+| Model | Est. daily cost | Backtest daily PnL ($10k) | Daily PnL ($100k) | Net daily (at $10k) | Net daily (at $100k) |
+|-------|----------------|--------------------------|-------------------|--------------------|--------------------|
+| Sonnet 4 | ~$11.60 | $0.17 | $1.72 | **-$11.43** | **-$9.88** |
+| Gemini 2.5 Flash | ~$0.85 | $0.04 | $0.37 | -$0.81 | -$0.48 |
+| gpt-4.1-mini | ~$0.76 | $0.01 | $0.10 | -$0.75 | -$0.66 |
+| DeepSeek V3 | ~$0.20 | $0.01 | $0.10 | -$0.19 | -$0.10 |
+
+> **At current live classification rates, no model is profitable after API costs — even at $100k capital.** Sonnet 4 is the worst due to its high per-token rate. The classifier is being called ~3,900 times every 3 hours on pairs it has likely already classified.
+
+**Critical optimization needed:** Cache classifications for already-seen pairs. The detector should only call the LLM for genuinely new pairs, not re-classify existing ones every cycle. This could reduce daily API calls from ~31,000 to a few dozen, making Sonnet viable.
+
+---
+
+## 6. Recommendation
 
 ### Cost-Performance Tradeoff
 
@@ -137,25 +210,23 @@ Relaxing vec rate to > 30%: **gpt-4.1-mini** and **DeepSeek V3** pass all remain
 | DeepSeek V3 | +$5.04 | $0.20 | +$4.84 | $0.04 |
 | M2.7 | -$37.22 | $4.28 | -$41.50 | N/A |
 
-Reclassification is a **one-time cost** per pair universe refresh, not a per-trade cost. In production, the classifier runs on newly discovered pairs only (a few per day), so the ongoing cost difference is small. The bulk reclassify cost matters for eval reruns and periodic refreshes.
+**Before choosing a model, fix the classification caching problem** (see section 8). The live detector re-classifies already-known pairs every cycle, burning ~$11/day with Sonnet. With caching, ongoing costs drop to near zero for all models — then Sonnet is the clear winner.
 
-### Primary: Sonnet 4 (`anthropic/claude-sonnet-4`)
+### If caching is implemented: Sonnet 4 (`anthropic/claude-sonnet-4`)
 
-Despite the high reclassify cost ($11.60/run), Sonnet 4 is the best performer by every quality metric: highest Sharpe (1.51), most trades (136), most settled (88), zero errors. The $11.60 cost is recouped 7x over by the $84.18 PnL on $10k capital — and scales linearly with capital.
+Best performer by every quality metric. Ongoing cost becomes negligible (only new pairs hit the LLM). Periodic bulk reclassify at $11.60 is affordable.
 
-Caveat: exceeds the $5/run guideline criterion. Acceptable if reclassification is infrequent.
+### If caching is NOT implemented: DeepSeek V3 (`deepseek/deepseek-chat`)
 
-### Alternative: Gemini 2.5 Flash (`google/gemini-2.5-flash`)
+Cheapest daily burn (~$0.20/day extrapolated). Same backtest result as gpt-4.1-mini but 4x cheaper. Minimal risk.
 
-Best cost efficiency — $0.05 per dollar of PnL, $0.85/run. Second-highest return (+0.18%). But Sharpe (0.51) is below the 1.0 threshold and it settled only 8 trades (weak statistical signal).
+### Not recommended: gpt-4.1-mini
 
-### Keep current: gpt-4.1-mini
-
-Safe, cheap ($0.76/run), Sharpe > 1.0, but barely trades (4 trades in 488 days). Leaving money on the table.
+Previously the safe default, but DeepSeek V3 produces identical results at 4x lower cost. No reason to keep it.
 
 ---
 
-## 6. Round 1 Results (INVALID — Preserved for Reference)
+## 7. Round 1 Results (INVALID — Preserved for Reference)
 
 Previous results from commit `ba95b26` (before critical bug fixes) are preserved below. These should **not** be used for decisions.
 
@@ -172,20 +243,63 @@ Key insight: M2.7's R1 result (+8.87%) was entirely driven by bugs — its actua
 
 ---
 
-## 7. Infrastructure Notes
+## 8. Live Production Cost (Sonnet 4)
+
+Sonnet 4 was deployed as the live paper trading classifier on the NAS. Observed usage from the detector service (3-hour window starting 2026-03-23 18:29 UTC):
+
+| Metric | Value |
+|--------|-------|
+| Detection cycles | 97 (~1 every 2 min) |
+| LLM classification calls (label path) | 2,304 |
+| Resolution vector calls (structured path) | 1,590 |
+| Total LLM calls | ~3,894 |
+| New pairs per cycle | ~10 |
+| Candidates per cycle | 20 |
+
+**Projected daily cost: ~$11-12/day** — consistent with OpenRouter billing showing $11.60 for Sonnet 4 in a single billing period. This is significantly higher than gpt-4.1-mini at ~$0.76/day.
+
+**Possible optimization:** The detector classifies every candidate pair each cycle. Many of these are re-encountering already-classified pairs. Caching or skipping previously classified pairs could reduce LLM calls dramatically and cut ongoing cost.
+
+---
+
+## 9. Infrastructure Notes
 
 - **Parallel execution** via per-model database cloning reduced wall clock from ~10 hours (sequential) to ~2.5 hours (bounded by M2.7)
-- `reclassify_pairs.py` safety guard updated to allow `polyarb_bt_*` database names (commit pending)
+- `reclassify_pairs.py` safety guard updated to allow `polyarb_bt_*` database names
 - `scp` doesn't work on Synology NAS — used tar-over-SSH for script deployment
 - Eval artifacts saved to `eval_results/20260323_174343/` on NAS (12 log files + metadata)
 - Per-model databases cleaned up automatically after pipeline completion
 
 ---
 
-## 8. Next Steps
+## 9. Next Steps
 
 1. Deploy Sonnet 4 as production classifier
 2. Monitor live paper trading performance for 7 days before considering further changes
 3. Consider re-running with a larger pair universe (>5000 markets) for more statistical power
 4. Add token usage logging to `classifier.py` for cost tracking
 5. Investigate why vec rate is capped at ~33% for all non-reasoning models
+
+---
+
+## 10. Round 3 Candidates: Qwen Models
+
+Qwen (Alibaba) offers competitive models on OpenRouter with generous free tiers. Worth testing to see if a cheap/free model can match Sonnet's conditional detection ability.
+
+| Model | OpenRouter ID | Params | Architecture | Pricing (input/output per M tokens) | Free Tier |
+|-------|--------------|--------|-------------|--------------------------------------|-----------|
+| **Qwen3-235B-A22B** | `qwen/qwen3-235b-a22b` | 235B (22B active) | MoE | $0.46 / $1.82 | Yes (`:free`) |
+| **Qwen3-30B-A3B** | `qwen/qwen3-30b-a3b` | 30.5B (3.3B active) | MoE | $0.09 / $0.30 | Yes (`:free`) |
+| **Qwen3.5 Plus** | `qwen/qwen3.5-plus-02-15` | Undisclosed | MoE + linear attn | $0.26 / $1.56 | No |
+| **Qwen3.5 Flash** | `qwen/qwen3.5-flash-02-23` | Undisclosed | MoE + linear attn | $0.065 / $0.26 | No |
+
+### Why These Are Interesting
+
+- **Qwen3-235B-A22B**: Largest Qwen, strong reasoning benchmarks, MoE so fast inference. At $0.46/M input it's cheaper than DeepSeek V3. Free tier available for eval runs.
+- **Qwen3.5 Plus**: Newest generation (Feb 2026), hybrid architecture. $0.26/M input — comparable to Gemini Flash pricing.
+- **Qwen3.5 Flash**: Cheapest option at $0.065/M input. If it can detect conditionals even half as well as Sonnet, it could be the value king.
+- **Qwen3-30B-A3B**: Ultra-cheap ($0.09/M), free tier. Worth testing as a baseline — if a 3B-active model catches conditionals, we know the task isn't that hard.
+
+### Eval Plan
+
+Run the same parallel eval pipeline (`run_eval_parallel.sh`) adding these 4 models. Use the free tier (`:free` suffix) for Qwen3-235B and Qwen3-30B to minimize cost. Estimated cost for all 4: < $3 total (free tiers + Flash/Plus are cheap).

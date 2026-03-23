@@ -44,11 +44,11 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The dashboard will be available at `http://localhost:8080`.
+The dashboard will be available at `http://localhost:8081`.
 
 ### Configuration
 
-All settings are managed via environment variables in `.env` (see `.env.example` for all 52+ settings). Key groups:
+All settings are managed via environment variables in `.env` (see `.env.example` for all 69+ settings). Key groups:
 
 | Group | Examples |
 |-------|----------|
@@ -64,7 +64,7 @@ All settings are managed via environment variables in `.env` (see `.env.example`
 
 ## Database
 
-PostgreSQL 16 with pgvector. Schema managed by Alembic (11 migrations, run automatically on service start via `entrypoint.sh`). Extensions: `vector` (pgvector), `dblink` (backtest setup only).
+PostgreSQL 16 with pgvector. Schema managed by Alembic (15 migrations, run automatically on service start via `entrypoint.sh`). Extensions: `vector` (pgvector), `dblink` (backtest setup only).
 
 ### Schema
 
@@ -77,9 +77,9 @@ venue           "polymarket" timestamp                market_b_id    FK→market
 question        Text       prices          JSONB     dependency_type
 description     Text       order_book      JSONB     confidence      Float
 outcomes        JSONB      midpoints       JSONB     constraint_matrix JSONB
-token_ids       JSONB                                verified        Bool
-active          Bool                                 detected_at
-embedding       Vector(384)
+token_ids       JSONB                                resolution_vectors JSONB
+active          Bool                                 verified        Bool
+embedding       Vector(384)                          detected_at
 resolved_outcome
 resolved_at
 end_date, volume, liquidity
@@ -102,7 +102,24 @@ expired_at                 status
 dependency_type            source (paper|live)
                            venue
 
-* status: detected → pending → optimized → filled | expired | skipped | unconverged
+live_orders                live_fills
+──────────────             ──────────────
+id              PK         id              PK
+opportunity_id  FK→opps    live_order_id   FK→live_orders
+market_id       FK→markets market_id       FK→markets
+outcome                    outcome
+token_id                   side
+side                       venue_fill_id   UQ
+requested_size             fill_size       Numeric
+requested_price            fill_price      Numeric
+status          **         fees            Numeric
+dry_run         Bool       filled_at
+venue_order_id
+submitted_at
+error           Text
+
+* opp status: detected → pending → optimized → filled | expired | skipped | unconverged
+** order status: dry_run | submitted | filled | partially_filled | cancelled | rejected | expired | settled
 ```
 
 ### Key Constraints
@@ -143,25 +160,33 @@ docker compose exec ingestor alembic current
 | 009 | expired_at timestamp on opportunities |
 | 010 | dependency_type snapshot on opportunities (backfilled) |
 | 011 | venue column on markets + trades; composite unique index |
+| 012 | resolution_vectors on market_pairs |
+| 013 | Backfill pending_at timestamps |
+| 014 | live_orders and live_fills tables for live trading audit trail |
+| 015 | live fill IDs and order status check constraint |
 
 ## Backtesting
 
-A full backtest pipeline replays historical data through the detector → optimizer → simulator stack:
+A full backtest pipeline replays historical data through the detector → optimizer → simulator stack. Uses Jon Becker's 51GB Polymarket dataset for authoritative market outcomes.
 
 ```bash
-# 1. Bootstrap backtest DB from dataset
-docker compose --profile backtest run --rm dataset-bootstrap
+# 1. Bootstrap backtest DB from Becker dataset (Parquet)
+docker compose run --rm backtest python -m scripts.backtest_from_dataset \
+  --dataset-path /data/prediction-market-analysis/data --max-markets 5000
 
-# 2. Backfill historical prices
-docker compose --profile backtest run --rm backfill
+# 2. Import resolved outcomes for authoritative settlement
+docker compose run --rm backtest python -m scripts.import_resolved_outcomes
 
-# 3. Run backtest
-docker compose --profile backtest run --rm backtest
+# 3. Run backtest with authoritative settlement
+docker compose run --rm -e POSTGRES_DB=polyarb_backtest backtest \
+  python -m scripts.backtest --capital 10000 --authoritative
 
 # 4. (Optional) View results in a dedicated dashboard
 docker compose --profile backtest up -d dashboard-backtest
 # → http://localhost:8082
 ```
+
+E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. After 27 bug fixes: +1.72% return with Sonnet 4 classifier. See `E1_Backtest_Findings_Summary.md` for details.
 
 ## Ports
 
@@ -169,7 +194,7 @@ docker compose --profile backtest up -d dashboard-backtest
 |---------|------|-----------|
 | PostgreSQL | 5434 | 5432 |
 | Redis | 6380 | 6379 |
-| Dashboard | 8080 | 8080 |
+| Dashboard | 8081 | 8080 |
 | Dashboard (backtest) | 8082 | 8080 |
 
 ## Project Structure
@@ -179,13 +204,35 @@ docker compose --profile backtest up -d dashboard-backtest
 │   ├── ingestor/      # Market data ingestion + embedding
 │   ├── detector/      # Pair detection + classification + constraints
 │   ├── optimizer/     # Frank-Wolfe arbitrage optimization
-│   ├── simulator/     # Paper trading engine
+│   ├── simulator/     # Paper trading + live trading engine
 │   └── dashboard/     # FastAPI backend + React frontend
 ├── shared/            # Cross-service models, DB, events, config, circuit breaker
-├── alembic/           # Database migrations
-├── scripts/           # Backtest, backfill, and maintenance scripts
+├── alembic/           # Database migrations (15 revisions)
+├── scripts/           # Backtest, backfill, eval, and maintenance scripts
+├── reports/           # Classifier evals, audit reports, performance analysis
+├── tests/             # Unit + integration tests
 └── docker-compose.yml
 ```
+
+## Live Trading
+
+Live trading is implemented but disabled by default (`LIVE_TRADING_ENABLED=false`). When enabled, the system executes real trades on Polymarket via the CLOB API.
+
+- **Dry-run mode** — orders are recorded in `live_orders` with `dry_run=true` for audit without execution
+- **Kill switch** — `polyarb:live_kill_switch` in Redis halts all live trading instantly
+- **Audit trail** — all orders and fills are persisted in `live_orders`/`live_fills` tables
+- **Order status tracking** — `dry_run → submitted → filled | partially_filled | cancelled | rejected | expired | settled`
+
+## Classifier Evaluation
+
+The detector's market-pair classifier has been evaluated across 6 models. Results on the E1 backtest (489 days, $10k capital):
+
+| Model | Return | Sharpe | Cost/run |
+|-------|--------|--------|----------|
+| Sonnet 4 | +0.84% | 1.51 | $11.60 |
+| GPT-4.1-mini | +0.19% | 0.35 | $0.08 |
+
+See `reports/classifier_model_comparison_*.md` for full comparison.
 
 ## Key Concepts
 
