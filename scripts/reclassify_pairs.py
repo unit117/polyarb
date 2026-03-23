@@ -244,7 +244,7 @@ async def main():
     args = parser.parse_args()
 
     # Safety: refuse to mutate the live DB without --force
-    if not args.dry_run and settings.postgres_db != "polyarb_backtest" and not args.force:
+    if not args.dry_run and not settings.postgres_db.startswith("polyarb_bt") and not args.force:
         print("ERROR: Refusing to write to live DB without --force flag.")
         print(f"  Current DB: {settings.postgres_db}")
         print("  Use --dry-run to preview changes, or --force to proceed.")
