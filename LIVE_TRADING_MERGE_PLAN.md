@@ -112,9 +112,9 @@ These are gaps in **both** implementations that should be written as part of the
 - [ ] Apply `services/dashboard/docs/.../paper-vs-live.tsx` from GPT
 
 ### Step 5 — Tests
-- [ ] Copy all new test files from GPT
-- [ ] Write missing coordinator and reconciler tests listed above
-- [ ] Run full test suite: `pytest tests/unit/`
+- [x] Copy all new test files from GPT
+- [x] Write missing coordinator and reconciler tests listed above
+- [x] Run full test suite: `pytest tests/unit/` — 283 passed
 
 ### Step 6 — Fix known bugs
 - [ ] Verify `live_orders.status` is always set explicitly on insert (no silent null)
