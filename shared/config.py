@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     detector_batch_size: int = 100
     classifier_model: str = "gpt-4.1-mini"
     classifier_base_url: str = ""  # empty = OpenAI direct; set for OpenRouter
+    classifier_prompt_adapter: Literal["auto", "openai_generic", "claude_xml"] = "auto"
     openrouter_api_key: str = ""
     shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
     shadow_classifier_base_url: str = ""

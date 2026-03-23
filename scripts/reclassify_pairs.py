@@ -47,6 +47,7 @@ async def reclassify_all(
     model_override: str | None = None,
     base_url_override: str | None = None,
     api_key_override: str | None = None,
+    prompt_adapter_override: str | None = None,
 ) -> dict:
     """Reclassify all market pairs using the 3-tier pipeline.
 
@@ -57,6 +58,7 @@ async def reclassify_all(
     # Resolve client config: CLI overrides > env settings > defaults
     base_url = base_url_override or settings.classifier_base_url or None
     model = model_override or settings.classifier_model
+    prompt_adapter = prompt_adapter_override or settings.classifier_prompt_adapter
 
     if base_url:
         api_key = api_key_override or settings.openrouter_api_key or settings.openai_api_key
@@ -65,7 +67,12 @@ async def reclassify_all(
         api_key = api_key_override or settings.openai_api_key
         client = openai.AsyncOpenAI(api_key=api_key)
 
-    log.info("classifier_client", model=model, base_url=base_url or "openai_direct")
+    log.info(
+        "classifier_client",
+        model=model,
+        base_url=base_url or "openai_direct",
+        prompt_adapter=prompt_adapter,
+    )
 
     stats = {
         "total": 0,
@@ -122,7 +129,13 @@ async def reclassify_all(
             # Classify using 3-tier pipeline
             async with sem:
                 try:
-                    classification = await classify_pair(client, model, market_a_dict, market_b_dict)
+                    classification = await classify_pair(
+                        client,
+                        model,
+                        market_a_dict,
+                        market_b_dict,
+                        prompt_adapter=prompt_adapter,
+                    )
                 except Exception as e:
                     stats["errors"] += 1
                     log.error("classify_error", pair_id=pair.id, error=str(e))
@@ -240,6 +253,13 @@ async def main():
     parser.add_argument("--model", type=str, default=None, help="Model override (e.g. openai/gpt-4.1-mini, minimax/minimax-m2.7)")
     parser.add_argument("--base-url", type=str, default=None, help="API base URL (e.g. https://openrouter.ai/api/v1)")
     parser.add_argument("--api-key", type=str, default=None, help="API key override (for OpenRouter etc)")
+    parser.add_argument(
+        "--prompt-adapter",
+        type=str,
+        choices=["auto", "openai_generic", "claude_xml"],
+        default=None,
+        help="Prompt adapter override (default: use settings)",
+    )
     parser.add_argument("--force", action="store_true", help="Required to run against the live DB (safety guard)")
     args = parser.parse_args()
 
@@ -257,6 +277,7 @@ async def main():
         model_override=args.model,
         base_url_override=args.base_url,
         api_key_override=args.api_key,
+        prompt_adapter_override=args.prompt_adapter,
     )
 
     # Print readable summary

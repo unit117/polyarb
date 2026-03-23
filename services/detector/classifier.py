@@ -17,7 +17,7 @@ import structlog
 from services.detector.prompt_specs import (
     LABEL_PROMPT_SPEC_V1,
     RESOLUTION_VECTOR_PROMPT_SPEC_V1,
-    render_generic_prompt,
+    render_prompt,
 )
 
 logger = structlog.get_logger()
@@ -530,9 +530,16 @@ async def classify_llm(
     model: str,
     market_a: dict,
     market_b: dict,
+    prompt_adapter: str = "auto",
 ) -> dict:
     """Use LLM to classify the dependency between two markets."""
-    rendered_prompt = render_generic_prompt(LABEL_PROMPT_SPEC_V1, market_a, market_b)
+    rendered_prompt = render_prompt(
+        LABEL_PROMPT_SPEC_V1,
+        market_a,
+        market_b,
+        model=model,
+        prompt_adapter=prompt_adapter,
+    )
 
     try:
         response = await client.chat.completions.create(
@@ -695,6 +702,7 @@ async def classify_llm_resolution(
     model: str,
     market_a: dict,
     market_b: dict,
+    prompt_adapter: str = "auto",
 ) -> dict | None:
     """Classify via resolution vectors — ask the LLM which outcome combos are valid.
 
@@ -709,10 +717,12 @@ async def classify_llm_resolution(
     if len(outcomes_a) != 2 or len(outcomes_b) != 2:
         return None
 
-    rendered_prompt = render_generic_prompt(
+    rendered_prompt = render_prompt(
         RESOLUTION_VECTOR_PROMPT_SPEC_V1,
         {**market_a, "outcomes": outcomes_a},
         {**market_b, "outcomes": outcomes_b},
+        model=model,
+        prompt_adapter=prompt_adapter,
     )
 
     try:
@@ -807,6 +817,7 @@ async def classify_pair(
     model: str,
     market_a: dict,
     market_b: dict,
+    prompt_adapter: str = "auto",
 ) -> dict:
     """Classify a market pair: rules → resolution vectors → label-based LLM fallback."""
     # 1. Try rule-based heuristics (fast, high confidence)
@@ -816,12 +827,24 @@ async def classify_pair(
         return result
 
     # 2. Try resolution vector classification (structured, moderate latency)
-    result = await classify_llm_resolution(client, model, market_a, market_b)
+    result = await classify_llm_resolution(
+        client,
+        model,
+        market_a,
+        market_b,
+        prompt_adapter=prompt_adapter,
+    )
     if result:
         return result
 
     # 3. Fall back to label-based LLM (legacy, higher hallucination risk)
-    result = await classify_llm(client, model, market_a, market_b)
+    result = await classify_llm(
+        client,
+        model,
+        market_a,
+        market_b,
+        prompt_adapter=prompt_adapter,
+    )
     result["classification_source"] = "llm_label"
     # Fallback safety: cap confidence at 0.70 so fallback pairs don't
     # reach the optimizer without additional validation

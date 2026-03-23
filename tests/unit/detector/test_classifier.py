@@ -265,8 +265,27 @@ class TestClassifyLLM:
         ))
         result = await classify_llm(client, "gpt-4o-mini", {"question": "A"}, {"question": "B"})
         assert result["dependency_type"] == "implication"
+        assert result["prompt_version"] == "label_v1"
+        assert result["prompt_adapter"] == "openai_generic"
         # LLM confidence gets 0.80x discount: 0.85 * 0.80 = 0.68
         assert result["confidence"] == pytest.approx(0.68, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_auto_selects_claude_adapter_for_claude_model(self):
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(return_value=_make_llm_response(
+            '{"dependency_type": "none", "confidence": 0.60, "correlation": null, "reasoning": "independent"}'
+        ))
+        result = await classify_llm(
+            client,
+            "anthropic/claude-3.7-sonnet",
+            {"question": "A & B merge?", "description": "", "outcomes": ["Yes", "No"]},
+            {"question": "C wins?", "description": "", "outcomes": ["Yes", "No"]},
+        )
+        assert result["prompt_adapter"] == "claude_xml"
+        messages = client.chat.completions.create.await_args.kwargs["messages"]
+        assert [message["role"] for message in messages] == ["system", "user"]
+        assert "<![CDATA[A & B merge?]]>" in messages[1]["content"]
 
     @pytest.mark.asyncio
     async def test_invalid_json_returns_none_type(self):
@@ -655,6 +674,10 @@ class TestClassifyLLMResolution:
         assert result is not None
         assert result["dependency_type"] == "none"
         assert result["classification_source"] == "llm_vector"
+        assert result["prompt_version"] == "resolution_v1"
+        assert result["prompt_adapter"] == "openai_generic"
+        messages = client.chat.completions.create.await_args.kwargs["messages"]
+        assert [message["role"] for message in messages] == ["system", "user"]
 
     @pytest.mark.asyncio
     async def test_mutual_exclusion(self):

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from html import escape
 from typing import Any, Mapping
+
+PROMPT_ADAPTERS = ("auto", "openai_generic", "claude_xml")
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,28 @@ LABEL_PROMPT_SPEC_V1 = PromptSpec(
         '"reasoning": "..."}'
     ),
     final_instruction="Respond ONLY with valid JSON:",
+    examples=(
+        """Input:
+Market A: "Will PLTR be above $134 on March 21?" Outcomes: ["Yes", "No"]
+Market B: "Will PLTR be above $128 on March 21?" Outcomes: ["Yes", "No"]
+Output:
+{"dependency_type": "implication", "confidence": 0.92, "correlation": "positive", "reasoning": "Above $134 implies above $128 on the same date."}""",
+        """Input:
+Market A: "Will Manchester City win the match?" Outcomes: ["Yes", "No"]
+Market B: "Will Liverpool win the match?" Outcomes: ["Yes", "No"]
+Output:
+{"dependency_type": "mutual_exclusion", "confidence": 0.94, "correlation": null, "reasoning": "Both teams cannot win the same match."}""",
+        """Input:
+Market A: "Will the match finish over 2.5 goals?" Outcomes: ["Yes", "No"]
+Market B: "Will both teams score?" Outcomes: ["Yes", "No"]
+Output:
+{"dependency_type": "conditional", "confidence": 0.78, "correlation": "positive", "reasoning": "Over 2.5 goals makes both teams scoring more likely but does not force it."}""",
+        """Input:
+Market A: "Will BTC be above $90,000 on March 21?" Outcomes: ["Yes", "No"]
+Market B: "Will BTC be above $90,000 on March 22?" Outcomes: ["Yes", "No"]
+Output:
+{"dependency_type": "none", "confidence": 0.90, "correlation": null, "reasoning": "Same threshold on different dates is a separate event."}""",
+    ),
 )
 
 RESOLUTION_VECTOR_PROMPT_SPEC_V1 = PromptSpec(
@@ -93,6 +116,23 @@ RESOLUTION_VECTOR_PROMPT_SPEC_V1 = PromptSpec(
         '"confidence": <float 0.0-1.0>}'
     ),
     final_instruction="Return strictly valid JSON with no additional text:",
+    examples=(
+        """Input:
+Market A: "Will Arsenal win the Champions League?" Outcomes: ["Yes", "No"]
+Market B: "Will Arsenal reach the semifinal?" Outcomes: ["Yes", "No"]
+Output:
+{"valid_outcomes": [{"a": "Yes", "b": "Yes"}, {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"}], "reasoning": "Winning requires reaching the semifinal first.", "confidence": 0.95}""",
+        """Input:
+Market A: "Will Real Madrid win La Liga?" Outcomes: ["Yes", "No"]
+Market B: "Will Barcelona win La Liga?" Outcomes: ["Yes", "No"]
+Output:
+{"valid_outcomes": [{"a": "Yes", "b": "No"}, {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"}], "reasoning": "Only one club can win the league title.", "confidence": 0.96}""",
+        """Input:
+Market A: "Will it rain in London on Tuesday?" Outcomes: ["Yes", "No"]
+Market B: "Will Nvidia beat earnings next quarter?" Outcomes: ["Yes", "No"]
+Output:
+{"valid_outcomes": [{"a": "Yes", "b": "Yes"}, {"a": "Yes", "b": "No"}, {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"}], "reasoning": "These are independent events.", "confidence": 0.88}""",
+    ),
 )
 
 
@@ -109,7 +149,10 @@ def _render_bullet_block(heading: str, items: tuple[str, ...]) -> str:
 def _render_examples(spec: PromptSpec) -> str:
     if not spec.examples:
         return ""
-    return _render_bullet_block("Examples:", spec.examples)
+    parts = ["Examples:"]
+    for index, example in enumerate(spec.examples, start=1):
+        parts.append(f"Example {index}:\n{example}")
+    return "\n\n".join(parts)
 
 
 def _market_block(label: str, market: Mapping[str, Any]) -> str:
@@ -141,6 +184,7 @@ def _render_generic_resolution_prefix(spec: PromptSpec) -> str:
         f"{spec.role} {spec.objective}".strip(),
         _render_bullet_block(spec.hard_rules_heading, spec.hard_rules),
         _render_examples(spec),
+        f"{spec.final_instruction} {spec.output_schema}".strip(),
     )
 
 
@@ -151,7 +195,7 @@ def _render_label_suffix(market_a: Mapping[str, Any], market_b: Mapping[str, Any
     )
 
 
-def _render_resolution_suffix(spec: PromptSpec, market_a: Mapping[str, Any], market_b: Mapping[str, Any]) -> str:
+def _render_resolution_suffix(market_a: Mapping[str, Any], market_b: Mapping[str, Any]) -> str:
     return _join_blocks(
         "\n".join(
             (
@@ -159,7 +203,6 @@ def _render_resolution_suffix(spec: PromptSpec, market_a: Mapping[str, Any], mar
                 _resolution_market_line("Market B", market_b),
             )
         ),
-        f"{spec.final_instruction}\n{spec.output_schema}",
     )
 
 
@@ -187,9 +230,10 @@ def render_generic_prompt(
 
     if spec.family == "resolution_vector":
         reusable_prefix = _render_generic_resolution_prefix(spec)
-        request_suffix = _render_resolution_suffix(spec, market_a, market_b)
+        request_suffix = _render_resolution_suffix(market_a, market_b)
         messages = (
-            {"role": "user", "content": _join_blocks(reusable_prefix, request_suffix)},
+            {"role": "system", "content": reusable_prefix},
+            {"role": "user", "content": request_suffix},
         )
         return RenderedPrompt(
             family=spec.family,
@@ -203,8 +247,33 @@ def render_generic_prompt(
     raise ValueError(f"Unsupported prompt family: {spec.family}")
 
 
-def _render_claude_tag(tag: str, content: str) -> str:
-    return f"<{tag}>{escape(content)}</{tag}>"
+def resolve_prompt_adapter(model: str, prompt_adapter: str | None = None) -> str:
+    """Resolve the effective prompt adapter for a model."""
+    adapter = (prompt_adapter or "auto").lower()
+    if adapter not in PROMPT_ADAPTERS:
+        raise ValueError(f"Unsupported prompt adapter: {prompt_adapter}")
+    if adapter != "auto":
+        return adapter
+
+    model_lower = model.lower()
+    if "claude" in model_lower or "anthropic" in model_lower:
+        return "claude_xml"
+    return "openai_generic"
+
+
+def _render_claude_text(tag: str, content: str) -> str:
+    if "]]>" in content:
+        safe_content = (
+            content.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        return f"<{tag}>{safe_content}</{tag}>"
+    return f"<{tag}><![CDATA[{content}]]></{tag}>"
+
+
+def _xml_attr(value: str) -> str:
+    return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
 def _render_claude_label_suffix(market_a: Mapping[str, Any], market_b: Mapping[str, Any]) -> str:
@@ -213,16 +282,16 @@ def _render_claude_label_suffix(market_a: Mapping[str, Any], market_b: Mapping[s
         _join_blocks(
             _join_blocks(
                 "<market_a>",
-                _render_claude_tag("question", str(market_a.get("question", ""))),
-                _render_claude_tag("description", str(market_a.get("description", "N/A"))),
-                _render_claude_tag("outcomes", str(market_a.get("outcomes", []))),
+                _render_claude_text("question", str(market_a.get("question", ""))),
+                _render_claude_text("description", str(market_a.get("description", "N/A"))),
+                _render_claude_text("outcomes", str(market_a.get("outcomes", []))),
                 "</market_a>",
             ),
             _join_blocks(
                 "<market_b>",
-                _render_claude_tag("question", str(market_b.get("question", ""))),
-                _render_claude_tag("description", str(market_b.get("description", "N/A"))),
-                _render_claude_tag("outcomes", str(market_b.get("outcomes", []))),
+                _render_claude_text("question", str(market_b.get("question", ""))),
+                _render_claude_text("description", str(market_b.get("description", "N/A"))),
+                _render_claude_text("outcomes", str(market_b.get("outcomes", []))),
                 "</market_b>",
             ),
         ),
@@ -230,32 +299,24 @@ def _render_claude_label_suffix(market_a: Mapping[str, Any], market_b: Mapping[s
     )
 
 
-def _render_claude_resolution_suffix(spec: PromptSpec, market_a: Mapping[str, Any], market_b: Mapping[str, Any]) -> str:
+def _render_claude_resolution_suffix(market_a: Mapping[str, Any], market_b: Mapping[str, Any]) -> str:
     return _join_blocks(
         "<input>",
         _join_blocks(
             _join_blocks(
                 "<market_a>",
-                _render_claude_tag("question", str(market_a.get("question", ""))),
-                _render_claude_tag("outcomes", str(market_a.get("outcomes", []))),
+                _render_claude_text("question", str(market_a.get("question", ""))),
+                _render_claude_text("outcomes", str(market_a.get("outcomes", []))),
                 "</market_a>",
             ),
             _join_blocks(
                 "<market_b>",
-                _render_claude_tag("question", str(market_b.get("question", ""))),
-                _render_claude_tag("outcomes", str(market_b.get("outcomes", []))),
+                _render_claude_text("question", str(market_b.get("question", ""))),
+                _render_claude_text("outcomes", str(market_b.get("outcomes", []))),
                 "</market_b>",
             ),
         ),
         "</input>",
-        _join_blocks(
-            "<output_schema>",
-            escape(spec.output_schema),
-            "</output_schema>",
-            "<final_instruction>",
-            escape(spec.final_instruction),
-            "</final_instruction>",
-        ),
     )
 
 
@@ -266,45 +327,46 @@ def render_claude_prompt(
 ) -> RenderedPrompt:
     """Render the canonical prompt spec in an XML-ish Claude-friendly layout."""
     reusable_prefix = _join_blocks(
-        _render_claude_tag("role", spec.role),
-        _render_claude_tag("objective", spec.objective),
-        _render_claude_tag("why_this_matters", spec.why_this_matters) if spec.why_this_matters else "",
+        _render_claude_text("role", spec.role),
+        _render_claude_text("objective", spec.objective),
+        _render_claude_text("why_this_matters", spec.why_this_matters) if spec.why_this_matters else "",
         _join_blocks(
             "<definitions>",
-            *(f"<item>{escape(item)}</item>" for item in spec.definitions),
+            *(_render_claude_text("item", item) for item in spec.definitions),
             "</definitions>",
         ) if spec.definitions else "",
         _join_blocks(
-            f"<hard_rules title=\"{escape(spec.hard_rules_heading)}\">",
-            *(f"<item>{escape(item)}</item>" for item in spec.hard_rules),
+            f"<hard_rules title=\"{_xml_attr(spec.hard_rules_heading)}\">",
+            *(_render_claude_text("item", item) for item in spec.hard_rules),
             "</hard_rules>",
         ) if spec.hard_rules else "",
         _join_blocks(
             "<examples>",
-            *(f"<item>{escape(item)}</item>" for item in spec.examples),
+            *(_render_claude_text("item", item) for item in spec.examples),
             "</examples>",
         ) if spec.examples else "",
+        _join_blocks(
+            "<output_schema>",
+            _render_claude_text("json", spec.output_schema),
+            "</output_schema>",
+            _join_blocks(
+                "<final_instruction>",
+                _render_claude_text("text", spec.final_instruction),
+                "</final_instruction>",
+            ),
+        ),
     )
 
     if spec.family == "label":
-        request_suffix = _join_blocks(
-            _render_claude_label_suffix(market_a, market_b),
-            _join_blocks(
-                "<output_schema>",
-                escape(spec.output_schema),
-                "</output_schema>",
-                "<final_instruction>",
-                escape(spec.final_instruction),
-                "</final_instruction>",
-            ),
-        )
+        request_suffix = _render_claude_label_suffix(market_a, market_b)
     elif spec.family == "resolution_vector":
-        request_suffix = _render_claude_resolution_suffix(spec, market_a, market_b)
+        request_suffix = _render_claude_resolution_suffix(market_a, market_b)
     else:
         raise ValueError(f"Unsupported prompt family: {spec.family}")
 
     messages = (
-        {"role": "user", "content": _join_blocks(reusable_prefix, request_suffix)},
+        {"role": "system", "content": reusable_prefix},
+        {"role": "user", "content": request_suffix},
     )
     return RenderedPrompt(
         family=spec.family,
@@ -314,3 +376,17 @@ def render_claude_prompt(
         request_suffix=request_suffix,
         messages=messages,
     )
+
+
+def render_prompt(
+    spec: PromptSpec,
+    market_a: Mapping[str, Any],
+    market_b: Mapping[str, Any],
+    model: str,
+    prompt_adapter: str | None = None,
+) -> RenderedPrompt:
+    """Render a prompt with the selected adapter."""
+    adapter = resolve_prompt_adapter(model, prompt_adapter)
+    if adapter == "claude_xml":
+        return render_claude_prompt(spec, market_a, market_b)
+    return render_generic_prompt(spec, market_a, market_b)

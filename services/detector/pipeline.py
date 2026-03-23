@@ -33,6 +33,7 @@ class DetectionPipeline:
         similarity_top_k: int,
         batch_size: int,
         classifier_model: str,
+        classifier_prompt_adapter: str = "auto",
     ):
         self.session_factory = session_factory
         self.openai_client = openai_client
@@ -41,6 +42,7 @@ class DetectionPipeline:
         self.similarity_top_k = similarity_top_k
         self.batch_size = batch_size
         self.classifier_model = classifier_model
+        self.classifier_prompt_adapter = classifier_prompt_adapter
         self._rescan_lock = asyncio.Lock()
         self._detection_lock = asyncio.Lock()
 
@@ -99,6 +101,7 @@ class DetectionPipeline:
                     self.classifier_model,
                     market_a_dict,
                     market_b_dict,
+                    prompt_adapter=self.classifier_prompt_adapter,
                 )
 
                 if classification["dependency_type"] == "none":
@@ -286,6 +289,7 @@ class DetectionPipeline:
                         self.classifier_model,
                         market_a_dict,
                         market_b_dict,
+                        prompt_adapter=self.classifier_prompt_adapter,
                     )
 
                 if classification["dependency_type"] == "none":

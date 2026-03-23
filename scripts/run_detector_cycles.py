@@ -89,6 +89,7 @@ async def main():
         similarity_top_k=settings.similarity_top_k,
         batch_size=args.batch_size,
         classifier_model=settings.classifier_model,
+        classifier_prompt_adapter=settings.classifier_prompt_adapter,
     )
 
     initial_pairs = await count_pairs()
