@@ -215,11 +215,21 @@ fi
 
 if [ -f "$GOLD_SET" ]; then
   log "Scoring accuracy against gold set..."
+  EVAL_ABS="$(pwd)/$EVAL_DIR"
   for name in "${SELECTED_NAMES[@]}"; do
+    MODEL=$(get_model_field "$name" model)
+    URL=$(get_model_field "$name" url)
+    KEY=$(get_model_field "$name" key)
     DB="polyarb_bt_${name}"
-    log "  Scoring $name..."
-    docker compose run --rm -e POSTGRES_DB="$DB" backtest \
-      python -m scripts.eval_classifier eval --data-file "$GOLD_SET" \
+    log "  Scoring $name ($MODEL)..."
+    docker compose run --rm \
+      -e POSTGRES_DB="$DB" \
+      -v "$EVAL_ABS:/app/eval_output" \
+      backtest \
+      python -m scripts.eval_classifier eval \
+        --data-file "$GOLD_SET" \
+        --model "$MODEL" --base-url "$URL" --api-key "$KEY" \
+        --summary-json "/app/eval_output/${name}_accuracy.json" \
       2>&1 | tee "$EVAL_DIR/${name}_accuracy.log"
   done
 fi
@@ -228,6 +238,7 @@ fi
 
 log "Phase 3: Backtesting on silver dataset..."
 
+EVAL_ABS="$(pwd)/$EVAL_DIR"
 PIDS=()
 for name in "${SELECTED_NAMES[@]}"; do
   DB="polyarb_bt_${name}"
@@ -238,10 +249,14 @@ for name in "${SELECTED_NAMES[@]}"; do
     PAIR_FILE_ARG="--pair-file $SILVER_SET"
   fi
 
-  docker compose run --rm -e POSTGRES_DB="$DB" backtest \
+  docker compose run --rm \
+    -e POSTGRES_DB="$DB" \
+    -v "$EVAL_ABS:/app/eval_output" \
+    backtest \
     python -m scripts.backtest \
       --capital "$CAPITAL" --start "$START_DATE" --end "$END_DATE" \
       --authoritative $PAIR_FILE_ARG \
+      --output "/app/eval_output/${name}_backtest_report.json" \
     2>&1 | tee "$EVAL_DIR/${name}_backtest.log" &
   PIDS+=($!)
   sleep 2
@@ -262,26 +277,41 @@ done
 
 log "Phase 4: Aggregating results..."
 
+_json_field() {
+  # Usage: _json_field file.json field_name default
+  python3 -c "
+import json, sys
+try:
+    d = json.load(open('$1'))
+    # support nested summary.field for backtest reports
+    v = d.get('summary', d).get('$2', d.get('$2'))
+    print(v if v is not None else '$3')
+except Exception:
+    print('$3')
+" 2>/dev/null
+}
+
 {
   echo "# V4 Eval Results — $(date +%Y-%m-%d)"
   echo ""
-  echo "| Model | Return% | Sharpe | Trades | Settlements | Accuracy |"
-  echo "|-------|---------|--------|--------|-------------|----------|"
+  echo "| Model | Accuracy | Macro F1 | FPR | Return% | Sharpe | Trades |"
+  echo "|-------|----------|----------|-----|---------|--------|--------|"
 
   for name in "${SELECTED_NAMES[@]}"; do
-    BT_LOG="$EVAL_DIR/${name}_backtest.log"
-    ACC_LOG="$EVAL_DIR/${name}_accuracy.log"
+    BT_JSON="$EVAL_DIR/${name}_backtest_report.json"
+    ACC_JSON="$EVAL_DIR/${name}_accuracy.json"
 
-    # Extract metrics from backtest log
-    RETURN=$(grep -o 'return=[^ ]*' "$BT_LOG" 2>/dev/null | tail -1 | cut -d= -f2 || echo "N/A")
-    SHARPE=$(grep -o 'sharpe=[^ ]*' "$BT_LOG" 2>/dev/null | tail -1 | cut -d= -f2 || echo "N/A")
-    TRADES=$(grep -c 'trade_executed' "$BT_LOG" 2>/dev/null || echo "0")
-    SETTLEMENTS=$(grep -c 'position_closed' "$BT_LOG" 2>/dev/null || echo "0")
+    # Extract from accuracy JSON
+    ACCURACY=$(_json_field "$ACC_JSON" accuracy_pct "N/A")
+    MACRO_F1=$(_json_field "$ACC_JSON" macro_f1 "N/A")
+    FPR=$(_json_field "$ACC_JSON" fpr_pct "N/A")
 
-    # Extract accuracy from accuracy log
-    ACCURACY=$(grep -o 'accuracy=[^ ]*' "$ACC_LOG" 2>/dev/null | tail -1 | cut -d= -f2 || echo "N/A")
+    # Extract from backtest JSON
+    RETURN=$(_json_field "$BT_JSON" total_return_pct "N/A")
+    SHARPE=$(_json_field "$BT_JSON" sharpe_ratio "N/A")
+    TRADES=$(_json_field "$BT_JSON" total_trades "0")
 
-    echo "| $name | $RETURN | $SHARPE | $TRADES | $SETTLEMENTS | $ACCURACY |"
+    echo "| $name | ${ACCURACY}% | $MACRO_F1 | ${FPR}% | ${RETURN}% | $SHARPE | $TRADES |"
   done
 } > "$EVAL_DIR/summary.md"
 

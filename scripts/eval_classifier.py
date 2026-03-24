@@ -461,6 +461,9 @@ async def evaluate(
     prompt_adapter: str = "auto",
     compare_prompt_adapter: str = "auto",
     data_file: Path = LABELED_PAIRS_PATH,
+    base_url: str = "",
+    api_key: str = "",
+    summary_json: str = "",
 ) -> None:
     """Evaluate classifier accuracy against hand-labeled ground truth."""
     labeled = _load_labeled_pairs(data_file)
@@ -472,11 +475,11 @@ async def evaluate(
 
     # If a model is specified, re-classify and score
     if model:
-        api_key = settings.openrouter_api_key or settings.openai_api_key
-        base_url = settings.classifier_base_url or None
+        _api_key = api_key or settings.openrouter_api_key or settings.openai_api_key
+        _base_url = base_url or settings.classifier_base_url or None
         client = openai.AsyncOpenAI(
-            api_key=api_key,
-            **({"base_url": base_url} if base_url else {}),
+            api_key=_api_key,
+            **({"base_url": _base_url} if _base_url else {}),
         )
 
         print(
@@ -494,7 +497,11 @@ async def evaluate(
             p[f"reclassified_{model}"] = result.get("dependency_type", "none")
             p[f"reclassified_{model}_source"] = result.get("classification_source", "")
 
-        _score_reclassifications(labeled, model)
+        metrics = _score_reclassifications(labeled, model)
+
+        if summary_json:
+            Path(summary_json).write_text(json.dumps(metrics, indent=2))
+            print(f"\nSummary written to {summary_json}")
 
     # Shadow comparison model
     if compare_model:
@@ -647,8 +654,11 @@ def _score_classifications(pairs: list[dict], label: str) -> None:
 
 def _score_reclassifications(
     pairs: list[dict], model: str, prefix: str = "reclassified_"
-) -> None:
-    """Score reclassified results against ground truth with full metrics."""
+) -> dict:
+    """Score reclassified results against ground truth with full metrics.
+
+    Returns dict with accuracy_pct, correct, total, macro_f1, fpr_pct.
+    """
     key = f"{prefix}{model}"
     correct = sum(1 for p in pairs if p.get(key) == p.get("ground_truth_type"))
     total = len(pairs)
@@ -710,6 +720,15 @@ def _score_reclassifications(
             fam_total = len(fam_pairs)
             fam_acc = fam_correct / fam_total * 100 if fam_total else 0
             print(f"  {fam:<30} {fam_correct:>8} {fam_total:>6} {fam_acc:>6.1f}%")
+
+    return {
+        "model": model,
+        "correct": correct,
+        "total": total,
+        "accuracy_pct": round(correct / total * 100, 1) if total else 0,
+        "macro_f1": round(macro_f1, 3),
+        "fpr_pct": round(fpr, 1),
+    }
 
 
 async def autolabel(
@@ -827,6 +846,8 @@ def main():
 
     eval_p = sub.add_parser("eval", help="Evaluate against labeled pairs")
     eval_p.add_argument("--model", default="", help="Model to re-classify with")
+    eval_p.add_argument("--base-url", default="", help="Base URL for primary model API")
+    eval_p.add_argument("--api-key", default="", help="API key for primary model")
     eval_p.add_argument("--compare", default="", help="Shadow comparison model")
     eval_p.add_argument("--compare-base-url", default="", help="Base URL for comparison model")
     eval_p.add_argument("--no-vectors", action="store_true", help="Disable resolution vectors")
@@ -846,6 +867,11 @@ def main():
         "--data-file",
         default="",
         help="Input JSON path (default: scripts/eval_data/labeled_pairs.json)",
+    )
+    eval_p.add_argument(
+        "--summary-json",
+        default="",
+        help="Write machine-readable accuracy JSON to this path",
     )
 
     auto_p = sub.add_parser("autolabel", help="Auto-label pairs using 3-tier pipeline")
@@ -901,6 +927,9 @@ def main():
             prompt_adapter=args.prompt_adapter,
             compare_prompt_adapter=args.compare_prompt_adapter,
             data_file=_resolve_data_file(args.data_file),
+            base_url=args.base_url,
+            api_key=args.api_key,
+            summary_json=args.summary_json,
         ))
     elif args.command == "autolabel":
         asyncio.run(autolabel(
