@@ -17,6 +17,7 @@ fi
 START_DATE="2024-09-24"
 END_DATE="2026-01-25"
 CAPITAL=10000
+PROMPT_ADAPTER="auto"
 
 # API keys
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY env var or add to .env}"
@@ -33,6 +34,7 @@ mode: parallel (8 models)
 openrouter_models: gpt-4.1-mini, M2.7, Haiku 3.5, Sonnet 4, Gemini 2.5 Flash, DeepSeek V3
 dashscope_models: qwen3-max, qwen3.5-122b-a10b
 purpose: measure prompt_specs improvement vs Round 2 baseline
+prompt_adapter: $PROMPT_ADAPTER
 EOF
 
 # OpenRouter models (same 6 as Round 2)
@@ -79,6 +81,7 @@ run_model() {
       --model "$MODEL" \
       --base-url "$BASE_URL" \
       --api-key "$API_KEY" \
+      --prompt-adapter "$PROMPT_ADAPTER" \
       --batch-size 3 \
     2>&1 | tee "$EVAL_DIR/${NAME}_reclassify.log"
 
