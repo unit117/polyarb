@@ -157,6 +157,24 @@ for name in "${SELECTED_NAMES[@]}"; do
   docker compose exec -T postgres psql -U polyarb -d postgres -c "CREATE DATABASE ${DB} WITH TEMPLATE polyarb_backtest OWNER polyarb;"
 done
 
+# Wait for postgres to recover from WAL replay after heavy DB cloning
+_wait_pg_ready() {
+  local max_wait=${1:-120}
+  local elapsed=0
+  log "Waiting for postgres readiness (timeout ${max_wait}s)..."
+  while [ $elapsed -lt $max_wait ]; do
+    if docker compose exec -T postgres pg_isready -U polyarb -q 2>/dev/null; then
+      log "Postgres ready after ${elapsed}s"
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  log "ERROR: Postgres not ready after ${max_wait}s — aborting"
+  exit 1
+}
+_wait_pg_ready 120
+
 if ! $SKIP_RECLASSIFY; then
   log "Reclassifying with ${#SELECTED_NAMES[@]} models (max $MAX_PARALLEL parallel)..."
 
