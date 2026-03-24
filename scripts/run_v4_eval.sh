@@ -51,6 +51,7 @@ ALL_NAMES=(gpt41mini m27 haiku sonnet gemini deepseek qwen3max qwen35)
 
 SELECTED_NAMES=()
 SKIP_RECLASSIFY=false
+SKIP_BACKTEST=false
 DRY_RUN=false
 MAX_PARALLEL=4  # Limit concurrent reclassify runs to avoid API rate limits
 
@@ -58,6 +59,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --models) IFS=',' read -ra SELECTED_NAMES <<< "$2"; shift 2 ;;
     --skip-reclassify) SKIP_RECLASSIFY=true; shift ;;
+    --skip-backtest) SKIP_BACKTEST=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --max-parallel) MAX_PARALLEL="$2"; shift 2 ;;
     --gold-set) GOLD_SET="$2"; shift 2 ;;
@@ -102,7 +104,11 @@ if $DRY_RUN; then
     echo "  polyarb_bt_${name}: reclassify $(get_model_field "$name" model) + backtest"
   done
   echo "Would score against $GOLD_SET"
-  echo "Would backtest against $SILVER_SET"
+  if $SKIP_BACKTEST; then
+    echo "Backtest: SKIPPED (--skip-backtest)"
+  else
+    echo "Would backtest against $SILVER_SET"
+  fi
   exit 0
 fi
 
@@ -236,42 +242,46 @@ fi
 
 # ── Phase 3: Backtest on silver dataset ─────────────────────────────
 
-log "Phase 3: Backtesting on silver dataset..."
-
-EVAL_ABS="$(pwd)/$EVAL_DIR"
-PIDS=()
-for name in "${SELECTED_NAMES[@]}"; do
-  DB="polyarb_bt_${name}"
-  log "  Launching backtest: $name"
-
-  PAIR_FILE_ARG=""
-  if [ -f "$SILVER_SET" ]; then
-    PAIR_FILE_ARG="--pair-file $SILVER_SET"
-  fi
-
-  docker compose run --rm \
-    -e POSTGRES_DB="$DB" \
-    -v "$EVAL_ABS:/app/eval_output" \
-    backtest \
-    python -m scripts.backtest \
-      --capital "$CAPITAL" --start "$START_DATE" --end "$END_DATE" \
-      --authoritative $PAIR_FILE_ARG \
-      --output "/app/eval_output/${name}_backtest_report.json" \
-    2>&1 | tee "$EVAL_DIR/${name}_backtest.log" &
-  PIDS+=($!)
-  sleep 2
-done
-
-# Wait for all backtests
 FAILED=0
-for i in "${!PIDS[@]}"; do
-  if wait "${PIDS[$i]}"; then
-    log "${SELECTED_NAMES[$i]} backtest OK"
-  else
-    log "${SELECTED_NAMES[$i]} backtest FAILED"
-    FAILED=$((FAILED + 1))
-  fi
-done
+if $SKIP_BACKTEST; then
+  log "Phase 3: Skipped (--skip-backtest)"
+else
+  log "Phase 3: Backtesting on silver dataset..."
+
+  EVAL_ABS="$(pwd)/$EVAL_DIR"
+  PIDS=()
+  for name in "${SELECTED_NAMES[@]}"; do
+    DB="polyarb_bt_${name}"
+    log "  Launching backtest: $name"
+
+    PAIR_FILE_ARG=""
+    if [ -f "$SILVER_SET" ]; then
+      PAIR_FILE_ARG="--pair-file $SILVER_SET"
+    fi
+
+    docker compose run --rm \
+      -e POSTGRES_DB="$DB" \
+      -v "$EVAL_ABS:/app/eval_output" \
+      backtest \
+      python -m scripts.backtest \
+        --capital "$CAPITAL" --start "$START_DATE" --end "$END_DATE" \
+        --authoritative $PAIR_FILE_ARG \
+        --output "/app/eval_output/${name}_backtest_report.json" \
+      2>&1 | tee "$EVAL_DIR/${name}_backtest.log" &
+    PIDS+=($!)
+    sleep 2
+  done
+
+  # Wait for all backtests
+  for i in "${!PIDS[@]}"; do
+    if wait "${PIDS[$i]}"; then
+      log "${SELECTED_NAMES[$i]} backtest OK"
+    else
+      log "${SELECTED_NAMES[$i]} backtest FAILED"
+      FAILED=$((FAILED + 1))
+    fi
+  done
+fi
 
 # ── Phase 4: Aggregate results ──────────────────────────────────────
 
@@ -294,11 +304,15 @@ except Exception:
 {
   echo "# V4 Eval Results — $(date +%Y-%m-%d)"
   echo ""
-  echo "| Model | Accuracy | Macro F1 | FPR | Return% | Sharpe | Trades |"
-  echo "|-------|----------|----------|-----|---------|--------|--------|"
+  if $SKIP_BACKTEST; then
+    echo "| Model | Accuracy | Macro F1 | FPR |"
+    echo "|-------|----------|----------|-----|"
+  else
+    echo "| Model | Accuracy | Macro F1 | FPR | Return% | Sharpe | Trades |"
+    echo "|-------|----------|----------|-----|---------|--------|--------|"
+  fi
 
   for name in "${SELECTED_NAMES[@]}"; do
-    BT_JSON="$EVAL_DIR/${name}_backtest_report.json"
     ACC_JSON="$EVAL_DIR/${name}_accuracy.json"
 
     # Extract from accuracy JSON
@@ -306,12 +320,15 @@ except Exception:
     MACRO_F1=$(_json_field "$ACC_JSON" macro_f1 "N/A")
     FPR=$(_json_field "$ACC_JSON" fpr_pct "N/A")
 
-    # Extract from backtest JSON
-    RETURN=$(_json_field "$BT_JSON" total_return_pct "N/A")
-    SHARPE=$(_json_field "$BT_JSON" sharpe_ratio "N/A")
-    TRADES=$(_json_field "$BT_JSON" total_trades "0")
-
-    echo "| $name | ${ACCURACY}% | $MACRO_F1 | ${FPR}% | ${RETURN}% | $SHARPE | $TRADES |"
+    if $SKIP_BACKTEST; then
+      echo "| $name | ${ACCURACY}% | $MACRO_F1 | ${FPR}% |"
+    else
+      BT_JSON="$EVAL_DIR/${name}_backtest_report.json"
+      RETURN=$(_json_field "$BT_JSON" total_return_pct "N/A")
+      SHARPE=$(_json_field "$BT_JSON" sharpe_ratio "N/A")
+      TRADES=$(_json_field "$BT_JSON" total_trades "0")
+      echo "| $name | ${ACCURACY}% | $MACRO_F1 | ${FPR}% | ${RETURN}% | $SHARPE | $TRADES |"
+    fi
   done
 } > "$EVAL_DIR/summary.md"
 
