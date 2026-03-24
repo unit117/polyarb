@@ -10,6 +10,9 @@ Usage:
     # Step 2: After hand-labeling scripts/eval_data/labeled_pairs.json, evaluate
     python -m scripts.eval_classifier eval
 
+    # Optional: summarize label-transition and family-level failure modes
+    python -m scripts.eval_classifier analyze --data-file scripts/eval_data/labeled_pairs_v4.json
+
     # Step 3: Compare models (resolution vectors vs label-based)
     python -m scripts.eval_classifier eval --model gpt-4.1-mini --compare minimax/minimax-m2.7
 """
@@ -20,7 +23,7 @@ import argparse
 import asyncio
 import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import openai
@@ -35,7 +38,146 @@ EVAL_DATA_DIR = Path(__file__).parent / "eval_data"
 LABELED_PAIRS_PATH = EVAL_DATA_DIR / "labeled_pairs.json"
 
 
-async def export_pairs(n: int = 200) -> None:
+def _resolve_data_file(path_str: str | None) -> Path:
+    """Resolve a CLI-provided dataset path relative to the current working dir."""
+    if not path_str:
+        return LABELED_PAIRS_PATH
+    path = Path(path_str).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def _normalize_current_type(pair: dict) -> str:
+    current = pair.get("current_dependency_type", "")
+    return "none" if current == "none_candidate" else current
+
+
+def _load_labeled_pairs(data_file: Path) -> list[dict]:
+    if not data_file.exists():
+        print(f"ERROR: {data_file} not found. Run 'export' first.")
+        sys.exit(1)
+
+    pairs = json.loads(data_file.read_text())
+    labeled = [p for p in pairs if p.get("ground_truth_type")]
+    if not labeled:
+        print("ERROR: No labeled pairs found. Fill in 'ground_truth_type' field.")
+        sys.exit(1)
+    return labeled
+
+
+def _summarize_labeled_pairs(
+    pairs: list[dict],
+    *,
+    examples_per_transition: int = 3,
+) -> dict:
+    summary = {
+        "total": len(pairs),
+        "correct": sum(1 for p in pairs if p.get("correct") is True),
+        "current_counts": Counter(),
+        "ground_truth_counts": Counter(),
+        "confusion": Counter(),
+        "family_totals": Counter(),
+        "family_wrong": Counter(),
+        "family_transitions": defaultdict(Counter),
+        "transition_examples": defaultdict(list),
+    }
+
+    for pair in pairs:
+        current = _normalize_current_type(pair)
+        ground_truth = pair.get("ground_truth_type", "")
+        family = pair.get("pair_family") or "<none>"
+
+        summary["current_counts"][current] += 1
+        summary["ground_truth_counts"][ground_truth] += 1
+        summary["family_totals"][family] += 1
+
+        if current == ground_truth:
+            continue
+
+        transition = (current, ground_truth)
+        summary["confusion"][transition] += 1
+        summary["family_wrong"][family] += 1
+        summary["family_transitions"][family][transition] += 1
+
+        examples = summary["transition_examples"][transition]
+        if len(examples) < examples_per_transition:
+            examples.append({
+                "pair_family": family,
+                "question_a": pair.get("question_a", ""),
+                "question_b": pair.get("question_b", ""),
+                "notes": pair.get("notes", ""),
+            })
+
+    return summary
+
+
+def _print_analysis(
+    summary: dict,
+    *,
+    top_transitions: int,
+    top_families: int,
+) -> None:
+    total = summary["total"]
+    correct = summary["correct"]
+    accuracy = (correct / total * 100) if total else 0.0
+
+    print("# Classifier Dataset Analysis")
+    print("")
+    print(f"- Total labeled pairs: {total}")
+    print(f"- Current-system accuracy: {correct}/{total} ({accuracy:.1f}%)")
+    print("")
+
+    print("## Current Label Counts")
+    for dep_type, count in sorted(summary["current_counts"].items()):
+        print(f"- {dep_type}: {count}")
+    print("")
+
+    print("## Ground Truth Counts")
+    for dep_type, count in sorted(summary["ground_truth_counts"].items()):
+        print(f"- {dep_type}: {count}")
+    print("")
+
+    print("## Largest Label Transitions")
+    for (current, ground_truth), count in summary["confusion"].most_common(top_transitions):
+        print(f"- {current} -> {ground_truth}: {count}")
+    print("")
+
+    print("## Worst Families")
+    family_rows = sorted(
+        summary["family_totals"].items(),
+        key=lambda item: (
+            summary["family_wrong"][item[0]] / item[1] if item[1] else 0.0,
+            summary["family_wrong"][item[0]],
+            item[1],
+            item[0],
+        ),
+        reverse=True,
+    )
+    for family, total_rows in family_rows[:top_families]:
+        wrong = summary["family_wrong"][family]
+        error_rate = (wrong / total_rows * 100) if total_rows else 0.0
+        transitions = ", ".join(
+            f"{current}->{ground_truth}:{count}"
+            for (current, ground_truth), count in summary["family_transitions"][family].most_common(3)
+        ) or "all correct"
+        print(f"- {family}: {wrong}/{total_rows} wrong ({error_rate:.1f}%) [{transitions}]")
+    print("")
+
+    print("## Sample Disagreements")
+    for (current, ground_truth), count in summary["confusion"].most_common(top_transitions):
+        print(f"### {current} -> {ground_truth} ({count})")
+        for example in summary["transition_examples"][(current, ground_truth)]:
+            print(
+                f"- [{example['pair_family']}] "
+                f"{example['question_a']} || {example['question_b']}"
+            )
+            if example["notes"]:
+                print(f"  note: {example['notes']}")
+        print("")
+
+
+async def export_pairs(n: int = 200, output_path: Path = LABELED_PAIRS_PATH) -> None:
     """Export N classified pairs from the DB for manual labeling.
 
     Stratified sampling: over-sample independent-but-semantically-similar pairs
@@ -214,9 +356,9 @@ async def export_pairs(n: int = 200) -> None:
         pairs_data.extend(independent_candidates)
         print(f"Added {len(independent_candidates)} independent-pair candidates")
 
-    EVAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    LABELED_PAIRS_PATH.write_text(json.dumps(pairs_data, indent=2))
-    print(f"\nExported {len(pairs_data)} pairs to {LABELED_PAIRS_PATH}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(pairs_data, indent=2))
+    print(f"\nExported {len(pairs_data)} pairs to {output_path}")
     print("Next: hand-label 'ground_truth_type' and 'correct' fields, then run 'eval'")
 
 
@@ -318,19 +460,10 @@ async def evaluate(
     use_vectors: bool = True,
     prompt_adapter: str = "auto",
     compare_prompt_adapter: str = "auto",
+    data_file: Path = LABELED_PAIRS_PATH,
 ) -> None:
     """Evaluate classifier accuracy against hand-labeled ground truth."""
-    if not LABELED_PAIRS_PATH.exists():
-        print(f"ERROR: {LABELED_PAIRS_PATH} not found. Run 'export' first.")
-        sys.exit(1)
-
-    pairs = json.loads(LABELED_PAIRS_PATH.read_text())
-
-    # Filter to labeled pairs only
-    labeled = [p for p in pairs if p.get("ground_truth_type")]
-    if not labeled:
-        print("ERROR: No labeled pairs found. Fill in 'ground_truth_type' field.")
-        sys.exit(1)
+    labeled = _load_labeled_pairs(data_file)
 
     print(f"Evaluating {len(labeled)} labeled pairs")
 
@@ -388,6 +521,26 @@ async def evaluate(
         _score_reclassifications(labeled, compare_model, prefix="shadow_")
 
 
+def analyze(
+    *,
+    data_file: Path = LABELED_PAIRS_PATH,
+    top_transitions: int = 10,
+    top_families: int = 10,
+    examples_per_transition: int = 3,
+) -> None:
+    """Analyze labeled-pair failure modes by transition and family."""
+    labeled = _load_labeled_pairs(data_file)
+    summary = _summarize_labeled_pairs(
+        labeled,
+        examples_per_transition=examples_per_transition,
+    )
+    _print_analysis(
+        summary,
+        top_transitions=top_transitions,
+        top_families=top_families,
+    )
+
+
 def _score_classifications(pairs: list[dict], label: str) -> None:
     """Score current system classifications against ground truth."""
     print(f"\n{'='*60}")
@@ -414,7 +567,7 @@ def _score_classifications(pairs: list[dict], label: str) -> None:
 
     # Per-type precision/recall
     dep_types = set(p.get("ground_truth_type", "") for p in pairs) | set(
-        p.get("current_dependency_type", "") for p in pairs
+        _normalize_current_type(p) for p in pairs
     )
     dep_types.discard("")
 
@@ -425,11 +578,11 @@ def _score_classifications(pairs: list[dict], label: str) -> None:
     total_fp_independent = 0
     for dt in sorted(dep_types):
         tp = sum(1 for p in pairs
-                 if p["current_dependency_type"] == dt and p["ground_truth_type"] == dt)
+                 if _normalize_current_type(p) == dt and p["ground_truth_type"] == dt)
         fp = sum(1 for p in pairs
-                 if p["current_dependency_type"] == dt and p["ground_truth_type"] != dt)
+                 if _normalize_current_type(p) == dt and p["ground_truth_type"] != dt)
         fn = sum(1 for p in pairs
-                 if p["current_dependency_type"] != dt and p["ground_truth_type"] == dt)
+                 if _normalize_current_type(p) != dt and p["ground_truth_type"] == dt)
 
         prec = tp / (tp + fp) if (tp + fp) else 0
         rec = tp / (tp + fn) if (tp + fn) else 0
@@ -440,7 +593,7 @@ def _score_classifications(pairs: list[dict], label: str) -> None:
         # Track FP on independent pairs (primary KPI)
         if dt != "none":
             fp_indep = sum(1 for p in pairs
-                          if p["current_dependency_type"] == dt
+                          if _normalize_current_type(p) == dt
                           and p["ground_truth_type"] == "none")
             total_fp_independent += fp_indep
 
@@ -448,15 +601,81 @@ def _score_classifications(pairs: list[dict], label: str) -> None:
     fpr = total_fp_independent / indep_total * 100 if indep_total else 0
     print(f"\n  ** Independent-pair FPR: {total_fp_independent}/{indep_total} ({fpr:.1f}%) **")
 
+    # Macro F1
+    f1_scores = []
+    for dt in sorted(dep_types):
+        tp = sum(1 for p in pairs
+                 if _normalize_current_type(p) == dt and p["ground_truth_type"] == dt)
+        fp = sum(1 for p in pairs
+                 if _normalize_current_type(p) == dt and p["ground_truth_type"] != dt)
+        fn = sum(1 for p in pairs
+                 if _normalize_current_type(p) != dt and p["ground_truth_type"] == dt)
+        prec = tp / (tp + fp) if (tp + fp) else 0
+        rec = tp / (tp + fn) if (tp + fn) else 0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0
+        f1_scores.append(f1)
+    macro_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0
+    print(f"\n  ** Macro F1: {macro_f1:.3f} **")
+
+    # Confusion matrix
+    all_types = sorted(dep_types)
+    print(f"\nConfusion Matrix (rows=predicted, cols=ground_truth):")
+    header = f"  {'':>20}" + "".join(f"{t:>12}" for t in all_types)
+    print(header)
+    for pred in all_types:
+        row = f"  {pred:>20}"
+        for truth in all_types:
+            count = sum(1 for p in pairs
+                        if _normalize_current_type(p) == pred and p["ground_truth_type"] == truth)
+            row += f"{count:>12}"
+        print(row)
+
+    # Per-family breakdown (if pair_family field exists)
+    families = set(p.get("pair_family", "") for p in pairs)
+    families.discard("")
+    if families:
+        print(f"\nPer-family accuracy:")
+        print(f"  {'Family':<30} {'Correct':>8} {'Total':>6} {'Acc':>7}")
+        print(f"  {'-'*53}")
+        for fam in sorted(families):
+            fam_pairs = [p for p in pairs if p.get("pair_family") == fam]
+            fam_correct = sum(1 for p in fam_pairs if p.get("correct") is True)
+            fam_total = len(fam_pairs)
+            fam_acc = fam_correct / fam_total * 100 if fam_total else 0
+            print(f"  {fam:<30} {fam_correct:>8} {fam_total:>6} {fam_acc:>6.1f}%")
+
 
 def _score_reclassifications(
     pairs: list[dict], model: str, prefix: str = "reclassified_"
 ) -> None:
-    """Score reclassified results against ground truth."""
+    """Score reclassified results against ground truth with full metrics."""
     key = f"{prefix}{model}"
     correct = sum(1 for p in pairs if p.get(key) == p.get("ground_truth_type"))
     total = len(pairs)
     print(f"\n{model} accuracy: {correct}/{total} ({correct/total*100:.1f}%)")
+
+    # Per-type precision/recall/F1
+    dep_types = set(p.get("ground_truth_type", "") for p in pairs) | set(
+        p.get(key, "") for p in pairs
+    )
+    dep_types.discard("")
+
+    print(f"\n  {'Type':<20} {'Prec':>6} {'Rec':>6} {'F1':>6} {'TP':>4} {'FP':>4} {'FN':>4}")
+    print(f"  {'-'*56}")
+
+    f1_scores = []
+    for dt in sorted(dep_types):
+        tp = sum(1 for p in pairs if p.get(key) == dt and p["ground_truth_type"] == dt)
+        fp = sum(1 for p in pairs if p.get(key) == dt and p["ground_truth_type"] != dt)
+        fn = sum(1 for p in pairs if p.get(key) != dt and p["ground_truth_type"] == dt)
+        prec = tp / (tp + fp) if (tp + fp) else 0
+        rec = tp / (tp + fn) if (tp + fn) else 0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0
+        f1_scores.append(f1)
+        print(f"  {dt:<20} {prec:>6.1%} {rec:>6.1%} {f1:>6.1%} {tp:>4} {fp:>4} {fn:>4}")
+
+    macro_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0
+    print(f"\n  ** Macro F1: {macro_f1:.3f} **")
 
     # FPR on independent pairs
     fp_indep = sum(1 for p in pairs
@@ -464,13 +683,40 @@ def _score_reclassifications(
                    and p.get("ground_truth_type") == "none")
     indep_total = sum(1 for p in pairs if p["ground_truth_type"] == "none")
     fpr = fp_indep / indep_total * 100 if indep_total else 0
-    print(f"  Independent-pair FPR: {fp_indep}/{indep_total} ({fpr:.1f}%)")
+    print(f"  ** Independent-pair FPR: {fp_indep}/{indep_total} ({fpr:.1f}%) **")
+
+    # Confusion matrix
+    all_types = sorted(dep_types)
+    print(f"\n  Confusion Matrix (rows=predicted, cols=ground_truth):")
+    header = f"  {'':>20}" + "".join(f"{t:>12}" for t in all_types)
+    print(header)
+    for pred in all_types:
+        row = f"  {pred:>20}"
+        for truth in all_types:
+            count = sum(1 for p in pairs if p.get(key) == pred and p["ground_truth_type"] == truth)
+            row += f"{count:>12}"
+        print(row)
+
+    # Per-family breakdown
+    families = set(p.get("pair_family", "") for p in pairs)
+    families.discard("")
+    if families:
+        print(f"\n  Per-family accuracy:")
+        print(f"  {'Family':<30} {'Correct':>8} {'Total':>6} {'Acc':>7}")
+        print(f"  {'-'*53}")
+        for fam in sorted(families):
+            fam_pairs = [p for p in pairs if p.get("pair_family") == fam]
+            fam_correct = sum(1 for p in fam_pairs if p.get(key) == p.get("ground_truth_type"))
+            fam_total = len(fam_pairs)
+            fam_acc = fam_correct / fam_total * 100 if fam_total else 0
+            print(f"  {fam:<30} {fam_correct:>8} {fam_total:>6} {fam_acc:>6.1f}%")
 
 
 async def autolabel(
     model: str = "gpt-4.1-mini",
     use_vectors: bool = True,
     prompt_adapter: str = "auto",
+    data_file: Path = LABELED_PAIRS_PATH,
 ) -> None:
     """Auto-label pairs using the full 3-tier classify_pair pipeline.
 
@@ -482,11 +728,11 @@ async def autolabel(
     This is NOT true ground truth — it's the new classifier's opinion.
     Review disagreements manually to produce real ground truth.
     """
-    if not LABELED_PAIRS_PATH.exists():
-        print(f"ERROR: {LABELED_PAIRS_PATH} not found. Run 'export' first.")
+    if not data_file.exists():
+        print(f"ERROR: {data_file} not found. Run 'export' first.")
         sys.exit(1)
 
-    pairs = json.loads(LABELED_PAIRS_PATH.read_text())
+    pairs = json.loads(data_file.read_text())
     print(
         f"Auto-labeling {len(pairs)} pairs with {model} "
         f"(vectors={use_vectors}, prompt_adapter={prompt_adapter})"
@@ -556,14 +802,14 @@ async def autolabel(
             print(f"  Progress: {i+1}/{len(pairs)} ({changed} changed, {errors} errors)")
 
     # Save results
-    LABELED_PAIRS_PATH.write_text(json.dumps(pairs, indent=2))
+    data_file.write_text(json.dumps(pairs, indent=2))
 
     print(f"\nAuto-labeling complete:")
     print(f"  Total: {len(pairs)}")
     print(f"  Changed from current: {changed} ({changed/len(pairs)*100:.1f}%)")
     print(f"  Errors: {errors}")
     print(f"  By source: {dict(by_source)}")
-    print(f"\nSaved to {LABELED_PAIRS_PATH}")
+    print(f"\nSaved to {data_file}")
     print("Review disagreements manually, then run 'eval' to score.")
 
 
@@ -573,6 +819,11 @@ def main():
 
     export_p = sub.add_parser("export", help="Export pairs for labeling")
     export_p.add_argument("--n", type=int, default=200, help="Number of pairs to export")
+    export_p.add_argument(
+        "--data-file",
+        default="",
+        help="Output JSON path (default: scripts/eval_data/labeled_pairs.json)",
+    )
 
     eval_p = sub.add_parser("eval", help="Evaluate against labeled pairs")
     eval_p.add_argument("--model", default="", help="Model to re-classify with")
@@ -591,6 +842,11 @@ def main():
         default="auto",
         help="Prompt adapter for the comparison model",
     )
+    eval_p.add_argument(
+        "--data-file",
+        default="",
+        help="Input JSON path (default: scripts/eval_data/labeled_pairs.json)",
+    )
 
     auto_p = sub.add_parser("autolabel", help="Auto-label pairs using 3-tier pipeline")
     auto_p.add_argument("--model", default="gpt-4.1-mini", help="Model to classify with")
@@ -601,11 +857,41 @@ def main():
         default="auto",
         help="Prompt adapter for the autolabel model",
     )
+    auto_p.add_argument(
+        "--data-file",
+        default="",
+        help="Input JSON path (default: scripts/eval_data/labeled_pairs.json)",
+    )
+
+    analyze_p = sub.add_parser("analyze", help="Analyze labeled-pair failure modes")
+    analyze_p.add_argument(
+        "--data-file",
+        default="",
+        help="Input JSON path (default: scripts/eval_data/labeled_pairs.json)",
+    )
+    analyze_p.add_argument(
+        "--top-transitions",
+        type=int,
+        default=10,
+        help="How many label transitions to print",
+    )
+    analyze_p.add_argument(
+        "--top-families",
+        type=int,
+        default=10,
+        help="How many families to print",
+    )
+    analyze_p.add_argument(
+        "--examples-per-transition",
+        type=int,
+        default=3,
+        help="How many example disagreements to show per transition",
+    )
 
     args = parser.parse_args()
 
     if args.command == "export":
-        asyncio.run(export_pairs(args.n))
+        asyncio.run(export_pairs(args.n, output_path=_resolve_data_file(args.data_file)))
     elif args.command == "eval":
         asyncio.run(evaluate(
             model=args.model,
@@ -614,13 +900,22 @@ def main():
             use_vectors=not args.no_vectors,
             prompt_adapter=args.prompt_adapter,
             compare_prompt_adapter=args.compare_prompt_adapter,
+            data_file=_resolve_data_file(args.data_file),
         ))
     elif args.command == "autolabel":
         asyncio.run(autolabel(
             model=args.model,
             use_vectors=not args.no_vectors,
             prompt_adapter=args.prompt_adapter,
+            data_file=_resolve_data_file(args.data_file),
         ))
+    elif args.command == "analyze":
+        analyze(
+            data_file=_resolve_data_file(args.data_file),
+            top_transitions=args.top_transitions,
+            top_families=args.top_families,
+            examples_per_transition=args.examples_per_transition,
+        )
     else:
         parser.print_help()
 

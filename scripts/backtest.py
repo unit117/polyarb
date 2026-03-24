@@ -13,6 +13,8 @@ Usage:
     python -m scripts.backtest [--days 30] [--capital 10000] [--max-position 100]
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -79,11 +81,65 @@ async def get_snapshot_at(session, market_id: int, as_of: datetime):
     return result.scalar_one_or_none()
 
 
+def _market_is_resolved_as_of(market: Market | None, as_of: datetime) -> bool:
+    """Return True when a market is authoritatively resolved by `as_of`."""
+    return bool(
+        market
+        and market.resolved_outcome
+        and market.resolved_at
+        and market.resolved_at <= as_of
+    )
+
+
+def _resolved_pair_markets(
+    market_a: Market | None,
+    market_b: Market | None,
+    as_of: datetime,
+) -> list[dict]:
+    """Collect resolved pair legs for logging and guard checks."""
+    resolved = []
+    for market in (market_a, market_b):
+        if not _market_is_resolved_as_of(market, as_of):
+            continue
+        resolved.append(
+            {
+                "market_id": market.id,
+                "resolved_outcome": market.resolved_outcome,
+                "resolved_at": market.resolved_at.isoformat() if market.resolved_at else None,
+            }
+        )
+    return resolved
+
+
+# Public aliases for test imports
+is_resolved_as_of = _market_is_resolved_as_of
+
+
+def check_pair_resolved(
+    market_a: Market | None,
+    market_b: Market | None,
+    as_of: datetime,
+) -> list[int]:
+    """Return list of resolved market IDs for the pair (empty = safe to trade)."""
+    resolved = []
+    if _market_is_resolved_as_of(market_a, as_of):
+        resolved.append(market_a.id)
+    if _market_is_resolved_as_of(market_b, as_of):
+        resolved.append(market_b.id)
+    return resolved
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Detection step (time-bounded)
 # ═══════════════════════════════════════════════════════════════════
 
-async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime) -> list[int]:
+async def detect_opportunities(
+    session,
+    pairs: list[MarketPair],
+    as_of: datetime,
+    resolved_skip_logged: set[int] | None = None,
+    pair_ids: set[int] | None = None,
+) -> list[int]:
     """Re-evaluate existing pairs with prices as-of `as_of`.
 
     Returns list of newly created ArbitrageOpportunity IDs.
@@ -92,6 +148,29 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
 
     for pair in pairs:
         if not pair.verified:
+            continue
+        if pair_ids is not None and pair.id not in pair_ids:
+            continue
+
+        market_a = await session.get(Market, pair.market_a_id)
+        market_b = await session.get(Market, pair.market_b_id)
+        if not market_a or not market_b:
+            continue
+
+        resolved_markets = _resolved_pair_markets(market_a, market_b, as_of)
+        if resolved_markets:
+            if resolved_skip_logged is None or pair.id not in resolved_skip_logged:
+                if resolved_skip_logged is not None:
+                    resolved_skip_logged.add(pair.id)
+                log.warning(
+                    "resolved_market_skipped",
+                    phase="detect",
+                    pair_id=pair.id,
+                    market_a_id=pair.market_a_id,
+                    market_b_id=pair.market_b_id,
+                    as_of=as_of.isoformat(),
+                    resolved_markets=resolved_markets,
+                )
             continue
 
         prices_a = await get_prices_at(session, pair.market_a_id, as_of)
@@ -107,11 +186,6 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
         outcomes_a = constraint.get("outcomes_a", [])
         outcomes_b = constraint.get("outcomes_b", [])
 
-        # Re-verify pair with today's prices
-        market_a = await session.get(Market, pair.market_a_id)
-        market_b = await session.get(Market, pair.market_b_id)
-        if not market_a or not market_b:
-            continue
         market_a_dict = {
             "event_id": market_a.event_id,
             "question": market_a.question,
@@ -267,6 +341,7 @@ async def simulate_opportunity(
     portfolio: Portfolio,
     as_of: datetime,
     max_position_size: float,
+    resolved_skip_logged: set[int] | None = None,
 ) -> dict:
     """Execute paper trades for an optimized opportunity using prices as-of `as_of`."""
     opp = await session.get(ArbitrageOpportunity, opp_id)
@@ -282,6 +357,22 @@ async def simulate_opportunity(
 
     market_a = await session.get(Market, pair.market_a_id)
     market_b = await session.get(Market, pair.market_b_id)
+    resolved_markets = _resolved_pair_markets(market_a, market_b, as_of)
+    if resolved_markets:
+        if resolved_skip_logged is None or pair.id not in resolved_skip_logged:
+            if resolved_skip_logged is not None:
+                resolved_skip_logged.add(pair.id)
+            log.warning(
+                "resolved_market_skipped",
+                phase="simulate",
+                pair_id=pair.id,
+                opportunity_id=opp.id,
+                market_a_id=pair.market_a_id,
+                market_b_id=pair.market_b_id,
+                as_of=as_of.isoformat(),
+                resolved_markets=resolved_markets,
+            )
+        return {"status": "skipped", "reason": "resolved_market", "trades_executed": 0}
 
     trades_executed = 0
 
@@ -545,6 +636,8 @@ async def run_backtest(
     use_authoritative: bool = False,
     start_date: str | None = None,
     end_date: str | None = None,
+    pair_ids: set[int] | None = None,
+    pair_file: str | None = None,
 ) -> list[dict]:
     """Run the full backtest and return daily results."""
     structlog.configure(
@@ -585,14 +678,38 @@ async def run_backtest(
         )
         pairs = list(result.scalars().all())
 
+    # ── Load pair-id filter from file if given ────────────────────
+    if pair_file and not pair_ids:
+        pair_ids = set()
+        pf = Path(pair_file)
+        if pf.suffix == ".json":
+            data = json.loads(pf.read_text())
+            for item in data:
+                if isinstance(item, int):
+                    pair_ids.add(item)
+                elif isinstance(item, dict) and "pair_id" in item:
+                    pair_ids.add(int(item["pair_id"]))
+        else:
+            # Plain text: one pair ID per line
+            for line in pf.read_text().splitlines():
+                line = line.strip()
+                if line and line.isdigit():
+                    pair_ids.add(int(line))
+        log.info("pair_filter_loaded", pair_file=pair_file, pair_count=len(pair_ids))
+
     if not pairs:
         log.error("no_market_pairs", hint="Run the detector first to find pairs")
         return []
+
+    effective_pairs = len(pairs)
+    if pair_ids:
+        effective_pairs = sum(1 for p in pairs if p.id in pair_ids)
 
     log.info(
         "backtest_start",
         data_range=f"{earliest.date()} → {latest.date()}",
         pairs=len(pairs),
+        effective_pairs=effective_pairs,
         initial_capital=initial_capital,
         max_position=max_position_size,
         fee_model="polymarket",
@@ -616,6 +733,7 @@ async def run_backtest(
     # ── Initialize portfolio ──────────────────────────────────────
     portfolio = Portfolio(initial_capital)
     daily_results = []
+    resolved_skip_logged: set[int] = set()
 
     for step_idx, as_of in enumerate(time_steps):
         day_label = as_of.strftime("%Y-%m-%d")
@@ -635,11 +753,28 @@ async def run_backtest(
         }
 
         async with SessionFactory() as session:
-            # ── Step 1: Detection ─────────────────────────────────
-            opp_ids = await detect_opportunities(session, pairs, as_of)
+            # ── Step 1: Settlement (before detect to prevent same-day reopen) ──
+            try:
+                settle_stats = await settle_resolved_positions(
+                    session, portfolio, as_of,
+                    use_authoritative=use_authoritative,
+                )
+                day_stats["settled"] = settle_stats["settled"]
+                day_stats["settlement_pnl"] = round(settle_stats["pnl_realized"], 2)
+            except Exception:
+                log.exception("backtest_settlement_error", day=day_label)
+
+            # ── Step 2: Detection ─────────────────────────────────
+            opp_ids = await detect_opportunities(
+                session,
+                pairs,
+                as_of,
+                resolved_skip_logged=resolved_skip_logged,
+                pair_ids=pair_ids,
+            )
             day_stats["opportunities_detected"] = len(opp_ids)
 
-            # ── Step 2: Optimization ──────────────────────────────
+            # ── Step 3: Optimization ──────────────────────────────
             optimized = 0
             for opp_id in opp_ids:
                 try:
@@ -650,30 +785,20 @@ async def run_backtest(
                     log.exception("backtest_optimize_error", opp_id=opp_id, day=day_label)
             day_stats["opportunities_optimized"] = optimized
 
-            # ── Step 3: Simulation ────────────────────────────────
+            # ── Step 4: Simulation ────────────────────────────────
             total_trades = 0
             for opp_id in opp_ids:
                 try:
                     res = await simulate_opportunity(
                         session, opp_id, portfolio, as_of,
                         max_position_size,
+                        resolved_skip_logged=resolved_skip_logged,
                     )
                     if res.get("trades_executed"):
                         total_trades += res["trades_executed"]
                 except Exception:
                     log.exception("backtest_simulate_error", opp_id=opp_id, day=day_label)
             day_stats["trades_executed"] = total_trades
-
-            # ── Step 4: Settlement ──────────────────────────────
-            try:
-                settle_stats = await settle_resolved_positions(
-                    session, portfolio, as_of,
-                    use_authoritative=use_authoritative,
-                )
-                day_stats["settled"] = settle_stats["settled"]
-                day_stats["settlement_pnl"] = round(settle_stats["pnl_realized"], 2)
-            except Exception:
-                log.exception("backtest_settlement_error", day=day_label)
 
             # ── Snapshot portfolio ────────────────────────────────
             snap = await snapshot_portfolio(session, portfolio, as_of)
@@ -847,7 +972,16 @@ async def cli_main():
                         help="Start date (ISO format, e.g. 2026-01-01)")
     parser.add_argument("--end", type=str, default=None,
                         help="End date (ISO format, e.g. 2026-03-01)")
+    parser.add_argument("--pair-ids", type=str, default=None,
+                        help="Comma-separated pair IDs to include (e.g. 1,5,12)")
+    parser.add_argument("--pair-file", type=str, default=None,
+                        help="File with pair IDs (JSON list or one per line)")
     args = parser.parse_args()
+
+    # Parse --pair-ids into a set
+    _pair_ids = None
+    if args.pair_ids:
+        _pair_ids = {int(x.strip()) for x in args.pair_ids.split(",") if x.strip()}
 
     results = await run_backtest(
         days=args.days,
@@ -857,6 +991,8 @@ async def cli_main():
         use_authoritative=not args.heuristic,
         start_date=args.start,
         end_date=args.end,
+        pair_ids=_pair_ids,
+        pair_file=args.pair_file,
     )
 
     if results:

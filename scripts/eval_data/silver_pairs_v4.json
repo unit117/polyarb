@@ -1,0 +1,1722 @@
+[
+  {
+    "pair_id": 453,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 13, 2026?",
+    "question_b": "US strikes Iran by January 12, 2026?",
+    "market_a_id": 758,
+    "market_b_id": 1775
+  },
+  {
+    "pair_id": 516,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $150K in July?",
+    "question_b": "Will Bitcoin reach $130K in July?",
+    "market_a_id": 418,
+    "market_b_id": 526
+  },
+  {
+    "pair_id": 21,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will LLA hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "question_b": "Will PRO hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "market_a_id": 1130,
+    "market_b_id": 1459
+  },
+  {
+    "pair_id": 39,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win 50-55% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win 45-50% of the vote in the South Korea election?",
+    "market_a_id": 359,
+    "market_b_id": 362
+  },
+  {
+    "pair_id": 531,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Octavian Berceanu be the next Mayor of Bucharest?",
+    "question_b": "Will Vlad Gheorghe be the next Mayor of Bucharest?",
+    "market_a_id": 98,
+    "market_b_id": 1477
+  },
+  {
+    "pair_id": 283,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon tweet 115\u2013129 times June 13\u201320?",
+    "question_b": "Will Elon tweet 145\u2013159 times June 13\u201320?",
+    "market_a_id": 3890,
+    "market_b_id": 4936
+  },
+  {
+    "pair_id": 509,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Tesla be the largest company in the world by market cap on December 31?",
+    "question_b": "Will Amazon be the largest company in the world by market cap on December 31?",
+    "market_a_id": 170,
+    "market_b_id": 446
+  },
+  {
+    "pair_id": 504,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 320-339 tweets from November 21 to November 28, 2025?",
+    "question_b": "Will Elon Musk post 300-319 tweets from November 21 to November 28, 2025?",
+    "market_a_id": 3148,
+    "market_b_id": 3452
+  },
+  {
+    "pair_id": 528,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Vlad Gheorghe be the next Mayor of Bucharest?",
+    "question_b": "Will Virgil Alexandru Zidaru be the next Mayor of Bucharest?",
+    "market_a_id": 1477,
+    "market_b_id": 2312
+  },
+  {
+    "pair_id": 542,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Vlad Voiculescu be the next Mayor of Bucharest?",
+    "question_b": "Will Virgil Alexandru Zidaru be the next Mayor of Bucharest?",
+    "market_a_id": 746,
+    "market_b_id": 2312
+  },
+  {
+    "pair_id": 545,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will C\u0103lin Georgescu be the next Mayor of Bucharest?",
+    "question_b": "Will Virgil Alexandru Zidaru be the next Mayor of Bucharest?",
+    "market_a_id": 163,
+    "market_b_id": 2312
+  },
+  {
+    "pair_id": 185,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Solana reach $250 in August?",
+    "question_b": "Will Solana reach $230 in August?",
+    "market_a_id": 2478,
+    "market_b_id": 4446
+  },
+  {
+    "pair_id": 510,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 240-259 tweets from January 13 to January 20, 2026?",
+    "question_b": "Will Elon Musk post 400-419 tweets from January 13 to January 20, 2026?",
+    "market_a_id": 4170,
+    "market_b_id": 4584
+  },
+  {
+    "pair_id": 407,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will C\u0103lin Georgescu win the Romanian presidential election?",
+    "question_b": "Will Sebastian-Constantin Popescu win the Romanian presidential election?",
+    "market_a_id": 617,
+    "market_b_id": 4526
+  },
+  {
+    "pair_id": 193,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 560-579 tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 720-739 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 1615,
+    "market_b_id": 4907
+  },
+  {
+    "pair_id": 40,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win 50-55% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win 55-60% of the vote in the South Korea election?",
+    "market_a_id": 359,
+    "market_b_id": 980
+  },
+  {
+    "pair_id": 428,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win 60-65% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win between 49% and 51% of the vote in the South Korea election?",
+    "market_a_id": 2436,
+    "market_b_id": 4367
+  },
+  {
+    "pair_id": 546,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "winner_duplicate",
+    "question_a": "Will the Washington Wizards win the 2025 NBA Finals?",
+    "question_b": "Will the Orlando Magic win the 2025 NBA Finals?",
+    "market_a_id": 9,
+    "market_b_id": 92
+  },
+  {
+    "pair_id": 561,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin dip to $90K in June?",
+    "question_b": "Will Bitcoin dip to $60K in June?",
+    "market_a_id": 771,
+    "market_b_id": 2546
+  },
+  {
+    "pair_id": 43,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Zohran Mamdani win by 10-20%?",
+    "question_b": "Will Zohran Mamdani win by >9%?",
+    "market_a_id": 1288,
+    "market_b_id": 4673
+  },
+  {
+    "pair_id": 191,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 620-639 tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 720-739 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 3104,
+    "market_b_id": 4907
+  },
+  {
+    "pair_id": 38,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Zohran Mamdani win by 10-20%?",
+    "question_b": "Will Zohran Mamdani win by 20-30%?",
+    "market_a_id": 1288,
+    "market_b_id": 2178
+  },
+  {
+    "pair_id": 353,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Ilie Bolojan win the Romanian presidential election?",
+    "question_b": "Will Silviu Predoiu win the Romanian presidential election?",
+    "market_a_id": 1100,
+    "market_b_id": 3860
+  },
+  {
+    "pair_id": 20,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will PRO hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "question_b": "Will SER hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "market_a_id": 1459,
+    "market_b_id": 2526
+  },
+  {
+    "pair_id": 521,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Vlad Voiculescu be the next Mayor of Bucharest?",
+    "question_b": "Will Vlad Gheorghe be the next Mayor of Bucharest?",
+    "market_a_id": 746,
+    "market_b_id": 1477
+  },
+  {
+    "pair_id": 195,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 540-559 tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 720-739 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 2100,
+    "market_b_id": 4907
+  },
+  {
+    "pair_id": 494,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 140-159 tweets from November 14 to November 21, 2025?",
+    "question_b": "Will Elon Musk post 180-199 tweets from November 14 to November 21, 2025?",
+    "market_a_id": 3152,
+    "market_b_id": 3474
+  },
+  {
+    "pair_id": 376,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 14, 2026?",
+    "question_b": "US strikes Iran by January 13, 2026?",
+    "market_a_id": 145,
+    "market_b_id": 758
+  },
+  {
+    "pair_id": 17,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the government shutdown end November 12?",
+    "question_b": "Will the government shutdown end November 11?",
+    "market_a_id": 157,
+    "market_b_id": 3977
+  },
+  {
+    "pair_id": 529,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Catalin Drula be the next Mayor of Bucharest?",
+    "question_b": "Will Vlad Gheorghe be the next Mayor of Bucharest?",
+    "market_a_id": 634,
+    "market_b_id": 1477
+  },
+  {
+    "pair_id": 484,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 17, 2026?",
+    "question_b": "US strikes Iran by January 13, 2026?",
+    "market_a_id": 628,
+    "market_b_id": 758
+  },
+  {
+    "pair_id": 182,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 320-339 tweets from January 23 to January 30, 2026?",
+    "question_b": "Will Elon Musk post 300-319 tweets from January 23 to January 30, 2026?",
+    "market_a_id": 3454,
+    "market_b_id": 3615
+  },
+  {
+    "pair_id": 131,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will the price of Ethereum be greater than $2500 on July 4?",
+    "question_b": "Will the price of Ethereum be between $2400 and $2500 on July 4?",
+    "market_a_id": 3095,
+    "market_b_id": 4404
+  },
+  {
+    "pair_id": 192,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 740+ tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 720-739 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 3685,
+    "market_b_id": 4907
+  },
+  {
+    "pair_id": 92,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin dip to $95K in July?",
+    "question_b": "Will Bitcoin dip to $60K in July?",
+    "market_a_id": 1997,
+    "market_b_id": 2605
+  },
+  {
+    "pair_id": 498,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 4 Fed rate cuts happen in 2025?",
+    "question_b": "Will 6 Fed rate cuts happen in 2025?",
+    "market_a_id": 848,
+    "market_b_id": 1053
+  },
+  {
+    "pair_id": 426,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win 45-50% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win between 49% and 51% of the vote in the South Korea election?",
+    "market_a_id": 362,
+    "market_b_id": 4367
+  },
+  {
+    "pair_id": 427,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win 55-60% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win between 49% and 51% of the vote in the South Korea election?",
+    "market_a_id": 980,
+    "market_b_id": 4367
+  },
+  {
+    "pair_id": 314,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $135k in October?",
+    "question_b": "Will Bitcoin reach $126k in October?",
+    "market_a_id": 670,
+    "market_b_id": 3964
+  },
+  {
+    "pair_id": 130,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close above $4000 at the end of 2025?",
+    "question_b": "Will Gold close between $4200 and $4300 at the end of 2025?",
+    "market_a_id": 2633,
+    "market_b_id": 4975
+  },
+  {
+    "pair_id": 313,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $150k in October?",
+    "question_b": "Will Bitcoin reach $135k in October?",
+    "market_a_id": 445,
+    "market_b_id": 670
+  },
+  {
+    "pair_id": 257,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 180-199 tweets from November 18 to November 25, 2025?",
+    "question_b": "Will Elon Musk post 0-19 tweets from November 18 to November 25, 2025?",
+    "market_a_id": 2984,
+    "market_b_id": 3164
+  },
+  {
+    "pair_id": 432,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 260-279 tweets from November 7 to November 14, 2025?",
+    "question_b": "Will Elon Musk post 280-299 tweets from November 7 to November 14, 2025?",
+    "market_a_id": 2411,
+    "market_b_id": 4472
+  },
+  {
+    "pair_id": 284,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "Will Elon tweet 130\u2013144 times June 13\u201320?",
+    "question_b": "Will Elon tweet 145\u2013159 times June 13\u201320?",
+    "market_a_id": 3552,
+    "market_b_id": 4936
+  },
+  {
+    "pair_id": 222,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Meituan have the best AI model at the end of January 2026?",
+    "question_b": "Will Alibaba have the best AI model at the end of January 2026?",
+    "market_a_id": 290,
+    "market_b_id": 1666
+  },
+  {
+    "pair_id": 511,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 440-459 tweets from January 13 to January 20, 2026?",
+    "question_b": "Will Elon Musk post 240-259 tweets from January 13 to January 20, 2026?",
+    "market_a_id": 4074,
+    "market_b_id": 4170
+  },
+  {
+    "pair_id": 184,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 300-319 tweets from January 23 to January 30, 2026?",
+    "question_b": "Will Elon Musk post 280-299 tweets from January 23 to January 30, 2026?",
+    "market_a_id": 3615,
+    "market_b_id": 3705
+  },
+  {
+    "pair_id": 186,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Solana reach $250 in August?",
+    "question_b": "Will Solana reach $210 in August?",
+    "market_a_id": 2478,
+    "market_b_id": 4164
+  },
+  {
+    "pair_id": 425,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win 50-55% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win between 49% and 51% of the vote in the South Korea election?",
+    "market_a_id": 359,
+    "market_b_id": 4367
+  },
+  {
+    "pair_id": 274,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Russia capture Pokrovsk by August 31?",
+    "question_b": "Will Russia capture all of Pokrovsk by November 30?",
+    "market_a_id": 1712,
+    "market_b_id": 2647
+  },
+  {
+    "pair_id": 493,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 160-179 tweets from November 14 to November 21, 2025?",
+    "question_b": "Will Elon Musk post 140-159 tweets from November 14 to November 21, 2025?",
+    "market_a_id": 2118,
+    "market_b_id": 3152
+  },
+  {
+    "pair_id": 105,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Ethereum dip to $1,000 by December 31?",
+    "question_b": "Will Ethereum dip to $800 by December 31?",
+    "market_a_id": 840,
+    "market_b_id": 1798
+  },
+  {
+    "pair_id": 19,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "winner_duplicate",
+    "question_a": "Will Gabriel Bortoleto finish second in the 2025 Drivers Championship?",
+    "question_b": "Will Gabriel Bortoleto be the 2025 Drivers Champion?",
+    "market_a_id": 597,
+    "market_b_id": 1179
+  },
+  {
+    "pair_id": 245,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 380-399 tweets from December 2 to December 9, 2025?",
+    "question_b": "Will Elon Musk post 340-359 tweets from December 2 to December 9, 2025?",
+    "market_a_id": 2652,
+    "market_b_id": 3663
+  },
+  {
+    "pair_id": 76,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Maduro out by January 31, 2026?",
+    "question_b": "Maduro out by November 30, 2025?",
+    "market_a_id": 191,
+    "market_b_id": 400
+  },
+  {
+    "pair_id": 231,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 2 Fed rate cuts happen in 2025?",
+    "question_b": "Will 5 Fed rate cuts happen in 2025?",
+    "market_a_id": 655,
+    "market_b_id": 1287
+  },
+  {
+    "pair_id": 183,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 340-359 tweets from January 23 to January 30, 2026?",
+    "question_b": "Will Elon Musk post 300-319 tweets from January 23 to January 30, 2026?",
+    "market_a_id": 1870,
+    "market_b_id": 3615
+  },
+  {
+    "pair_id": 559,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Wicked: For Good be the top grossing movie of 2025?",
+    "question_b": "Will Wicked: For Good be the third highest grossing movie of 2025?",
+    "market_a_id": 464,
+    "market_b_id": 4851
+  },
+  {
+    "pair_id": 543,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Octavian Berceanu be the next Mayor of Bucharest?",
+    "question_b": "Will Virgil Alexandru Zidaru be the next Mayor of Bucharest?",
+    "market_a_id": 98,
+    "market_b_id": 2312
+  },
+  {
+    "pair_id": 535,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end by November 30?",
+    "question_b": "Will the Government shutdown end October 31-November 3?",
+    "market_a_id": 568,
+    "market_b_id": 2037
+  },
+  {
+    "pair_id": 230,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 2 Fed rate cuts happen in 2025?",
+    "question_b": "Will 3 Fed rate cuts happen in 2025?",
+    "market_a_id": 655,
+    "market_b_id": 698
+  },
+  {
+    "pair_id": 259,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 200-219 tweets from November 18 to November 25, 2025?",
+    "question_b": "Will Elon Musk post 0-19 tweets from November 18 to November 25, 2025?",
+    "market_a_id": 2481,
+    "market_b_id": 3164
+  },
+  {
+    "pair_id": 522,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $125K in August?",
+    "question_b": "Will Bitcoin reach $135K in August?",
+    "market_a_id": 914,
+    "market_b_id": 1367
+  },
+  {
+    "pair_id": 277,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will OpenAi have the top AI model on August 31?",
+    "question_b": "Will xAI have the top AI model on August 31?",
+    "market_a_id": 1633,
+    "market_b_id": 1889
+  },
+  {
+    "pair_id": 385,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Israel military action against Iran before July?",
+    "question_b": "Israel strike on Iranian nuclear facility before July?",
+    "market_a_id": 509,
+    "market_b_id": 1074
+  },
+  {
+    "pair_id": 378,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 14, 2026?",
+    "question_b": "US strikes Iran by January 12, 2026?",
+    "market_a_id": 145,
+    "market_b_id": 1775
+  },
+  {
+    "pair_id": 431,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Anca Alexandrescu be the next Mayor of Bucharest?",
+    "question_b": "Will Gabriela Firea be the next Mayor of Bucharest?",
+    "market_a_id": 547,
+    "market_b_id": 605
+  },
+  {
+    "pair_id": 104,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Solana dip to $120 in June?",
+    "question_b": "Will Solana dip to $100 in June?",
+    "market_a_id": 4200,
+    "market_b_id": 4806
+  },
+  {
+    "pair_id": 207,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the New York Mets win the 2025 World Series?",
+    "question_b": "Will the New York Yankees win the 2025 World Series?",
+    "market_a_id": 4369,
+    "market_b_id": 4732
+  },
+  {
+    "pair_id": 483,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 18, 2026?",
+    "question_b": "US strikes Iran by January 17, 2026?",
+    "market_a_id": 408,
+    "market_b_id": 628
+  },
+  {
+    "pair_id": 527,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $200K in August?",
+    "question_b": "Will Bitcoin reach $125K in August?",
+    "market_a_id": 843,
+    "market_b_id": 914
+  },
+  {
+    "pair_id": 434,
+    "dependency_type": "partition",
+    "confidence": 0.7,
+    "family": "winner_duplicate",
+    "question_a": "Will Jake Paul win his boxing match against Anthony Joshua?",
+    "question_b": "Who will win Jake Paul vs Anthony Joshua?",
+    "market_a_id": 84,
+    "market_b_id": 414
+  },
+  {
+    "pair_id": 56,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 460-479 tweets from December 5 to December 12, 2025?",
+    "question_b": "Will Elon Musk post 480-499 tweets from December 5 to December 12, 2025?",
+    "market_a_id": 3347,
+    "market_b_id": 3874
+  },
+  {
+    "pair_id": 133,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $2,500-2,600 at the end of 2025?",
+    "question_b": "Will Gold close between $4200 and $4300 at the end of 2025?",
+    "market_a_id": 3563,
+    "market_b_id": 4975
+  },
+  {
+    "pair_id": 132,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close below $4000 at the end of 2025?",
+    "question_b": "Will Gold close between $4200 and $4300 at the end of 2025?",
+    "market_a_id": 4813,
+    "market_b_id": 4975
+  },
+  {
+    "pair_id": 424,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Lee Jae-myung win between 47% and 49% of the vote in the South Korea election?",
+    "question_b": "Will Lee Jae-myung win between 49% and 51% of the vote in the South Korea election?",
+    "market_a_id": 3893,
+    "market_b_id": 4367
+  },
+  {
+    "pair_id": 396,
+    "dependency_type": "partition",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "Golden Knights vs. Kings",
+    "question_b": "Kings vs. Golden Knights",
+    "market_a_id": 3252,
+    "market_b_id": 3518
+  },
+  {
+    "pair_id": 302,
+    "dependency_type": "implication",
+    "confidence": 0.95,
+    "family": "crypto_threshold",
+    "question_a": "Will the price of Bitcoin be above $94,000 on November 18?",
+    "question_b": "Will the price of Bitcoin be above $96,000 on November 18?",
+    "market_a_id": 2991,
+    "market_b_id": 4482
+  },
+  {
+    "pair_id": 455,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 26, 2026?",
+    "question_b": "US strikes Iran by January 12, 2026?",
+    "market_a_id": 320,
+    "market_b_id": 1775
+  },
+  {
+    "pair_id": 187,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Ethereum dip to $2000 in June?",
+    "question_b": "Will Ethereum dip to $1800 in June?",
+    "market_a_id": 2327,
+    "market_b_id": 2995
+  },
+  {
+    "pair_id": 497,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 4 Fed rate cuts happen in 2025?",
+    "question_b": "Will 5 Fed rate cuts happen in 2025?",
+    "market_a_id": 848,
+    "market_b_id": 1287
+  },
+  {
+    "pair_id": 502,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 320-339 tweets from November 21 to November 28, 2025?",
+    "question_b": "Will Elon Musk post 340-359 tweets from November 21 to November 28, 2025?",
+    "market_a_id": 3148,
+    "market_b_id": 3236
+  },
+  {
+    "pair_id": 547,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gemini 3.0 be released by October 31?",
+    "question_b": "Will Gemini 3.0 be released by October 15?",
+    "market_a_id": 908,
+    "market_b_id": 3995
+  },
+  {
+    "pair_id": 5,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end November 12-15?",
+    "question_b": "Will the Government shutdown end by November 15?",
+    "market_a_id": 254,
+    "market_b_id": 555
+  },
+  {
+    "pair_id": 129,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 460-479 tweets from January 9 to January 16, 2026?",
+    "question_b": "Will Elon Musk post 480-499 tweets from January 9 to January 16, 2026?",
+    "market_a_id": 2736,
+    "market_b_id": 3041
+  },
+  {
+    "pair_id": 506,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Zohran Mamdani\u2019s RCV margin of victory be greater than 13% in the New York City Mayoral Democratic Primary?",
+    "question_b": "Will Zohran Mamdani\u2019s RCV margin of victory be between 10% and 11% in the New York City Mayoral Democratic Primary?",
+    "market_a_id": 4572,
+    "market_b_id": 4846
+  },
+  {
+    "pair_id": 562,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin dip to $100K in June?",
+    "question_b": "Will Bitcoin dip to $60K in June?",
+    "market_a_id": 790,
+    "market_b_id": 2546
+  },
+  {
+    "pair_id": 324,
+    "dependency_type": "implication",
+    "confidence": 0.95,
+    "family": "crypto_threshold",
+    "question_a": "Will the price of Bitcoin be above $100,000 on January 14?",
+    "question_b": "Will the price of Bitcoin be above $98,000 on January 14?",
+    "market_a_id": 3318,
+    "market_b_id": 4068
+  },
+  {
+    "pair_id": 325,
+    "dependency_type": "implication",
+    "confidence": 0.95,
+    "family": "crypto_threshold",
+    "question_a": "Will the price of Bitcoin be above $100,000 on January 14?",
+    "question_b": "Will the price of Bitcoin be above $96,000 on January 14?",
+    "market_a_id": 3318,
+    "market_b_id": 4175
+  },
+  {
+    "pair_id": 8,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end by November 15?",
+    "question_b": "Will the Government shutdown end October 15+?",
+    "market_a_id": 555,
+    "market_b_id": 972
+  },
+  {
+    "pair_id": 134,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $3,100-3,200 at the end of 2025?",
+    "question_b": "Will Gold close between $4200 and $4300 at the end of 2025?",
+    "market_a_id": 2231,
+    "market_b_id": 4975
+  },
+  {
+    "pair_id": 515,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "sports_winner_game",
+    "question_a": "Will the Miami Marlins win the 2025 World Series?",
+    "question_b": "Will the Miami Marlins win the 2025 National League Championship?",
+    "market_a_id": 589,
+    "market_b_id": 3711
+  },
+  {
+    "pair_id": 537,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end by November 30?",
+    "question_b": "Will the government shutdown end November 10?",
+    "market_a_id": 568,
+    "market_b_id": 4267
+  },
+  {
+    "pair_id": 486,
+    "dependency_type": "implication",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "LoL: T1 vs Top Esports (BO5)",
+    "question_b": "LoL: T1 vs Top Esports - Game 3 Winner",
+    "market_a_id": 166,
+    "market_b_id": 1530
+  },
+  {
+    "pair_id": 312,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $130k in October?",
+    "question_b": "Will Bitcoin reach $135k in October?",
+    "market_a_id": 375,
+    "market_b_id": 670
+  },
+  {
+    "pair_id": 23,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will SER win the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "question_b": "Will PRO hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "market_a_id": 624,
+    "market_b_id": 1459
+  },
+  {
+    "pair_id": 549,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gemini 3.0 be released by November 15?",
+    "question_b": "Will Gemini 3.0 be released by October 31?",
+    "market_a_id": 640,
+    "market_b_id": 908
+  },
+  {
+    "pair_id": 196,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 600-619 tweets from January 13 to January 20, 2026?",
+    "question_b": "Will Elon Musk post 100-119 tweets from January 13 to January 20, 2026?",
+    "market_a_id": 2968,
+    "market_b_id": 4295
+  },
+  {
+    "pair_id": 322,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 340-359 tweets from November 25 to December 2, 2025?",
+    "question_b": "Will Elon Musk post 400-419 tweets from November 25 to December 2, 2025?",
+    "market_a_id": 3308,
+    "market_b_id": 4723
+  },
+  {
+    "pair_id": 491,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will Jos\u00e9 Antonio Kast win the Chilean presidential election?",
+    "question_b": "Will Johannes Kaiser win the Chilean presidential election?",
+    "market_a_id": 319,
+    "market_b_id": 865
+  },
+  {
+    "pair_id": 523,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $125K in August?",
+    "question_b": "Will Bitcoin reach $130K in August?",
+    "market_a_id": 914,
+    "market_b_id": 1861
+  },
+  {
+    "pair_id": 530,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will C\u0103lin Georgescu be the next Mayor of Bucharest?",
+    "question_b": "Will Vlad Gheorghe be the next Mayor of Bucharest?",
+    "market_a_id": 163,
+    "market_b_id": 1477
+  },
+  {
+    "pair_id": 544,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Ciprian Ciucu be the next Mayor of Bucharest?",
+    "question_b": "Will Virgil Alexandru Zidaru be the next Mayor of Bucharest?",
+    "market_a_id": 453,
+    "market_b_id": 2312
+  },
+  {
+    "pair_id": 60,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Superman be the top grossing movie of 2025?",
+    "question_b": "Will Superman be the third highest grossing movie of 2025?",
+    "market_a_id": 203,
+    "market_b_id": 2917
+  },
+  {
+    "pair_id": 66,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will 0 justices on South Korea's Constitutional Court vote for Yoon's impeachment before May?",
+    "question_b": "Will 1-2 justices on South Korea's Constitutional Court vote for Yoon's impeachment before May?",
+    "market_a_id": 2364,
+    "market_b_id": 3132
+  },
+  {
+    "pair_id": 433,
+    "dependency_type": "partition",
+    "confidence": 0.9,
+    "family": "winner_duplicate",
+    "question_a": "Will Jake Paul win his boxing match against Anthony Joshua?",
+    "question_b": "Will Anthony Joshua win his boxing match against Jake Paul?",
+    "market_a_id": 84,
+    "market_b_id": 102
+  },
+  {
+    "pair_id": 247,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Russia x Ukraine ceasefire by January 31, 2026?",
+    "question_b": "Russia x Ukraine ceasefire by November 30?",
+    "market_a_id": 80,
+    "market_b_id": 467
+  },
+  {
+    "pair_id": 212,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end November 12-15?",
+    "question_b": "Will the government shutdown end November 11?",
+    "market_a_id": 254,
+    "market_b_id": 3977
+  },
+  {
+    "pair_id": 210,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end November 12-15?",
+    "question_b": "Will the government shutdown end November 15?",
+    "market_a_id": 254,
+    "market_b_id": 1999
+  },
+  {
+    "pair_id": 77,
+    "dependency_type": "implication",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "LoL: Gen.G vs Hanwha Life Esports (BO5)",
+    "question_b": "LoL: Gen.G vs Hanwha Life Esports - Game 1 Winner",
+    "market_a_id": 294,
+    "market_b_id": 2969
+  },
+  {
+    "pair_id": 229,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 31, 2026?",
+    "question_b": "US strikes Iran by January 26, 2026?",
+    "market_a_id": 59,
+    "market_b_id": 320
+  },
+  {
+    "pair_id": 429,
+    "dependency_type": "implication",
+    "confidence": 0.95,
+    "family": "crypto_threshold",
+    "question_a": "Will the price of Bitcoin be above $96,000 on December 29?",
+    "question_b": "Will the price of Bitcoin be above $88,000 on December 29?",
+    "market_a_id": 2861,
+    "market_b_id": 3924
+  },
+  {
+    "pair_id": 55,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 200-219 tweets from December 9 to December 16, 2025?",
+    "question_b": "Will Elon Musk post 180-199 tweets from December 9 to December 16, 2025?",
+    "market_a_id": 2036,
+    "market_b_id": 2317
+  },
+  {
+    "pair_id": 220,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Alibaba have the best AI model at the end of January 2026?",
+    "question_b": "Will Baidu have the best AI model at the end of January 2026?",
+    "market_a_id": 1666,
+    "market_b_id": 3182
+  },
+  {
+    "pair_id": 227,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 31, 2026?",
+    "question_b": "US strikes Iran by January 27, 2026?",
+    "market_a_id": 59,
+    "market_b_id": 1140
+  },
+  {
+    "pair_id": 16,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will PRO hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "question_b": "Will PRO win the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "market_a_id": 1459,
+    "market_b_id": 3330
+  },
+  {
+    "pair_id": 174,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk create a new political party before August?",
+    "question_b": "Will Elon Musk create a new political party in June?",
+    "market_a_id": 2743,
+    "market_b_id": 4329
+  },
+  {
+    "pair_id": 22,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will UP hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "question_b": "Will PRO hold the most seats in the Chamber of Deputies following the 2025 Argentina election?",
+    "market_a_id": 1083,
+    "market_b_id": 1459
+  },
+  {
+    "pair_id": 361,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end November 4-7?",
+    "question_b": "Will the Government shutdown end October 31-November 3?",
+    "market_a_id": 393,
+    "market_b_id": 2037
+  },
+  {
+    "pair_id": 246,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Russia x Ukraine ceasefire by January 31, 2026?",
+    "question_b": "Russia x Ukraine ceasefire by October 31?",
+    "market_a_id": 80,
+    "market_b_id": 825
+  },
+  {
+    "pair_id": 260,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 0-19 tweets from November 18 to November 25, 2025?",
+    "question_b": "Will Elon Musk post 80-99 tweets from November 18 to November 25, 2025?",
+    "market_a_id": 3164,
+    "market_b_id": 3806
+  },
+  {
+    "pair_id": 235,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 2 Fed rate cuts happen in 2025?",
+    "question_b": "Will 6 Fed rate cuts happen in 2025?",
+    "market_a_id": 655,
+    "market_b_id": 1053
+  },
+  {
+    "pair_id": 59,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 480-499 tweets from December 5 to December 12, 2025?",
+    "question_b": "Will Elon Musk post 440-459 tweets from December 5 to December 12, 2025?",
+    "market_a_id": 3874,
+    "market_b_id": 3906
+  },
+  {
+    "pair_id": 47,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "Will Bitcoin reach $1,000,000 by December 31, 2025?",
+    "question_b": "Will Bitcoin reach $250,000 by December 31, 2025?",
+    "market_a_id": 69,
+    "market_b_id": 122
+  },
+  {
+    "pair_id": 377,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 14, 2026?",
+    "question_b": "US strikes Iran by January 11, 2026?",
+    "market_a_id": 145,
+    "market_b_id": 876
+  },
+  {
+    "pair_id": 226,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 31, 2026?",
+    "question_b": "US strikes Iran by January 12, 2026?",
+    "market_a_id": 59,
+    "market_b_id": 1775
+  },
+  {
+    "pair_id": 437,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "winner_duplicate",
+    "question_a": "Will Jake Paul win his boxing match against Anthony Joshua?",
+    "question_b": "Will Jake Paul vs. Anthony Joshua have no official winner?",
+    "market_a_id": 84,
+    "market_b_id": 131
+  },
+  {
+    "pair_id": 495,
+    "dependency_type": "implication",
+    "confidence": 0.95,
+    "family": "crypto_threshold",
+    "question_a": "Will the price of Bitcoin be above $96,000 on November 14?",
+    "question_b": "Will the price of Bitcoin be above $98,000 on November 14?",
+    "market_a_id": 3626,
+    "market_b_id": 3963
+  },
+  {
+    "pair_id": 248,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Russia x Ukraine ceasefire by January 31, 2026?",
+    "question_b": "Russia x Ukraine ceasefire by August 31?",
+    "market_a_id": 80,
+    "market_b_id": 511
+  },
+  {
+    "pair_id": 310,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 220-239 tweets from November 21 to November 28, 2025?",
+    "question_b": "Will Elon Musk post 200-219 tweets from November 21 to November 28, 2025?",
+    "market_a_id": 2822,
+    "market_b_id": 3542
+  },
+  {
+    "pair_id": 496,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 3 Fed rate cuts happen in 2025?",
+    "question_b": "Will 4 Fed rate cuts happen in 2025?",
+    "market_a_id": 698,
+    "market_b_id": 848
+  },
+  {
+    "pair_id": 513,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $130K in July?",
+    "question_b": "Will Bitcoin reach $120K in July?",
+    "market_a_id": 526,
+    "market_b_id": 1151
+  },
+  {
+    "pair_id": 78,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "LoL: Gen.G vs Hanwha Life Esports (BO5)",
+    "question_b": "LoL: Hanwha Life Esports vs Gen.G",
+    "market_a_id": 294,
+    "market_b_id": 4920
+  },
+  {
+    "pair_id": 29,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $3,200 or more at the end of 2025?",
+    "question_b": "Will Gold close at $3,100-3,200 at the end of 2025?",
+    "market_a_id": 1768,
+    "market_b_id": 2231
+  },
+  {
+    "pair_id": 28,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 480-499 tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 440-459 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 2287,
+    "market_b_id": 2848
+  },
+  {
+    "pair_id": 93,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin dip to $100K in July?",
+    "question_b": "Will Bitcoin dip to $60K in July?",
+    "market_a_id": 1216,
+    "market_b_id": 2605
+  },
+  {
+    "pair_id": 503,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 200-219 tweets from December 12 to December 19, 2025?",
+    "question_b": "Will Elon Musk post 220-239 tweets from December 12 to December 19, 2025?",
+    "market_a_id": 3728,
+    "market_b_id": 3836
+  },
+  {
+    "pair_id": 27,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 440-459 tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 460-479 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 2848,
+    "market_b_id": 2886
+  },
+  {
+    "pair_id": 454,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 16, 2026?",
+    "question_b": "US strikes Iran by January 12, 2026?",
+    "market_a_id": 251,
+    "market_b_id": 1775
+  },
+  {
+    "pair_id": 505,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 240-259 tweets from December 12 to December 19, 2025?",
+    "question_b": "Will Elon Musk post 220-239 tweets from December 12 to December 19, 2025?",
+    "market_a_id": 3805,
+    "market_b_id": 3836
+  },
+  {
+    "pair_id": 225,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 31, 2026?",
+    "question_b": "US strikes Iran by January 30, 2026?",
+    "market_a_id": 59,
+    "market_b_id": 726
+  },
+  {
+    "pair_id": 31,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $3,200 or more at the end of 2025?",
+    "question_b": "Will Gold close at $2,900-3,000 at the end of 2025?",
+    "market_a_id": 1768,
+    "market_b_id": 3113
+  },
+  {
+    "pair_id": 42,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Zohran Mamdani win by 10-20%?",
+    "question_b": "Will Zohran Mamdani win by 30% or more?",
+    "market_a_id": 1288,
+    "market_b_id": 2338
+  },
+  {
+    "pair_id": 228,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "date_window",
+    "question_a": "US strikes Iran by January 31, 2026?",
+    "question_b": "US strikes Iran by January 18, 2026?",
+    "market_a_id": 59,
+    "market_b_id": 408
+  },
+  {
+    "pair_id": 548,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gemini 3.0 be released by November 30?",
+    "question_b": "Will Gemini 3.0 be released by October 31?",
+    "market_a_id": 492,
+    "market_b_id": 908
+  },
+  {
+    "pair_id": 508,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Amazon be the largest company in the world by market cap on December 31?",
+    "question_b": "Will Microsoft be the largest company in the world by market cap on December 31?",
+    "market_a_id": 446,
+    "market_b_id": 808
+  },
+  {
+    "pair_id": 560,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin dip to $95K in June?",
+    "question_b": "Will Bitcoin dip to $60K in June?",
+    "market_a_id": 899,
+    "market_b_id": 2546
+  },
+  {
+    "pair_id": 507,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Amazon be the largest company in the world by market cap on December 31?",
+    "question_b": "Will Apple be the largest company in the world by market cap on December 31?",
+    "market_a_id": 446,
+    "market_b_id": 653
+  },
+  {
+    "pair_id": 589,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Ethereum reach $4000 in July?",
+    "question_b": "Will Ethereum reach $3100 in July?",
+    "market_a_id": 291,
+    "market_b_id": 2735
+  },
+  {
+    "pair_id": 7,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Government shutdown end by November 15?",
+    "question_b": "Will the government shutdown end November 16?",
+    "market_a_id": 555,
+    "market_b_id": 2840
+  },
+  {
+    "pair_id": 194,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 640-659 tweets from December 30 to January 6, 2026?",
+    "question_b": "Will Elon Musk post 720-739 tweets from December 30 to January 6, 2026?",
+    "market_a_id": 3738,
+    "market_b_id": 4907
+  },
+  {
+    "pair_id": 32,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $3,200 or more at the end of 2025?",
+    "question_b": "Will Gold close at $2,500-2,600 at the end of 2025?",
+    "market_a_id": 1768,
+    "market_b_id": 3563
+  },
+  {
+    "pair_id": 30,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $3,200 or more at the end of 2025?",
+    "question_b": "Will Gold close at $3,000-3,100 at the end of 2025?",
+    "market_a_id": 1768,
+    "market_b_id": 2522
+  },
+  {
+    "pair_id": 41,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Zohran Mamdani win by 0-10%?",
+    "question_b": "Will Zohran Mamdani win by 10-20%?",
+    "market_a_id": 422,
+    "market_b_id": 1288
+  },
+  {
+    "pair_id": 33,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Gold close at $3,200 or more at the end of 2025?",
+    "question_b": "Will Gold close at $2,800-2,900 at the end of 2025?",
+    "market_a_id": 1768,
+    "market_b_id": 4974
+  },
+  {
+    "pair_id": 58,
+    "dependency_type": "implication",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "Will Elon Musk post 380-399 tweets from December 5 to December 12, 2025?",
+    "question_b": "Will Elon Musk post 480-499 tweets from December 5 to December 12, 2025?",
+    "market_a_id": 1967,
+    "market_b_id": 3874
+  },
+  {
+    "pair_id": 57,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 180-199 tweets from December 9 to December 16, 2025?",
+    "question_b": "Will Elon Musk post 220-239 tweets from December 9 to December 16, 2025?",
+    "market_a_id": 2317,
+    "market_b_id": 3661
+  },
+  {
+    "pair_id": 232,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 2 Fed rate cuts happen in 2025?",
+    "question_b": "Will 1 Fed rate cut happen in 2025?",
+    "market_a_id": 655,
+    "market_b_id": 923
+  },
+  {
+    "pair_id": 81,
+    "dependency_type": "implication",
+    "confidence": 0.7,
+    "family": "other",
+    "question_a": "LoL: Gen.G vs Hanwha Life Esports (BO5)",
+    "question_b": "LoL: Gen.G vs Hanwha Life Esports - Game 2 Winner",
+    "market_a_id": 294,
+    "market_b_id": 2249
+  },
+  {
+    "pair_id": 315,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Bitcoin reach $200k in October?",
+    "question_b": "Will Bitcoin reach $135k in October?",
+    "market_a_id": 126,
+    "market_b_id": 670
+  },
+  {
+    "pair_id": 492,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 140-159 tweets from November 14 to November 21, 2025?",
+    "question_b": "Will Elon Musk post 120-139 tweets from November 14 to November 21, 2025?",
+    "market_a_id": 3152,
+    "market_b_id": 3296
+  },
+  {
+    "pair_id": 233,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "fed_rate_cut",
+    "question_a": "Will 2 Fed rate cuts happen in 2025?",
+    "question_b": "Will 4 Fed rate cuts happen in 2025?",
+    "market_a_id": 655,
+    "market_b_id": 848
+  },
+  {
+    "pair_id": 275,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Russia capture all of Pokrovsk by November 30?",
+    "question_b": "Will Russia capture Pokrovsk by December 31?",
+    "market_a_id": 2647,
+    "market_b_id": 3567
+  },
+  {
+    "pair_id": 344,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will MrBeast's next video get less than 25 million views on day 1",
+    "question_b": "Will MrBeast's next video get less than 30 million views on day 1?",
+    "market_a_id": 2423,
+    "market_b_id": 2465
+  },
+  {
+    "pair_id": 321,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 380-399 tweets from January 20 to January 27, 2026?",
+    "question_b": "Will Elon Musk post 340-359 tweets from January 20 to January 27, 2026?",
+    "market_a_id": 1894,
+    "market_b_id": 4049
+  },
+  {
+    "pair_id": 311,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 180-199 tweets from November 21 to November 28, 2025?",
+    "question_b": "Will Elon Musk post 200-219 tweets from November 21 to November 28, 2025?",
+    "market_a_id": 3337,
+    "market_b_id": 3542
+  },
+  {
+    "pair_id": 320,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon Musk post 340-359 tweets from January 20 to January 27, 2026?",
+    "question_b": "Will Elon Musk post 320-339 tweets from January 20 to January 27, 2026?",
+    "market_a_id": 4049,
+    "market_b_id": 4102
+  },
+  {
+    "pair_id": 345,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will MrBeast's next video get less than 25 million views on day 1",
+    "question_b": "Will MrBeast's next video get between 30 and 35 million views on day 1",
+    "market_a_id": 2423,
+    "market_b_id": 4694
+  },
+  {
+    "pair_id": 343,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will Elon tweet 100\u2013114 times June 20\u201327?",
+    "question_b": "Will Elon tweet 115\u2013129 times June 20\u201327?",
+    "market_a_id": 4274,
+    "market_b_id": 4547
+  },
+  {
+    "pair_id": 588,
+    "dependency_type": "implication",
+    "confidence": 0.9,
+    "family": "crypto_threshold",
+    "question_a": "Will Ethereum reach $3100 in July?",
+    "question_b": "Will Ethereum reach $3700 in July?",
+    "market_a_id": 2735,
+    "market_b_id": 4241
+  },
+  {
+    "pair_id": 577,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "election_political",
+    "question_a": "Will George Simion win the Romanian presidential election?",
+    "question_b": "Will Cristian Sima win the Romanian presidential election?",
+    "market_a_id": 67,
+    "market_b_id": 2962
+  },
+  {
+    "pair_id": 596,
+    "dependency_type": "mutual_exclusion",
+    "confidence": 0.9,
+    "family": "other",
+    "question_a": "Will the Los Angeles Dodgers win the 2025 World Series?",
+    "question_b": "Will the Los Angeles Angels win the 2025 World Series?",
+    "market_a_id": 197,
+    "market_b_id": 564
+  }
+]
