@@ -12,6 +12,7 @@ At each day, only snapshots up to that day are visible to the pipeline.
 Usage:
     python -m scripts.backtest [--days 30] [--capital 10000] [--max-position 100]
 """
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -94,6 +95,33 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
         if not pair.verified:
             continue
 
+        # ── Skip pairs where either market has already resolved ──
+        market_a = await session.get(Market, pair.market_a_id)
+        market_b = await session.get(Market, pair.market_b_id)
+        if not market_a or not market_b:
+            continue
+
+        if market_a.resolved_at and market_a.resolved_at <= as_of:
+            log.warning(
+                "resolved_market_skipped",
+                pair_id=pair.id,
+                market_id=market_a.id,
+                resolved_at=str(market_a.resolved_at),
+                as_of=str(as_of),
+                reason="market_a_already_resolved",
+            )
+            continue
+        if market_b.resolved_at and market_b.resolved_at <= as_of:
+            log.warning(
+                "resolved_market_skipped",
+                pair_id=pair.id,
+                market_id=market_b.id,
+                resolved_at=str(market_b.resolved_at),
+                as_of=str(as_of),
+                reason="market_b_already_resolved",
+            )
+            continue
+
         prices_a = await get_prices_at(session, pair.market_a_id, as_of)
         prices_b = await get_prices_at(session, pair.market_b_id, as_of)
 
@@ -106,12 +134,6 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
 
         outcomes_a = constraint.get("outcomes_a", [])
         outcomes_b = constraint.get("outcomes_b", [])
-
-        # Re-verify pair with today's prices
-        market_a = await session.get(Market, pair.market_a_id)
-        market_b = await session.get(Market, pair.market_b_id)
-        if not market_a or not market_b:
-            continue
         market_a_dict = {
             "event_id": market_a.event_id,
             "question": market_a.question,
@@ -282,6 +304,20 @@ async def simulate_opportunity(
 
     market_a = await session.get(Market, pair.market_a_id)
     market_b = await session.get(Market, pair.market_b_id)
+
+    # ── Safety net: refuse to trade on already-resolved markets ──
+    for mkt, label in [(market_a, "A"), (market_b, "B")]:
+        if mkt and mkt.resolved_at and mkt.resolved_at <= as_of:
+            log.warning(
+                "resolved_market_trade_blocked",
+                opp_id=opp_id,
+                market_id=mkt.id,
+                market_label=label,
+                resolved_at=str(mkt.resolved_at),
+                as_of=str(as_of),
+            )
+            opp.status = "simulated"
+            return {"status": "resolved_market_blocked", "trades_executed": 0}
 
     trades_executed = 0
 
