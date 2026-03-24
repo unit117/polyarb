@@ -17,6 +17,7 @@ from services.detector.classifier import (
     _check_milestone_threshold_markets,
     _derive_dependency_type,
     _strip_think_tags,
+    _supports_json_response_format,
     classify_rule_based,
     classify_llm,
     classify_llm_resolution,
@@ -588,6 +589,17 @@ class TestStripThinkTags:
         assert result == '{"valid_outcomes": []}'
 
 
+class TestJsonModeSupport:
+    def test_gpt_model_supports_json_mode(self):
+        assert _supports_json_response_format("gpt-4.1-mini") is True
+
+    def test_minimax_model_skips_json_mode(self):
+        assert _supports_json_response_format("minimax/minimax-m2.7") is False
+
+    def test_qwen_model_skips_json_mode(self):
+        assert _supports_json_response_format("qwen3-max") is False
+
+
 class TestDeriveType:
     """Test deterministic mapping from resolution vectors to dependency type."""
 
@@ -678,6 +690,7 @@ class TestClassifyLLMResolution:
         assert result["prompt_adapter"] == "openai_generic"
         messages = client.chat.completions.create.await_args.kwargs["messages"]
         assert [message["role"] for message in messages] == ["system", "user"]
+        assert client.chat.completions.create.await_args.kwargs["response_format"] == {"type": "json_object"}
 
     @pytest.mark.asyncio
     async def test_mutual_exclusion(self):
@@ -749,6 +762,29 @@ class TestClassifyLLMResolution:
         )
         assert result is not None
         assert result["dependency_type"] == "none"
+        assert "response_format" not in client.chat.completions.create.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_qwen_skips_json_mode(self):
+        response_json = json.dumps({
+            "valid_outcomes": [
+                {"a": "Yes", "b": "Yes"}, {"a": "Yes", "b": "No"},
+                {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"},
+            ],
+            "reasoning": "Independent",
+            "confidence": 0.90,
+        })
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(
+            return_value=_make_llm_response(response_json)
+        )
+        result = await classify_llm_resolution(
+            client, "qwen3-max",
+            {"question": "A?", "outcomes": ["Yes", "No"]},
+            {"question": "B?", "outcomes": ["Yes", "No"]},
+        )
+        assert result is not None
+        assert "response_format" not in client.chat.completions.create.await_args.kwargs
 
     @pytest.mark.asyncio
     async def test_implication_with_direction(self):

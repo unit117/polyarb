@@ -638,6 +638,18 @@ def _strip_think_tags(raw: str) -> str:
     return raw
 
 
+def _supports_json_response_format(model: str) -> bool:
+    """Return whether Tier 2 should request OpenAI JSON mode for this model.
+
+    Some providers expose an OpenAI-compatible endpoint but do not fully support
+    `response_format={"type": "json_object"}`. DashScope Qwen models are the
+    current known case, so they must rely on prompt-only JSON discipline.
+    """
+    model_lower = model.lower()
+    unsupported_substrings = ("minimax", "qwen")
+    return not any(token in model_lower for token in unsupported_substrings)
+
+
 def _derive_dependency_type(
     valid_outcomes: list[dict],
     outcomes_a: list,
@@ -734,7 +746,7 @@ async def classify_llm_resolution(
             "max_tokens": 2048 if "minimax" in model else 512,
         }
         # Use JSON response format when model supports it
-        if "minimax" not in model:
+        if _supports_json_response_format(model):
             kwargs["response_format"] = {"type": "json_object"}
 
         response = await client.chat.completions.create(**kwargs)
