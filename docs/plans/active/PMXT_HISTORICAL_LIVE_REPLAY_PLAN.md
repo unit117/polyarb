@@ -127,6 +127,10 @@ Verify what PMXT historical data actually exists before promising any replay win
 ### Work
 
 - build a small audit script against PMXT archive samples
+- explicitly confirm the access method before writing the audit:
+  - preferred path: download representative PMXT archive files locally first, then inspect them from disk
+  - if PMXT is exposed via remote HTTP or object storage, first prove we can fetch a bounded sample window non-interactively
+  - if access requires credentials, document where they will be provided from and fail early if they are missing
 - record:
   - oldest visible dump
   - newest visible dump
@@ -150,6 +154,7 @@ Verify what PMXT historical data actually exists before promising any replay win
   - partial E1-like windows
   - or something broader
 - we know whether the archive is viable for a replay spike without heroic data cleaning
+- we know the concrete PMXT access path the repo will use for Phase 1, or we have explicitly recorded PMXT access as the current blocker
 
 ## 8. Phase 0.5 - Live Shadow Logger And Review Queue
 
@@ -171,6 +176,17 @@ This is the cheapest way to answer what is actually missing from the current sys
 
 Add a lightweight shadow logging path that records candidate-pair review rows for `3-7` days of normal live operation.
 
+Use a concrete storage choice:
+
+- persist shadow rows in a dedicated Postgres table, for example `shadow_candidate_logs`
+- keep JSONL as an export format for manual review, not the primary write path
+
+Why this is the default:
+
+- the repo already relies on Postgres for operational state
+- query/filtering by timestamp, pair, verification reason, and market metadata will be much easier from SQL
+- a single export script can materialize review-ready JSONL from the table later
+
 Each row should capture:
 
 - timestamp
@@ -183,6 +199,7 @@ Each row should capture:
 - last trade recency if available
 - whether the pair would have been passed to optimization
 - whether the pair would have traded under current gates
+- whether the pair failed for the same verification reasons currently causing the silver set to produce `0` trades
 
 Then:
 
@@ -192,9 +209,10 @@ Then:
 
 ### Suggested artifacts
 
+- migration for `shadow_candidate_logs`
 - `scripts/export_live_shadow_queue.py`
 - `docs/research/live_shadow_review_2026-03-xx.md`
-- optionally a small local table or JSONL artifact under a dedicated output directory
+- JSONL exports under a dedicated review output directory as needed
 
 ### Acceptance criteria
 
@@ -202,6 +220,7 @@ Then:
 - we have `100-200` manually reviewed live examples
 - we can answer which missing fields most often explain bad decisions
 - we have an evidence-backed view of whether PMXT archive data would help those cases
+- we can quantify how often the shadow queue hits the same verification rejection patterns that currently zero out the silver backtest
 
 ## 9. Phase 1 - Thin-Slice PMXT Replay Spike
 
@@ -281,6 +300,10 @@ Only start this if the decision gate passes.
 
 Extract paper, live, and replay into independent consumers of the same validated bundle.
 
+### Rough effort
+
+Assume `1-3 weeks` depending on what the thin slice proves and how much simulator extraction is actually required.
+
 ### Likely work
 
 - refactor `services/simulator/pipeline.py` so opportunity preparation is separate from execution sinks
@@ -304,6 +327,7 @@ Extract paper, live, and replay into independent consumers of the same validated
 
 - Phase 0 archive audit
 - Phase 0.5 live shadow logger
+- deploy the shadow logger to NAS by the end of the week so Week 2 review has actual data to use
 
 ### Week 2
 
@@ -356,6 +380,13 @@ Decision:
 
 - use the live shadow queue as the parallel improvement input
 - do not block small verifier / ranking fixes on the full replay project
+
+### Risk 6: the conditional full replay refactor gets underestimated
+
+Decision:
+
+- treat Phase 2 as a separate effort after the decision gate
+- assume a rough implementation range of `1-3 weeks` depending on what the thin slice proves and how much simulator extraction is actually required
 
 ## 14. Success Criteria
 
