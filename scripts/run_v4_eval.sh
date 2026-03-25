@@ -219,6 +219,8 @@ fi
 
 # ── Phase 2b: Score accuracy against gold set ───────────────────────
 
+_wait_pg_ready 120
+
 if [ -f "$GOLD_SET" ]; then
   log "Scoring accuracy against gold set..."
   EVAL_ABS="$(pwd)/$EVAL_DIR"

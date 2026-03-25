@@ -303,3 +303,96 @@ Qwen (Alibaba) offers competitive models on OpenRouter with generous free tiers.
 ### Eval Plan
 
 Run the same parallel eval pipeline (`run_eval_parallel.sh`) adding these 4 models. Use the free tier (`:free` suffix) for Qwen3-235B and Qwen3-30B to minimize cost. Estimated cost for all 4: < $3 total (free tiers + Flash/Plus are cheap).
+
+---
+
+## 11. V4 Accuracy-First Eval — 8-Model Leaderboard (2026-03-25)
+
+**Methodology change:** V4 replaces backtest PnL (noisy, dominated by 3 clusters) with accuracy on a hand-labeled gold set. Each model reclassifies 597 pairs, then its labels are scored against 168 expert-labeled ground truth pairs covering all 5 dependency types.
+
+**Gold set:** 168 pairs — 45 implication, 35 mutual_exclusion, 25 conditional, 23 partition, 40 none
+**Baseline (stored labels):** 58.9% (99/168)
+**Pipeline:** `scripts/run_v4_eval.sh --skip-backtest` (Phases 1, 2, 2b, 4)
+**NAS output:** `eval_results/v4_eval_20260325_015021/`
+
+### Results
+
+| Rank | Model | Correct | Accuracy | Macro F1 | FPR (none) | Notes |
+|------|-------|---------|----------|----------|------------|-------|
+| 1 | **Sonnet 4** | 129/168 | 76.8% | **0.681** | **0.0%** | Best F1 + zero FPR |
+| 2 | GPT-4.1-mini | 130/168 | **77.4%** | 0.669 | 16.7% | Highest raw accuracy but worst FPR |
+| 3 | Qwen3-max | 125/168 | 74.4% | 0.673 | 0.0% | Best free-tier option |
+| 4 | Qwen3.5-122B | 125/168 | 74.4% | 0.616 | 0.0% | Free tier, slower |
+| 5 | Gemini 2.5 Flash | 124/168 | 73.8% | 0.544 | 8.3% | Low F1 despite decent accuracy |
+| 6 | MiniMax M2.7 | 123/168 | 73.2% | 0.646 | 0.0% | Very slow (~2h reclassify) |
+| 7 | Haiku 3.5 | 97/168 | 57.7% | 0.538 | 16.7% | Not viable |
+| 8 | DeepSeek Chat | 96/168 | 57.1% | 0.543 | 8.3% | Not viable |
+
+### Key Findings
+
+1. **Sonnet 4 is the best overall classifier.** Highest macro F1 (0.681), 0% false positive rate, only 1 correct answer behind GPT-4.1-mini on raw accuracy. GPT-4.1-mini's 16.7% FPR means it labels "none" pairs as structured — opening positions on unrelated markets.
+
+2. **GPT-4.1-mini accuracy is misleading.** It scores highest on raw accuracy (77.4%) but its false positives create phantom trades. For production, FPR matters more than marginal accuracy gains.
+
+3. **Qwen3-max is a strong free-tier alternative.** 74.4% accuracy, 0.673 F1, 0% FPR — within 2.4pp of Sonnet on accuracy and nearly identical F1. Suitable as a cheap fallback or shadow model.
+
+4. **Clear bottom tier.** Haiku 3.5 (57.7%) and DeepSeek Chat (57.1%) perform barely above the stored-label baseline (58.9%). Not viable for classification.
+
+5. **Silver backtest was non-informative.** All models produced 0 trades on the 172-pair silver set. Root cause: most silver pairs are unverified ME pairs that fail `pair_verification` at detection time. The production recommendation is based entirely on gold-set classification metrics. See follow-up backlog item.
+
+### Production Recommendation
+
+- **Production pick:** `anthropic/claude-sonnet-4` via OpenRouter — already deployed
+- **Cheap fallback:** `qwen3-max` via DashScope — 0% FPR, 74.4% accuracy, free tier
+- **Not recommended:** GPT-4.1-mini (high FPR), Haiku/DeepSeek (low accuracy), M2.7 (too slow)
+
+### Artifacts
+
+```
+NAS: /volume1/docker/polyarb/eval_results/v4_eval_20260325_015021/
+├── summary.md                    # Aggregated leaderboard
+├── metadata.txt                  # Run config + timestamps
+├── goldset_analysis.log          # Phase 1 gate check
+├── {model}_reclassify.log        # Per-model reclassification logs (8 files)
+├── {model}_accuracy.log          # Per-model scoring logs (8 files)
+└── {model}_accuracy.json         # Machine-readable accuracy metrics (8 files)
+    # JSON schema: {model, correct, total, accuracy_pct, macro_f1, fpr_pct}
+```
+
+---
+
+## 12. Prepared Config Change: Switch to Sonnet 4
+
+Production is **already running Sonnet 4** (verified in NAS `.env`). No config change needed. Current settings:
+
+```env
+# Current production (NAS .env) — already correct
+CLASSIFIER_MODEL=anthropic/claude-sonnet-4
+CLASSIFIER_BASE_URL=https://openrouter.ai/api/v1
+# CLASSIFIER_PROMPT_ADAPTER not set → defaults to "auto" → resolves to "claude_xml" for Anthropic models
+```
+
+If reverting to a fallback were needed:
+```env
+# Fallback option: Qwen3-max via DashScope (free tier, 0% FPR)
+CLASSIFIER_MODEL=qwen3-max
+CLASSIFIER_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+CLASSIFIER_PROMPT_ADAPTER=auto
+# Requires DASHSCOPE_API_KEY in .env
+```
+
+Shadow mode (run both models, log comparison, trade on primary):
+```env
+SHADOW_CLASSIFIER_MODEL=qwen3-max
+SHADOW_CLASSIFIER_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+```
+
+---
+
+## 13. Follow-Up Backlog
+
+1. **Diagnose zero-trade silver backtest.** 172-pair silver set yields 0 trades across all models. Root cause: ~296 pairs in DB but most are unverified ME that fail `pair_verification` (no `event_id`). Investigate whether (a) silver set needs re-curation with verifiable pairs, (b) verification is too strict for backtest-only eval, or (c) a separate broader DB would yield trades.
+
+2. **Shadow validation for Sonnet 4 on live pair generation.** Deploy Qwen3-max as shadow classifier to compare live label agreement rates against Sonnet 4. Measures whether the gold-set accuracy advantage translates to real pair detection.
+
+3. **Decide fallback/shadow model.** GPT-4.1-mini has highest raw accuracy but 16.7% FPR. Qwen3-max has 0% FPR and is free. Run shadow mode for 7 days to collect agreement statistics before finalizing.
