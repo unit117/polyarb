@@ -1,5 +1,24 @@
 # Classifier Model Comparison — Final Report
 
+> [!WARNING]
+> **Historical report — superseded by V4 accuracy-first results on 2026-03-25.**
+>
+> This document summarizes an earlier backtest-based model comparison over 597 pairs and should not be used as the
+> current production recommendation.
+>
+> Current source of truth:
+> - [classifier_v4_accuracy_leaderboard_2026-03-25.md](/Users/unit117/Dev/polyarb/reports/classifier_v4_accuracy_leaderboard_2026-03-25.md)
+>
+> Current recommendation:
+> - **Production model:** `anthropic/claude-sonnet-4`
+> - **Fallback / shadow candidate:** `qwen3-max`
+>
+> Important context:
+> - The V4 silver backtest remained non-informative (`0` trades), so the current recommendation is based on gold-set
+>   classification quality, not V4 trading PnL.
+> - This report is preserved for historical context on earlier backtest behavior, cost observations, and the need for
+>   classifier caching.
+
 **Date:** 2026-03-23
 **Backtest period:** 2024-09-24 to 2026-01-24 (488 days)
 **Initial capital:** $10,000
@@ -197,32 +216,58 @@ The detector runs classification on every candidate pair every ~2 minutes. Obser
 
 ---
 
-## 6. Recommendation
+## 6. Recommendation (Superseded)
 
-### Cost-Performance Tradeoff
+This section is retained for historical context only and is **not** the current production decision.
 
-| Model | Return | Cost/Run | Net Profit (return minus cost) | Cost per $1 PnL |
-|-------|--------|----------|-------------------------------|-----------------|
-| Sonnet 4 | +$84.18 | $11.60 | +$72.58 | $0.14 |
-| Gemini 2.5 Flash | +$18.30 | $0.85 | +$17.45 | $0.05 |
-| Haiku 3.5 | +$8.57 | $1.41 | +$7.16 | $0.16 |
-| gpt-4.1-mini | +$5.04 | $0.76 | +$4.28 | $0.15 |
-| DeepSeek V3 | +$5.04 | $0.20 | +$4.84 | $0.04 |
-| M2.7 | -$37.22 | $4.28 | -$41.50 | N/A |
+### Current production decision
 
-**Before choosing a model, fix the classification caching problem** (see section 8). The live detector re-classifies already-known pairs every cycle, burning ~$11/day with Sonnet. With caching, ongoing costs drop to near zero for all models — then Sonnet is the clear winner.
+Based on the completed V4 8-model evaluation on the canonical 168-row gold set, the recommended classifier is:
 
-### If caching is implemented: Sonnet 4 (`anthropic/claude-sonnet-4`)
+- **Production pick:** `anthropic/claude-sonnet-4`
+- **Fallback / shadow candidate:** `qwen3-max`
 
-Best performer by every quality metric. Ongoing cost becomes negligible (only new pairs hit the LLM). Periodic bulk reclassify at $11.60 is affordable.
+### Why Sonnet 4 is the current production pick
 
-### If caching is NOT implemented: DeepSeek V3 (`deepseek/deepseek-chat`)
+On the V4 canonical gold set, Sonnet 4 delivered the best overall safety/quality tradeoff:
 
-Cheapest daily burn (~$0.20/day extrapolated). Same backtest result as gpt-4.1-mini but 4x cheaper. Minimal risk.
+- **Accuracy:** `129/168` (`76.8%`)
+- **Macro F1:** `0.681` (best)
+- **False-positive rate on `none` pairs:** `0.0%`
 
-### Not recommended: gpt-4.1-mini
+`gpt-4.1-mini` achieved slightly higher raw accuracy (`130/168`, `77.4%`) but had materially worse false positives on
+independent pairs (`16.7%` FPR), which is more dangerous for production trading than missing one additional true
+dependency.
 
-Previously the safe default, but DeepSeek V3 produces identical results at 4x lower cost. No reason to keep it.
+### Why Qwen3-max is the fallback candidate
+
+`qwen3-max` is the strongest low-cost fallback observed in the V4 evaluation:
+
+- **Accuracy:** `125/168` (`74.4%`)
+- **Macro F1:** `0.673`
+- **False-positive rate on `none` pairs:** `0.0%`
+
+This makes it the best secondary option for shadowing or fallback use.
+
+### Models not recommended for production
+
+- `gpt-4.1-mini`: strong raw accuracy, but too many false positives on `none` pairs
+- `anthropic/claude-3.5-haiku`
+- `deepseek/deepseek-chat`
+
+The latter two underperformed materially in the V4 evaluation and are not viable for production classification.
+
+### What remains unresolved
+
+Two operational issues still need follow-up, but they do not change the current classifier selection:
+
+1. **Classifier caching / repeated inference cost**
+   - Repeated classification of already-known pairs can make high-quality models unnecessarily expensive in live
+     operation.
+
+2. **Non-informative V4 silver backtest**
+   - The silver backtest produced `0` trades, so it cannot currently be used as a model-ranking signal.
+   - Model selection is therefore based on V4 gold-set classification metrics.
 
 ---
 
