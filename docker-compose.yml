@@ -216,6 +216,8 @@ services:
     environment:
       POSTGRES_DB: polyarb_backtest
     command: python -m scripts.backtest --days 30 --capital 10000 --output /app/backtest_report.json
+    volumes:
+      - /volume1/docker/data:/data:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -223,7 +225,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 4G
 
 volumes:
   pgdata:

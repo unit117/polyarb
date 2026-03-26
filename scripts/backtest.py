@@ -52,6 +52,34 @@ RESOLUTION_THRESHOLD = 0.98
 log = structlog.get_logger()
 
 
+def _passes_uncertainty_filter(
+    prices_a: dict, prices_b: dict,
+    outcomes_a: list[str], outcomes_b: list[str],
+) -> bool:
+    """Reject pairs where any binary market is near-certain (< floor or > ceil).
+
+    Near-resolved markets have sub-5-cent margins that get eaten by fees
+    and slippage. Same logic as services/detector/pipeline.py.
+    """
+    floor = settings.uncertainty_price_floor
+    ceil = settings.uncertainty_price_ceil
+
+    for outcomes, prices in [(outcomes_a, prices_a), (outcomes_b, prices_b)]:
+        if len(outcomes) > 2:
+            continue
+        for outcome in outcomes:
+            try:
+                p = float(prices.get(outcome, 0.5))
+            except (TypeError, ValueError):
+                continue
+            if p < floor or p > ceil:
+                return False
+            complement = 1.0 - p
+            if complement < floor or complement > ceil:
+                return False
+    return True
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Time-bounded query helpers
 # ═══════════════════════════════════════════════════════════════════
@@ -139,12 +167,21 @@ async def detect_opportunities(
     as_of: datetime,
     resolved_skip_logged: set[int] | None = None,
     pair_ids: set[int] | None = None,
-) -> list[int]:
+) -> tuple[list[int], dict[str, int]]:
     """Re-evaluate existing pairs with prices as-of `as_of`.
 
-    Returns list of newly created ArbitrageOpportunity IDs.
+    Returns (list of newly created ArbitrageOpportunity IDs, rejection counters).
     """
     opp_ids = []
+    counters = {
+        "resolved_skip": 0,
+        "no_prices": 0,
+        "no_constraint": 0,
+        "uncertainty_skip": 0,
+        "verification_fail": 0,
+        "profit_le_0": 0,
+        "detected": 0,
+    }
 
     for pair in pairs:
         if not pair.verified:
@@ -159,6 +196,7 @@ async def detect_opportunities(
 
         resolved_markets = _resolved_pair_markets(market_a, market_b, as_of)
         if resolved_markets:
+            counters["resolved_skip"] += 1
             if resolved_skip_logged is None or pair.id not in resolved_skip_logged:
                 if resolved_skip_logged is not None:
                     resolved_skip_logged.add(pair.id)
@@ -177,14 +215,21 @@ async def detect_opportunities(
         prices_b = await get_prices_at(session, pair.market_b_id, as_of)
 
         if not prices_a or not prices_b:
+            counters["no_prices"] += 1
             continue
 
         constraint = pair.constraint_matrix
         if not constraint:
+            counters["no_constraint"] += 1
             continue
 
         outcomes_a = constraint.get("outcomes_a", [])
         outcomes_b = constraint.get("outcomes_b", [])
+
+        # Uncertainty filter: skip near-resolved markets (same as live detector)
+        if not _passes_uncertainty_filter(prices_a, prices_b, outcomes_a, outcomes_b):
+            counters["uncertainty_skip"] += 1
+            continue
 
         market_a_dict = {
             "event_id": market_a.event_id,
@@ -208,6 +253,7 @@ async def detect_opportunities(
             implication_direction=imp_direction,
         )
         if not verification["verified"]:
+            counters["verification_fail"] += 1
             continue
 
         # Recompute profit bound with this day's prices — use vectors if stored
@@ -228,6 +274,7 @@ async def detect_opportunities(
 
         profit = fresh.get("profit_bound", 0.0)
         if profit <= 0:
+            counters["profit_le_0"] += 1
             continue
 
         # Update stored constraint matrix so optimizer reads fresh feasibility
@@ -244,8 +291,9 @@ async def detect_opportunities(
         session.add(opp)
         await session.flush()
         opp_ids.append(opp.id)
+        counters["detected"] += 1
 
-    return opp_ids
+    return opp_ids, counters
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -735,6 +783,21 @@ async def run_backtest(
     daily_results = []
     resolved_skip_logged: set[int] = set()
 
+    # Aggregate rejection counters across all days
+    total_counters = {
+        "resolved_skip": 0,
+        "no_prices": 0,
+        "no_constraint": 0,
+        "uncertainty_skip": 0,
+        "verification_fail": 0,
+        "profit_le_0": 0,
+        "detected": 0,
+        "optimizer_no_trades": 0,
+        "optimizer_ok": 0,
+        "simulator_blocked": 0,
+        "simulator_traded": 0,
+    }
+
     for step_idx, as_of in enumerate(time_steps):
         day_label = as_of.strftime("%Y-%m-%d")
         day_stats = {
@@ -765,7 +828,7 @@ async def run_backtest(
                 log.exception("backtest_settlement_error", day=day_label)
 
             # ── Step 2: Detection ─────────────────────────────────
-            opp_ids = await detect_opportunities(
+            opp_ids, detect_counters = await detect_opportunities(
                 session,
                 pairs,
                 as_of,
@@ -773,6 +836,9 @@ async def run_backtest(
                 pair_ids=pair_ids,
             )
             day_stats["opportunities_detected"] = len(opp_ids)
+            for k, v in detect_counters.items():
+                if k in total_counters:
+                    total_counters[k] += v
 
             # ── Step 3: Optimization ──────────────────────────────
             optimized = 0
@@ -781,6 +847,9 @@ async def run_backtest(
                     res = await optimize_opportunity(session, opp_id, as_of)
                     if res["status"] in ("optimized", "unconverged"):
                         optimized += 1
+                        total_counters["optimizer_ok"] += 1
+                    else:
+                        total_counters["optimizer_no_trades"] += 1
                 except Exception:
                     log.exception("backtest_optimize_error", opp_id=opp_id, day=day_label)
             day_stats["opportunities_optimized"] = optimized
@@ -796,6 +865,9 @@ async def run_backtest(
                     )
                     if res.get("trades_executed"):
                         total_trades += res["trades_executed"]
+                        total_counters["simulator_traded"] += 1
+                    else:
+                        total_counters["simulator_blocked"] += 1
                 except Exception:
                     log.exception("backtest_simulate_error", opp_id=opp_id, day=day_label)
             day_stats["trades_executed"] = total_trades
@@ -842,6 +914,36 @@ async def run_backtest(
     }
 
     log.info("backtest_complete", **summary)
+
+    # ── Diagnostic: per-stage rejection summary ────────────────
+    total_evaluated = sum(total_counters[k] for k in [
+        "resolved_skip", "no_prices", "no_constraint", "uncertainty_skip",
+        "verification_fail", "profit_le_0", "detected",
+    ])
+    log.info(
+        "diagnostic_rejection_summary",
+        total_pair_evaluations=total_evaluated,
+        **total_counters,
+    )
+    print("\n" + "=" * 70)
+    print("  DIAGNOSTIC: Per-Stage Rejection Counts")
+    print("=" * 70)
+    print(f"  Total pair-day evaluations:  {total_evaluated}")
+    print(f"  ── Detection gate ──")
+    print(f"    resolved_skip:             {total_counters['resolved_skip']}")
+    print(f"    no_prices:                 {total_counters['no_prices']}")
+    print(f"    no_constraint:             {total_counters['no_constraint']}")
+    print(f"    uncertainty_skip:          {total_counters['uncertainty_skip']}")
+    print(f"    verification_fail:         {total_counters['verification_fail']}")
+    print(f"    profit_le_0:               {total_counters['profit_le_0']}")
+    print(f"    → detected:                {total_counters['detected']}")
+    print(f"  ── Optimizer gate ──")
+    print(f"    optimizer_no_trades:        {total_counters['optimizer_no_trades']}")
+    print(f"    → optimizer_ok:             {total_counters['optimizer_ok']}")
+    print(f"  ── Simulator gate ──")
+    print(f"    simulator_blocked:          {total_counters['simulator_blocked']}")
+    print(f"    → simulator_traded:         {total_counters['simulator_traded']}")
+    print("=" * 70 + "\n")
 
     return daily_results
 
