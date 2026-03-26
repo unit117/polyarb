@@ -1,0 +1,114 @@
+{
+  "status": "ok",
+  "generated_at": "2026-03-25T16:21:13.801316Z",
+  "access": {
+    "local_root": "pmxt_db/polymarket",
+    "manifest": null,
+    "http_index": null
+  },
+  "blockers": [],
+  "archive": {
+    "file_count": 9,
+    "oldest_hour": "2026-02-21T16:00:00Z",
+    "newest_hour": "2026-02-22T00:00:00Z",
+    "size": {
+      "known_file_sizes": 9,
+      "total_bytes": 5606328632,
+      "min_bytes": 6005413,
+      "median_bytes": 706383962,
+      "max_bytes": 783786534
+    },
+    "cadence_gaps": [],
+    "datasets": {
+      "order_book": {
+        "file_count": 9,
+        "oldest_hour": "2026-02-21T16:00:00Z",
+        "newest_hour": "2026-02-22T00:00:00Z",
+        "size": {
+          "known_file_sizes": 9,
+          "total_bytes": 5606328632,
+          "min_bytes": 6005413,
+          "median_bytes": 706383962,
+          "max_bytes": 783786534
+        },
+        "sample_schema_columns": [
+          "data",
+          "market_id",
+          "timestamp_created_at",
+          "timestamp_received",
+          "update_type"
+        ],
+        "sample_row_counts": {
+          "files_profiled": 3,
+          "median_rows": 36989814
+        },
+        "distinct_counts_per_profiled_file": [
+          {
+            "uri": "/Users/unit117/Dev/polyarb/pmxt_db/polymarket/polymarket_orderbook_2026-02-21T16.parquet",
+            "hour_utc": "2026-02-21T16:00:00Z",
+            "distinct_markets": 501,
+            "distinct_outcomes": null
+          },
+          {
+            "uri": "/Users/unit117/Dev/polyarb/pmxt_db/polymarket/polymarket_orderbook_2026-02-21T20.parquet",
+            "hour_utc": "2026-02-21T20:00:00Z",
+            "distinct_markets": 30462,
+            "distinct_outcomes": null
+          },
+          {
+            "uri": "/Users/unit117/Dev/polyarb/pmxt_db/polymarket/polymarket_orderbook_2026-02-22T00.parquet",
+            "hour_utc": "2026-02-22T00:00:00Z",
+            "distinct_markets": 30594,
+            "distinct_outcomes": null
+          }
+        ],
+        "cadence_gaps": []
+      }
+    },
+    "joinability": {
+      "status": "insufficient_data",
+      "reason": "Need both order_book and trades files to evaluate joinability"
+    },
+    "inspected_files": [
+      {
+        "uri": "/Users/unit117/Dev/polyarb/pmxt_db/polymarket/polymarket_orderbook_2026-02-21T16.parquet",
+        "dataset_type": "order_book",
+        "hour_utc": "2026-02-21T16:00:00Z",
+        "schema_columns": [
+          "timestamp_received",
+          "timestamp_created_at",
+          "market_id",
+          "update_type",
+          "data"
+        ],
+        "inspect_error": null
+      },
+      {
+        "uri": "/Users/unit117/Dev/polyarb/pmxt_db/polymarket/polymarket_orderbook_2026-02-21T20.parquet",
+        "dataset_type": "order_book",
+        "hour_utc": "2026-02-21T20:00:00Z",
+        "schema_columns": [
+          "timestamp_received",
+          "timestamp_created_at",
+          "market_id",
+          "update_type",
+          "data"
+        ],
+        "inspect_error": null
+      },
+      {
+        "uri": "/Users/unit117/Dev/polyarb/pmxt_db/polymarket/polymarket_orderbook_2026-02-22T00.parquet",
+        "dataset_type": "order_book",
+        "hour_utc": "2026-02-22T00:00:00Z",
+        "schema_columns": [
+          "timestamp_received",
+          "timestamp_created_at",
+          "market_id",
+          "update_type",
+          "data"
+        ],
+        "inspect_error": null
+      }
+    ]
+  }
+}

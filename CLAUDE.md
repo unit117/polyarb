@@ -150,14 +150,26 @@ All settings via pydantic-settings from `.env` (see `.env.example` for 69 settin
 
 Ports 5432, 5433, 6379, 8080 are already in use on NAS — do not reassign.
 
-## Planning Documents
+## Documentation Layout
 
-- `ECOSYSTEM_PLAN.md` — E1–E6 external integrations (datasets, Kalshi, order book replay, parameter tuning)
-- `IMPROVEMENT_PLAN.md` — Phases 1–6 internal fixes (all complete)
-- `E1_Backtest_Findings_Summary.md` — 27 bugs found/fixed, before/after results
-- `BACKTEST_PLAN.md` — Backtest pipeline design
-- `KALSHI_PLAN.md` — Cross-platform integration (complete)
-- `SETTLEMENT_PLAN.md` — Authoritative settlement from dataset outcomes
+Non-code docs are organized under `docs/` and `research/`:
+
+```
+docs/
+├── plans/active/      — Active plans (ECOSYSTEM, LIVE_TRADING, classifier, prompts, etc.)
+├── plans/completed/   — Done plans (BACKTEST, IMPROVEMENT, KALSHI, SETTLEMENT)
+├── plans/stale/       — Superseded plans (KNOWLEDGE_BASE, dashboard-reset, rd_imrp1)
+├── audits/            — Constraint audits & inspection reports
+├── backtest/          — E1 findings tracker & summary
+└── exports/           — Generated .docx reports
+research/              — Papers, literature notes, feasibility studies, novelty assessment
+reports/               — Agent-generated daily/performance/audit reports
+```
+
+Key active docs:
+- `docs/plans/active/ECOSYSTEM_PLAN.md` — E1–E6 external integrations
+- `docs/plans/active/LIVE_TRADING_IMPLEMENTATION_PLAN.md` — Live execution wiring
+- `docs/backtest/E1_Backtest_Findings_Summary.md` — 27 bugs found/fixed, before/after results
 
 ## Gotchas
 

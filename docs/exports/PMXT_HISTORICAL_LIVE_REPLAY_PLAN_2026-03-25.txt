@@ -1,0 +1,572 @@
+PMXT Historical Live Replay Plan
+
+Status: Draft v3
+Date: 2026-03-25
+Supersedes: polyarb_detector_improvement_plan_v2.docx
+
+1. Executive Summary
+
+The next realistic step is not another detector-first rewrite. PolyArb already has most of the live execution ledger path:
+
+- services/simulator/main.py restores separate paper and live portfolios and starts live loops when enabled
+- services/simulator/live_coordinator.py persists live_orders, live_fills, PaperTrade(source="live"), and PortfolioSnapshot(source="live")
+- services/simulator/live_reconciler.py reconciles submitted orders into confirmed fills
+- shared/models.py already contains LiveOrder and LiveFill
+
+What PolyArb does not have is a historical replay path that uses that same machinery. The current backtest is still a daily snapshot replay that writes PaperTrade rows directly from scripts/backtest.py. That is useful for coarse regression, but it is not a live-style execution test.
+
+This v3 plan changes the priority:
+
+1. Use PMXT historical data as the chronological market-data source
+2. Replay it oldest to latest
+3. Route execution through a live-style ledger path
+4. Measure fills, partial fills, expirations, settlement, and portfolio evolution under one realistic code path
+5. Only after that baseline exists, revisit detector search-space and embedding work
+
+2. Why The v2 Detector Plan Is No Longer The Right First Move
+
+The v2 document was strong on detector search-space reduction, but it assumed the highest leverage was classifier precision. The repo review says otherwise.
+
+Correction 1: the current backtest is not execution-realistic
+
+scripts/backtest.py advances one day at a time, fetches the latest snapshot at or before the day boundary, and writes PaperTrade rows directly after compute_vwap(). It bypasses:
+
+- live order creation
+- live fill reconciliation
+- order aging / expiration
+- pending order state
+- separate live ledger persistence
+
+That means any detector improvement is still being scored on a simplified execution path.
+
+Correction 2: the live path already exists
+
+Unlike the earlier assumption, PolyArb is not missing all live infrastructure. The codebase already has:
+
+- a validated execution bundle builder in services/simulator/pipeline.py
+- a live coordinator
+- a live reconciler
+- live_orders and live_fills tables
+- a dashboard paper/live source split
+
+The missing piece is historical replay through those components.
+
+Correction 3: PMXT SDK and PMXT archive are different roles
+
+As of 2026-03-25:
+
+- PMXT docs show fetchOHLCV, fetchOrderBook, fetchTrades, watchOrderBook, and watchTrades
+- PMXT docs describe fetchOrderBook as the current book and watch* methods as real-time
+- PMXT docs note Polymarket fetchTrades requires an API key
+- PMXT archive search results show hourly Parquet dumps of Polymarket order book and trade data, updated hourly
+
+Conclusion:
+
+- use the archive as the historical backfill source
+- use the SDK for forward collection, metadata gaps, and future live ingestion
+- do not assume the SDK alone can reconstruct old order books from scratch
+
+Correction 4: we do not yet know PMXT historical coverage for E1
+
+The PMXT archive results visible during this review show hourly dump examples in late February and March 2026. That does not prove the archive reaches back to the full E1 window (2024-09-24 to 2026-01-25).
+
+So the realistic plan is:
+
+- first inventory the actual oldest available PMXT dump
+- only promise replay windows the archive truly covers
+- keep the Becker-based daily backtest for older periods if PMXT does not go back far enough
+
+Correction 5: current dashboard/source assumptions are still binary
+
+The dashboard and API filter by source but assume a paper/live worldview. A replay mode can reuse source="live" only if it runs in a separate replay database. Reusing the operational live DB is not acceptable.
+
+Correction 6: the simulator still treats live as a side effect of paper execution
+
+Today SimulatorPipeline.simulate_opportunity() executes the paper legs first and only then optionally submits the same bundle to the live coordinator. That is fine for current paper+live sidecar behavior, but it is the wrong boundary for a historical live-style backtest.
+
+The execution sink must be split so paper, live, and replay can all consume the same validated bundle independently.
+
+3. Goal
+
+Build a historical live replay mode that replays PMXT data from oldest to latest and uses the same execution concepts as live trading:
+
+- validated execution bundles
+- order intent
+- pending orders
+- partial fills
+- fill reconciliation
+- settlement
+- portfolio snapshots
+- live-style trade ledger output
+
+This replay should produce a dataset the current dashboard can inspect with minimal changes.
+
+4. Non-Goals
+
+This plan does not do the following in v1:
+
+- replace the existing daily backtest entirely
+- implement tick-perfect queue-position simulation
+- promise full E1 replay until PMXT archive coverage is verified
+- add Kalshi replay in the first iteration
+- redo search-space reduction, embeddings, or classifier prompts before replay exists
+- merge replay data into the operational live database
+
+5. Current Code Reality
+
+Historical path today
+
+- scripts/backtest.py is a day-by-day replay over price_snapshots
+- scripts/backtest_from_dataset.py builds daily snapshots from Becker trade history
+- the backtest writes PaperTrade and PortfolioSnapshot rows directly
+
+Live path today
+
+- services/simulator/main.py restores paper and live portfolios separately
+- services/simulator/pipeline.py builds ValidatedExecutionBundle
+- services/simulator/live_coordinator.py persists order intent, fills, snapshots, and settlement rows for source="live"
+- services/simulator/live_reconciler.py turns venue order state into confirmed fills
+
+Architectural implication
+
+The shortest path to realism is not “make the backtest more complicated.” It is:
+
+1. keep the validated bundle builder
+2. refactor execution into pluggable sinks
+3. drive a replay sink with chronological PMXT data
+
+6. Recommended v1 Architecture
+
+6.1 Data sources
+
+Use two historical sources, each for the thing it is good at:
+
+- PMXT archive: execution-time market state
+  - hourly order book snapshots
+  - hourly trade snapshots / history
+- Becker dataset or existing metadata DB: market metadata and authoritative resolution outcomes
+
+Do not try to rebuild everything from one source if that source is incomplete.
+
+6.2 Replay database strategy
+
+Use a dedicated replay database, for example polyarb_replay.
+
+Why:
+
+- the dashboard already understands source="live"
+- replay can write source="live" safely inside an isolated DB
+- no UI change is required for the first pass
+- actual operational live trading data stays clean
+
+If side-by-side comparison in the same DB is needed later, add run_id and a third execution mode such as replay. Do not take that complexity in v1.
+
+6.3 New runtime components
+
+Add the following components:
+
+A. ReplayClock
+
+Responsibility:
+
+- produce strictly increasing replay timestamps
+- expose “current simulated time”
+- guarantee no lookahead
+
+Behavior:
+
+- sort PMXT inputs oldest to latest
+- advance one replay step at a time
+- only expose data with event.timestamp <= replay_clock.now
+
+B. ReplayStateStore
+
+Responsibility:
+
+- read PMXT Parquet windows efficiently
+- maintain the latest visible book/trade state per outcome
+- optionally materialize compact price_snapshots rows for detector and dashboard compatibility
+
+Important design choice:
+
+- do not bulk-import the entire archive into Postgres up front
+- stream one replay window at a time from Parquet via DuckDB / Arrow and only persist compact state that the app actually needs
+
+C. ReplayExecutionAdapter
+
+Responsibility:
+
+- act like a venue adapter, but against historical PMXT state
+- accept order submissions
+- decide whether they fill, partially fill, expire, or remain pending
+- expose order state transitions to a replay reconciler
+
+This is the historical equivalent of LiveExecutor, not a separate “toy simulator.”
+
+D. ReplayOrderReconciler
+
+Responsibility:
+
+- consume pending replay orders
+- inspect future PMXT snapshots/trades after order submission
+- emit fill events into the same live-style ledger flow
+
+E. ReplayRunner
+
+Responsibility:
+
+- orchestrate the whole loop
+- feed changed markets into detection
+- run optimization
+- dispatch validated bundles into the replay execution sink
+- trigger settlement
+- write snapshots and summary metrics
+
+7. Fill Model For v1
+
+The replay must stay realistic and honest about PMXT archive limits.
+
+7.1 What v1 can model
+
+- top-of-book price at each archive timestamp
+- visible depth at that timestamp
+- partial fills up to visible size
+- delayed fills on later snapshots
+- expiration if enough liquidity never appears
+- conservative slippage and fees
+
+7.2 What v1 cannot honestly model
+
+- exact queue position
+- intrahour path between archive snapshots
+- hidden liquidity
+- maker priority
+- millisecond-level trade sequencing
+
+7.3 Conservative execution rules
+
+Use conservative defaults:
+
+- orders become eligible only after REPLAY_SUBMISSION_DELAY_SECONDS
+- aggressive orders fill no better than the next visible contra side
+- max fill per step is capped by visible_depth * REPLAY_MAX_BOOK_PARTICIPATION
+- if cumulative visible depth is insufficient before REPLAY_ORDER_TTL_HOURS, order expires
+- if no PMXT order book exists for the market at that step, the order does not fill
+
+This is intentionally harsher than the current midpoint fallback path.
+
+8. Required Refactor Before Replay
+
+Before replay can exist, the execution boundary must be cleaned up.
+
+Current problem
+
+SimulatorPipeline.simulate_opportunity() still does:
+
+1. build validated bundle
+2. execute paper legs
+3. optionally submit the same bundle to live
+
+That means live and replay are downstream side effects of paper execution.
+
+Required change
+
+Split execution into three layers:
+
+1. Opportunity preparation
+   - load opportunity / pair / market context
+   - build ValidatedExecutionBundle
+
+2. Execution sink
+   - PaperExecutionSink
+   - LiveExecutionSink
+   - ReplayExecutionSink
+
+3. Ledger persistence
+   - trades
+   - live orders
+   - live fills
+   - snapshots
+
+This refactor is a prerequisite. Without it, replay will remain entangled with paper execution.
+
+9. Implementation Plan
+
+Phase 0 - PMXT Archive Audit
+
+Objective
+
+Verify what PMXT historical data actually exists before promising a long-window replay.
+
+Work
+
+- build a small audit script against PMXT archive samples
+- record:
+  - oldest visible dump
+  - newest visible dump
+  - cadence gaps
+  - schema
+  - per-file size
+  - number of unique markets / outcomes per hour
+- confirm whether trade files and order-book files can be joined by outcome ID and timestamp
+
+Deliverable
+
+- docs/research/pmxt_archive_audit_2026-03-25.md
+
+Acceptance criteria
+
+- we know the true oldest-to-latest replay window we can support
+- we know whether PMXT can cover E1 fully, partially, or only recent windows
+
+Phase 1 - Extract Execution Sinks
+
+Objective
+
+Make paper, live, and replay independent consumers of the same validated bundle.
+
+Files to change
+
+- services/simulator/pipeline.py
+- services/simulator/live_coordinator.py
+- tests/integration/test_simulator_pipeline.py
+- tests/unit/simulator/*
+
+Work
+
+- keep _build_validated_bundle()
+- extract paper execution into a dedicated sink
+- add an execution dispatch layer
+- preserve current paper behavior as the default
+- keep current live behavior unchanged from the user’s perspective
+
+Acceptance criteria
+
+- paper mode behavior is unchanged
+- live mode still works
+- replay can plug in without forcing paper execution first
+
+Phase 2 - Build Replay State Store
+
+Objective
+
+Load PMXT data chronologically without exploding Postgres size.
+
+New components
+
+- services/replay/pmxt_loader.py
+- services/replay/replay_clock.py
+- services/replay/state_store.py
+
+Work
+
+- read archive Parquet by hour
+- normalize to internal rows:
+  - ReplayBookSnapshot
+  - ReplayTradeEvent
+  - ReplayResolutionEvent
+- maintain the latest visible state for each outcome
+- publish compact market snapshots for downstream code that expects price_snapshots
+
+Acceptance criteria
+
+- a 24-hour PMXT window can be replayed deterministically
+- the detector sees only data available at that replay timestamp
+
+Phase 3 - Build The Historical Venue Adapter
+
+Objective
+
+Represent replay execution as orders and fills, not direct synthetic trades.
+
+New components
+
+- services/simulator/replay_executor.py
+- services/simulator/replay_reconciler.py
+
+Work
+
+- implement submit_order()
+- maintain pending replay orders
+- fill against later visible PMXT book depth
+- reconcile partial fills over time
+- write live_orders and live_fills
+- write PaperTrade(source="live") only for confirmed replay fills inside the replay DB
+
+Acceptance criteria
+
+- replay generates pending orders before fills
+- partial fills and expirations are possible
+- no direct trade row is written without a corresponding replay fill event
+
+Phase 4 - Build Oldest-To-Latest Replay Runner
+
+Objective
+
+Run the real PolyArb pipeline over PMXT history in chronological order.
+
+New entry point
+
+- scripts/replay_live_backtest.py
+
+Loop
+
+For each replay timestamp:
+
+1. advance ReplayClock
+2. update visible PMXT state
+3. materialize compact market snapshots as needed
+4. rescan only markets changed in that interval
+5. optimize detected opportunities
+6. dispatch bundles to ReplayExecutionSink
+7. reconcile fills against later PMXT state
+8. settle newly resolved markets
+9. write PortfolioSnapshot(source="live")
+
+Acceptance criteria
+
+- replay is strictly oldest to latest
+- no future state is visible
+- a replay run produces:
+  - live_orders
+  - live_fills
+  - paper_trades(source="live")
+  - portfolio_snapshots(source="live")
+
+Phase 5 - Reporting And Validation
+
+Objective
+
+Compare the current daily backtest to the new replay path on the same historical window.
+
+New metrics
+
+- fill rate
+- partial fill rate
+- expiration rate
+- average time to fill
+- realized slippage vs visible mid
+- realized PnL
+- unrealized PnL
+- max drawdown
+- capital utilization
+- opportunity-to-fill conversion rate
+
+Deliverables
+
+- replay summary JSON
+- dashboard review on the replay DB
+- one written comparison report against the daily backtest
+
+Acceptance criteria
+
+- we can explain where replay and daily backtest diverge
+- we can attribute divergence to data fidelity or execution-path fidelity, not guesswork
+
+Phase 6 - Reprioritize Detector Work After Replay Exists
+
+Only after the replay baseline is working should we resume the detector improvements from v2:
+
+- search-space reduction
+- event/topic clustering
+- embedding upgrade
+- classifier benchmark
+- prompt improvements
+
+At that point they can be measured against a more credible execution harness.
+
+10. Recommended Order Of Work
+
+1. PMXT archive audit
+2. execution sink refactor
+3. replay state store
+4. replay executor + reconciler
+5. oldest-to-latest runner
+6. one 7-day replay window
+7. one 30-day replay window
+8. only then detector/embedding work
+
+This ordering is deliberate. Do not start by tuning the detector while the evaluation harness still shortcuts execution realism.
+
+11. Timeline
+
+Week 1
+
+- Phase 0 archive audit
+- Phase 1 execution sink refactor
+
+Week 2
+
+- Phase 2 replay state store
+- Phase 3 replay executor / reconciler
+
+Week 3
+
+- Phase 4 replay runner
+- first 7-day replay on the oldest PMXT window actually available
+
+Week 4
+
+- first 30-day replay
+- Phase 5 reporting
+- go / no-go decision on resuming detector work
+
+This is a more realistic four-week plan than trying to combine PMXT adaptation, replay realism, detector search-space changes, embedding migration, and cross-model benchmarking all at once.
+
+12. Risks And Decisions
+
+Risk 1: PMXT archive does not cover the full historical range we want
+
+Decision:
+
+- support the actual PMXT oldest-to-latest window first
+- keep Becker-based daily backtest for older history
+
+Risk 2: archive size is too large for naive Postgres import
+
+Decision:
+
+- stream Parquet windows directly
+- only persist compact state and replay outputs
+
+Risk 3: hourly cadence misses sub-hour opportunities
+
+Decision:
+
+- be explicit that v1 replay is “hourly live-style replay,” not tick-perfect replay
+- prefer conservative execution assumptions over optimistic ones
+
+Risk 4: replay data pollutes actual live metrics
+
+Decision:
+
+- isolate replay in a dedicated database
+
+Risk 5: detector rescans become too expensive
+
+Decision:
+
+- rescan only markets touched in the current replay window
+- optimize later if profiling says it is necessary
+
+13. Success Criteria
+
+This plan succeeds when all of the following are true:
+
+- replay runs strictly oldest to latest with no lookahead
+- replay uses the same validated execution bundle path as live
+- replay creates order intent before fills
+- replay fills are capped by visible PMXT depth
+- replay outputs are inspectable in the dashboard through the replay DB
+- we can compare replay PnL to the current daily backtest for the same window
+- detector improvements can then be judged on a more realistic historical harness
+
+14. Bottom Line
+
+The realistic plan is:
+
+- not “adapt PMXT data and keep the same daily backtest”
+- not “redo the detector first”
+- yes “build a PMXT oldest-to-latest replay that uses the live-style order and fill ledger already present in the repo”
+
+That is the shortest path from today’s codebase to a backtest that actually behaves like live trading.
