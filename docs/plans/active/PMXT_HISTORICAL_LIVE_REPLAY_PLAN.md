@@ -1,7 +1,7 @@
 # PMXT Historical Live Replay Follow-Up Plan
 
-**Status:** Draft v4  
-**Date:** 2026-03-25  
+**Status:** Draft v5 — Phase 0 complete
+**Date:** 2026-03-26
 **Supersedes:** replay-first Draft v3 ordering in this file, plus detector-first `polyarb_detector_improvement_plan_v2.docx`
 
 ## 1. Executive Summary
@@ -118,43 +118,52 @@ The repo is already partway to a realistic live ledger. The question is not whet
 
 Do **not** start with the simulator refactor.
 
-## 7. Phase 0 - PMXT Archive Audit
+## 7. Phase 0 - PMXT Archive Audit — COMPLETE
 
-### Objective
+**Completed:** 2026-03-26
 
-Verify what PMXT historical data actually exists before promising any replay window.
-
-### Work
-
-- build a small audit script against PMXT archive samples
-- explicitly confirm the access method before writing the audit:
-  - preferred path: download representative PMXT archive files locally first, then inspect them from disk
-  - if PMXT is exposed via remote HTTP or object storage, first prove we can fetch a bounded sample window non-interactively
-  - if access requires credentials, document where they will be provided from and fail early if they are missing
-- record:
-  - oldest visible dump
-  - newest visible dump
-  - cadence gaps
-  - schema
-  - per-file size
-  - number of unique markets / outcomes per hour
-- confirm whether order-book files and trade files can be joined by outcome ID and timestamp
-- identify whether archive coverage includes any meaningful E1-adjacent or recent resolved windows
-
-### Suggested artifacts
+### Artifacts
 
 - `scripts/pmxt_archive_audit.py`
+- `scripts/pmxt_filter.py`
 - `docs/research/pmxt_archive_audit_2026-03-25.md`
+- `docs/research/pmxt_archive_audit_2026-03-25_local_sample.md`
+- Mar 21 2026 data: `/volume1/docker/polyarb/pmxt_db/polymarket/2026-03-21/` (24 files, 11GB)
 
-### Acceptance criteria
+### Key findings
 
-- we know the true oldest-to-latest window PMXT can support
-- we know whether PMXT can support:
-  - only recent windows
-  - partial E1-like windows
-  - or something broader
-- we know whether the archive is viable for a replay spike without heroic data cleaning
-- we know the concrete PMXT access path the repo will use for Phase 1, or we have explicitly recorded PMXT access as the current blocker
+**Archive scope:**
+- PMXT publishes **orderbook only** — no trades dataset exists. Confirmed by inspecting the archive listing at `archive.pmxt.dev`.
+- Files are hourly snapshots: `polymarket_orderbook_YYYY-MM-DDTHH.parquet`
+- Schema columns: `data` (JSON), `market_id`, `timestamp_created_at`, `timestamp_received`, `update_type`
+- ~30k distinct markets per hourly file, ~18-31M rows per file, 350-600MB compressed
+
+**ID space mismatch (critical for replay):**
+- PMXT `market_id` = CTF condition_id hex (`0x00000977...`)
+- DB `polymarket_id` = Gamma numeric ID (`1003190`)
+- These do **not** match. Join key is `data.token_id` (large decimal) matching DB `markets.token_ids`.
+- `pmxt_filter.py` primary market_id filter is a no-op; all matching works through token_id secondary path.
+
+**Coverage against live DB (from T12 midday snapshot):**
+
+| Metric | Value |
+|---|---|
+| PMXT distinct condition_ids | 16,604 |
+| PMXT distinct token_ids | 33,208 |
+| Token_ids matched to DB | 33,208 / 33,208 (100%) |
+| DB markets with PMXT data | 16,604 / 53,357 |
+| Pairs with both sides in PMXT | 10,527 / 26,155 (40.2%) |
+| Pairs with one side only | 810 (3.1%) |
+| Pairs with neither side | 14,818 (56.7%) |
+
+**Filter assessment:** Running `pmxt_filter.py` against live DB kept 521M / 521M rows (99.9%). Filtering is unnecessary — use raw files directly.
+
+**Implications for Phase 1:**
+- 10.5k pairs with full coverage is ample for thin-slice replay
+- No fill realism possible (no trades data) — replay limited to orderbook best bid/ask
+- Replay script must join on `token_id`, not `market_id`
+- R2 direct download works: `https://r2.pmxt.dev/polymarket_orderbook_YYYY-MM-DDTHH.parquet`
+- Mar 22-23 data (48 more files, ~22GB) available if Mar 21 proves the pipeline
 
 ## 8. Phase 0.5 - Live Shadow Logger And Review Queue
 
@@ -247,12 +256,14 @@ The spike should stay intentionally narrow:
 
 ### Work
 
-- load PMXT archive data chronologically for the chosen window
-- maintain visible state per outcome
+- load PMXT archive data chronologically for the chosen window (Mar 21 2026, 24 hours)
+- join on `data.token_id` → DB `markets.token_ids` (not `market_id`)
+- maintain visible state per outcome (best bid/ask from orderbook)
 - drive a minimal replay loop oldest-to-latest
 - submit one live-style order intent path
 - persist pending order state, fills or expirations, and portfolio snapshots
 - compare one slice of replay behavior against the current daily backtest on the same window
+- note: no trades data exists — fills must be simulated from orderbook state only
 
 ### Suggested artifacts
 
@@ -323,11 +334,13 @@ Assume `1-3 weeks` depending on what the thin slice proves and how much simulato
 
 ## 12. Timeline
 
-### Week 1
+### Week 1 — DONE (2026-03-25 to 2026-03-26)
 
-- Phase 0 archive audit
-- Phase 0.5 live shadow logger
-- deploy the shadow logger to NAS by the end of the week so Week 2 review has actual data to use
+- Phase 0 archive audit — complete
+- Mar 21 data downloaded and verified (24 files, 11GB)
+- Filter run confirmed 10.5k pairs with both-side coverage, token_id join path validated
+- No trades data exists (confirmed blocker for fill realism)
+- Phase 0.5 live shadow logger — not started (next priority)
 
 ### Week 2
 
@@ -355,6 +368,15 @@ Decision:
 
 - support the actual covered window first
 - keep the Becker-based daily backtest for older periods
+
+### Risk 1b: PMXT has no trades data (CONFIRMED)
+
+PMXT only publishes hourly orderbook snapshots. No trade records exist. This means:
+
+- fills cannot be simulated from actual trade flow
+- replay fill model will be orderbook-derived (best bid/ask crossing)
+- execution realism is limited to "would this order have been fillable at the observed book state"
+- for tick-level trade data, PredictionData.dev is the only known source (paid)
 
 ### Risk 2: PMXT data does not materially change decisions
 
