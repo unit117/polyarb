@@ -37,9 +37,10 @@ class Settings(BaseSettings):
     similarity_top_k: int = 20
     detector_batch_size: int = 100
     classifier_model: str = "gpt-4.1-mini"
-    classifier_base_url: str = ""  # empty = OpenAI direct; set for OpenRouter
+    classifier_base_url: str = ""  # empty = OpenAI direct; set for any OpenAI-compatible provider
+    classifier_api_key: str = ""  # optional provider-specific key for classifier traffic
     classifier_prompt_adapter: Literal["auto", "openai_generic", "claude_xml"] = "auto"
-    openrouter_api_key: str = ""
+    openrouter_api_key: str = ""  # legacy fallback for OpenRouter-based classifier routing
     shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
     shadow_classifier_base_url: str = ""
     detection_interval_seconds: int = 60

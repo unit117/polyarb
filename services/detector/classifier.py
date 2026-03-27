@@ -533,6 +533,7 @@ async def classify_llm(
     prompt_adapter: str = "auto",
 ) -> dict:
     """Use LLM to classify the dependency between two markets."""
+    model_lower = model.lower()
     rendered_prompt = render_prompt(
         LABEL_PROMPT_SPEC_V1,
         market_a,
@@ -547,7 +548,7 @@ async def classify_llm(
             messages=list(rendered_prompt.messages),
             temperature=0.1,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            max_tokens=1024 if "minimax" in model else 256,
+            max_tokens=1024 if "minimax" in model_lower else 256,
         )
 
         msg = response.choices[0].message
@@ -722,6 +723,7 @@ async def classify_llm_resolution(
     correlation, valid_outcomes, and classification_source="llm_vector".
     Returns None if parsing fails (caller should fall back to label-based).
     """
+    model_lower = model.lower()
     outcomes_a = market_a.get("outcomes", ["Yes", "No"])
     outcomes_b = market_b.get("outcomes", ["Yes", "No"])
 
@@ -741,9 +743,11 @@ async def classify_llm_resolution(
         kwargs = {
             "model": model,
             "messages": list(rendered_prompt.messages),
-            "temperature": 0.0,
+            # MiniMax official API rejects temperature=0.0; keep the
+            # value effectively deterministic while remaining valid.
+            "temperature": 0.01 if "minimax" in model_lower else 0.0,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            "max_tokens": 2048 if "minimax" in model else 512,
+            "max_tokens": 2048 if "minimax" in model_lower else 512,
         }
         # Use JSON response format when model supports it
         if _supports_json_response_format(model):

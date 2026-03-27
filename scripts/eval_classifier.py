@@ -339,7 +339,11 @@ async def evaluate(
 
     # If a model is specified, re-classify and score
     if model:
-        api_key = settings.openrouter_api_key or settings.openai_api_key
+        api_key = (
+            settings.classifier_api_key
+            or settings.openrouter_api_key
+            or settings.openai_api_key
+        )
         base_url = settings.classifier_base_url or None
         client = openai.AsyncOpenAI(
             api_key=api_key,
@@ -365,7 +369,11 @@ async def evaluate(
 
     # Shadow comparison model
     if compare_model:
-        compare_key = settings.openrouter_api_key or settings.openai_api_key
+        compare_key = (
+            settings.classifier_api_key
+            or settings.openrouter_api_key
+            or settings.openai_api_key
+        )
         compare_client = openai.AsyncOpenAI(
             api_key=compare_key,
             **({"base_url": compare_base_url} if compare_base_url else {}),
@@ -494,7 +502,11 @@ async def autolabel(
 
     from services.detector.classifier import classify_pair
 
-    api_key = settings.openrouter_api_key or settings.openai_api_key
+    api_key = (
+        settings.classifier_api_key
+        or settings.openrouter_api_key
+        or settings.openai_api_key
+    )
     base_url = settings.classifier_base_url or None
     client = openai.AsyncOpenAI(
         api_key=api_key,

@@ -66,12 +66,15 @@ class TestDetectionPipelineRunOnce:
         with patch("services.detector.pipeline.find_similar_pairs", new_callable=AsyncMock) as mock_sim:
             mock_sim.return_value = []
 
-            with patch("services.detector.pipeline.settings") as mock_settings:
-                mock_settings.kalshi_enabled = False
-                mock_settings.uncertainty_price_floor = 0.05
-                mock_settings.uncertainty_price_ceil = 0.95
+            with patch.object(pipeline, "_load_classification_cache", new_callable=AsyncMock) as mock_cache:
+                mock_cache.return_value = {}
 
-                result = await pipeline.run_once()
+                with patch("services.detector.pipeline.settings") as mock_settings:
+                    mock_settings.kalshi_enabled = False
+                    mock_settings.uncertainty_price_floor = 0.05
+                    mock_settings.uncertainty_price_ceil = 0.95
+
+                    result = await pipeline.run_once()
 
         assert result["candidates"] == 0
         assert result["pairs_created"] == 0
@@ -126,25 +129,28 @@ class TestDetectionPipelineRunOnce:
         with patch("services.detector.pipeline.find_similar_pairs", new_callable=AsyncMock) as mock_sim:
             mock_sim.return_value = candidates
 
-            # Mock classify_pair to return a partition (same event_id triggers rule-based)
-            with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
-                mock_classify.return_value = {
-                    "dependency_type": "partition",
-                    "confidence": 0.95,
-                    "reasoning": "Same event",
-                }
+            with patch.object(pipeline, "_load_classification_cache", new_callable=AsyncMock) as mock_cache:
+                mock_cache.return_value = {}
 
-                with patch("services.detector.pipeline.settings") as mock_settings:
-                    mock_settings.kalshi_enabled = False
-                    mock_settings.max_snapshot_age_seconds = 0
-                    mock_settings.uncertainty_price_floor = 0.05
-                    mock_settings.uncertainty_price_ceil = 0.95
+                # Mock classify_pair to return a partition (same event_id triggers rule-based)
+                with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
+                    mock_classify.return_value = {
+                        "dependency_type": "partition",
+                        "confidence": 0.95,
+                        "reasoning": "Same event",
+                    }
 
-                    # Mock _rescan_existing_pairs to avoid complex queries
-                    with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
-                        mock_rescan.return_value = {"opportunities": 0}
+                    with patch("services.detector.pipeline.settings") as mock_settings:
+                        mock_settings.kalshi_enabled = False
+                        mock_settings.max_snapshot_age_seconds = 0
+                        mock_settings.uncertainty_price_floor = 0.05
+                        mock_settings.uncertainty_price_ceil = 0.95
 
-                        result = await pipeline.run_once()
+                        # Mock _rescan_existing_pairs to avoid complex queries
+                        with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
+                            mock_rescan.return_value = {"opportunities": 0}
+
+                            result = await pipeline.run_once()
 
         assert result["candidates"] == 1
         assert result["pairs_created"] >= 1
@@ -181,21 +187,137 @@ class TestDetectionPipelineRunOnce:
         with patch("services.detector.pipeline.find_similar_pairs", new_callable=AsyncMock) as mock_sim:
             mock_sim.return_value = candidates
 
-            with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
-                mock_classify.return_value = {
-                    "dependency_type": "none",
-                    "confidence": 0.10,
-                }
+            with patch.object(pipeline, "_load_classification_cache", new_callable=AsyncMock) as mock_cache:
+                mock_cache.return_value = {}
 
-                with patch("services.detector.pipeline.settings") as mock_settings:
-                    mock_settings.kalshi_enabled = False
-                    mock_settings.uncertainty_price_floor = 0.05
-                    mock_settings.uncertainty_price_ceil = 0.95
+                with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
+                    mock_classify.return_value = {
+                        "dependency_type": "none",
+                        "confidence": 0.10,
+                    }
 
-                    with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
-                        mock_rescan.return_value = {"opportunities": 0}
+                    with patch("services.detector.pipeline.settings") as mock_settings:
+                        mock_settings.kalshi_enabled = False
+                        mock_settings.uncertainty_price_floor = 0.05
+                        mock_settings.uncertainty_price_ceil = 0.95
 
-                        result = await pipeline.run_once()
+                        with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
+                            mock_rescan.return_value = {"opportunities": 0}
+
+                            result = await pipeline.run_once()
 
         assert result["candidates"] == 1
         assert result["pairs_created"] == 0  # Skipped because dep_type == "none"
+
+    @pytest.mark.asyncio
+    async def test_uses_cached_none_without_reclassifying(self):
+        factory_fn, session = _mock_session_factory()
+        redis = AsyncMock()
+        openai_client = AsyncMock()
+
+        market_a = _make_market_model(1, "Question A")
+        market_b = _make_market_model(2, "Question B")
+
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[market_a, market_b])
+        mock_result = MagicMock()
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+        session.execute = AsyncMock(return_value=mock_result)
+
+        pipeline = DetectionPipeline(
+            session_factory=factory_fn,
+            openai_client=openai_client,
+            redis=redis,
+            similarity_threshold=0.82,
+            similarity_top_k=20,
+            batch_size=100,
+            classifier_model="gpt-4.1-mini",
+        )
+
+        candidates = [{"market_a_id": 1, "market_b_id": 2, "similarity": 0.85}]
+
+        with patch("services.detector.pipeline.find_similar_pairs", new_callable=AsyncMock) as mock_sim:
+            mock_sim.return_value = candidates
+
+            with patch.object(pipeline, "_load_classification_cache", new_callable=AsyncMock) as mock_cache:
+                mock_cache.return_value = {
+                    (1, 2): {
+                        "dependency_type": "none",
+                        "confidence": 0.0,
+                        "classification_source": "llm_label",
+                    }
+                }
+
+                with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
+                    with patch("services.detector.pipeline.settings") as mock_settings:
+                        mock_settings.kalshi_enabled = False
+                        mock_settings.uncertainty_price_floor = 0.05
+                        mock_settings.uncertainty_price_ceil = 0.95
+
+                        with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
+                            mock_rescan.return_value = {"opportunities": 0}
+
+                            result = await pipeline.run_once()
+
+        assert result["candidates"] == 1
+        assert result["pairs_created"] == 0
+        mock_classify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_flushes_cache_for_llm_classification(self):
+        factory_fn, session = _mock_session_factory()
+        redis = AsyncMock()
+        openai_client = AsyncMock()
+
+        market_a = _make_market_model(1, "Question A")
+        market_b = _make_market_model(2, "Question B")
+
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[market_a, market_b])
+        mock_result = MagicMock()
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+        session.execute = AsyncMock(return_value=mock_result)
+
+        pipeline = DetectionPipeline(
+            session_factory=factory_fn,
+            openai_client=openai_client,
+            redis=redis,
+            similarity_threshold=0.82,
+            similarity_top_k=20,
+            batch_size=100,
+            classifier_model="gpt-4.1-mini",
+        )
+
+        candidates = [{"market_a_id": 1, "market_b_id": 2, "similarity": 0.85}]
+
+        with patch("services.detector.pipeline.find_similar_pairs", new_callable=AsyncMock) as mock_sim:
+            mock_sim.return_value = candidates
+
+            with patch.object(pipeline, "_load_classification_cache", new_callable=AsyncMock) as mock_cache:
+                mock_cache.return_value = {}
+
+                with patch.object(pipeline, "_flush_classification_cache", new_callable=AsyncMock) as mock_flush:
+                    with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
+                        mock_classify.return_value = {
+                            "dependency_type": "none",
+                            "confidence": 0.10,
+                            "classification_source": "llm_label",
+                            "prompt_version": "label_v1",
+                            "prompt_adapter": "openai_generic",
+                        }
+
+                        with patch("services.detector.pipeline.settings") as mock_settings:
+                            mock_settings.kalshi_enabled = False
+                            mock_settings.uncertainty_price_floor = 0.05
+                            mock_settings.uncertainty_price_ceil = 0.95
+
+                            with patch.object(pipeline, "_rescan_existing_pairs", new_callable=AsyncMock) as mock_rescan:
+                                mock_rescan.return_value = {"opportunities": 0}
+
+                                await pipeline.run_once()
+
+        mock_flush.assert_awaited_once()
+        _, cache_rows = mock_flush.await_args.args
+        assert len(cache_rows) == 1
+        assert cache_rows[0]["market_a_id"] == 1
+        assert cache_rows[0]["market_b_id"] == 2

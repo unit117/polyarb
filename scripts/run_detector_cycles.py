@@ -74,7 +74,11 @@ async def main():
 
     if settings.classifier_base_url:
         openai_client = openai.AsyncOpenAI(
-            api_key=settings.openrouter_api_key or settings.openai_api_key,
+            api_key=(
+                settings.classifier_api_key
+                or settings.openrouter_api_key
+                or settings.openai_api_key
+            ),
             base_url=settings.classifier_base_url,
         )
     else:

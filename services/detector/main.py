@@ -26,15 +26,23 @@ async def main() -> None:
 
     await init_db()
 
-    # Build OpenAI client — use classifier_base_url if set (for OpenRouter),
-    # otherwise direct OpenAI.
+    # Build classifier client — direct OpenAI by default, or any
+    # OpenAI-compatible provider when classifier_base_url is set.
     if settings.classifier_base_url:
-        api_key = settings.openrouter_api_key or settings.openai_api_key
+        api_key = (
+            settings.classifier_api_key
+            or settings.openrouter_api_key
+            or settings.openai_api_key
+        )
         openai_client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=settings.classifier_base_url,
         )
-        logger.info("classifier_client", provider="openrouter", base_url=settings.classifier_base_url)
+        logger.info(
+            "classifier_client",
+            provider="openai_compatible",
+            base_url=settings.classifier_base_url,
+        )
     else:
         openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
         logger.info("classifier_client", provider="openai_direct")

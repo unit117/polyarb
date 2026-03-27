@@ -61,7 +61,12 @@ async def reclassify_all(
     prompt_adapter = prompt_adapter_override or settings.classifier_prompt_adapter
 
     if base_url:
-        api_key = api_key_override or settings.openrouter_api_key or settings.openai_api_key
+        api_key = (
+            api_key_override
+            or settings.classifier_api_key
+            or settings.openrouter_api_key
+            or settings.openai_api_key
+        )
         client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
     else:
         api_key = api_key_override or settings.openai_api_key

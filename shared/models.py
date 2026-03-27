@@ -130,6 +130,38 @@ class MarketPair(Base):
     )
 
 
+class PairClassificationCache(Base):
+    __tablename__ = "pair_classification_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    market_a_id: Mapped[int] = mapped_column(ForeignKey("markets.id"))
+    market_b_id: Mapped[int] = mapped_column(ForeignKey("markets.id"))
+    classifier_model: Mapped[str] = mapped_column(String(128))
+    prompt_adapter: Mapped[str] = mapped_column(String(32))
+    cache_version: Mapped[str] = mapped_column(String(32))
+    market_a_fingerprint: Mapped[str] = mapped_column(String(64))
+    market_b_fingerprint: Mapped[str] = mapped_column(String(64))
+    classification: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_pair_classification_cache_lookup",
+            "market_a_id",
+            "market_b_id",
+            "classifier_model",
+            "prompt_adapter",
+            "cache_version",
+            unique=True,
+        ),
+    )
+
+
 class ArbitrageOpportunity(Base):
     __tablename__ = "arbitrage_opportunities"
 

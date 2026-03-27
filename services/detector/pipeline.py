@@ -2,18 +2,26 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import openai
 import redis.asyncio as aioredis
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish
-from shared.models import ArbitrageOpportunity, Market, MarketPair
+from shared.models import (
+    ArbitrageOpportunity,
+    Market,
+    MarketPair,
+    PairClassificationCache,
+)
 from shared.config import settings
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
@@ -21,6 +29,9 @@ from services.detector.constraints import build_constraint_matrix, build_constra
 from services.detector.verification import verify_pair
 
 logger = structlog.get_logger()
+
+
+CLASSIFICATION_CACHE_VERSION = "llm-pair-v1"
 
 
 class DetectionPipeline:
@@ -45,6 +56,78 @@ class DetectionPipeline:
         self.classifier_prompt_adapter = classifier_prompt_adapter
         self._rescan_lock = asyncio.Lock()
         self._detection_lock = asyncio.Lock()
+
+    async def _load_classification_cache(
+        self,
+        session,
+        candidates: list[dict],
+        markets_by_id: dict[int, Market],
+    ) -> dict[tuple[int, int], dict]:
+        if not candidates:
+            return {}
+
+        pair_keys = list({
+            _pair_key(candidate["market_a_id"], candidate["market_b_id"])
+            for candidate in candidates
+        })
+        result = await session.execute(
+            select(PairClassificationCache).where(
+                PairClassificationCache.classifier_model == self.classifier_model,
+                PairClassificationCache.prompt_adapter == self.classifier_prompt_adapter,
+                PairClassificationCache.cache_version == CLASSIFICATION_CACHE_VERSION,
+                tuple_(
+                    PairClassificationCache.market_a_id,
+                    PairClassificationCache.market_b_id,
+                ).in_(pair_keys),
+            )
+        )
+
+        cached: dict[tuple[int, int], dict] = {}
+        for row in result.scalars().all():
+            market_a = markets_by_id.get(row.market_a_id)
+            market_b = markets_by_id.get(row.market_b_id)
+            if not market_a or not market_b:
+                continue
+
+            market_a_dict = _market_to_dict(market_a)
+            market_b_dict = _market_to_dict(market_b)
+            if (
+                row.market_a_fingerprint != _market_fingerprint(market_a_dict)
+                or row.market_b_fingerprint != _market_fingerprint(market_b_dict)
+            ):
+                continue
+
+            classification = row.classification or {}
+            if isinstance(classification, dict):
+                cached[(row.market_a_id, row.market_b_id)] = classification
+
+        return cached
+
+    async def _flush_classification_cache(
+        self,
+        session,
+        cache_rows: list[dict],
+    ) -> None:
+        if not cache_rows:
+            return
+
+        stmt = insert(PairClassificationCache).values(cache_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                "market_a_id",
+                "market_b_id",
+                "classifier_model",
+                "prompt_adapter",
+                "cache_version",
+            ],
+            set_={
+                "market_a_fingerprint": stmt.excluded.market_a_fingerprint,
+                "market_b_fingerprint": stmt.excluded.market_b_fingerprint,
+                "classification": stmt.excluded.classification,
+                "updated_at": datetime.now(timezone.utc),
+            },
+        )
+        await session.execute(stmt)
 
     async def run_once(self) -> dict:
         """Execute one full detection cycle. Returns stats dict.
@@ -84,6 +167,12 @@ class DetectionPipeline:
                 select(Market).where(Market.id.in_(market_ids))
             )
             markets_by_id = {m.id: m for m in result.scalars().all()}
+            cached_classifications = await self._load_classification_cache(
+                session,
+                candidates,
+                markets_by_id,
+            )
+            cache_rows: list[dict] = []
 
             # Step 2 & 3: Classify each pair and generate constraints
             for candidate in candidates:
@@ -94,15 +183,27 @@ class DetectionPipeline:
 
                 market_a_dict = _market_to_dict(market_a)
                 market_b_dict = _market_to_dict(market_b)
+                pair_key = _pair_key(market_a.id, market_b.id)
 
-                # Classify dependency
-                classification = await classify_pair(
-                    self.openai_client,
-                    self.classifier_model,
-                    market_a_dict,
-                    market_b_dict,
-                    prompt_adapter=self.classifier_prompt_adapter,
-                )
+                classification = cached_classifications.get(pair_key)
+                if classification is None:
+                    classification = await classify_pair(
+                        self.openai_client,
+                        self.classifier_model,
+                        market_a_dict,
+                        market_b_dict,
+                        prompt_adapter=self.classifier_prompt_adapter,
+                    )
+                    cache_row = _build_cache_row(
+                        market_a_dict,
+                        market_b_dict,
+                        classification,
+                        classifier_model=self.classifier_model,
+                        prompt_adapter=self.classifier_prompt_adapter,
+                    )
+                    if cache_row is not None:
+                        cache_rows.append(cache_row)
+                        cached_classifications[pair_key] = classification
 
                 if classification["dependency_type"] == "none":
                     continue
@@ -212,6 +313,7 @@ class DetectionPipeline:
                         },
                     ))
 
+            await self._flush_classification_cache(session, cache_rows)
             await session.commit()
 
         # Publish events after commit so downstream consumers can read the rows
@@ -262,6 +364,12 @@ class DetectionPipeline:
                 select(Market).where(Market.id.in_(market_ids))
             )
             markets_by_id = {m.id: m for m in result.scalars().all()}
+            cached_classifications = await self._load_classification_cache(
+                session,
+                candidates,
+                markets_by_id,
+            )
+            cache_rows: list[dict] = []
 
             for candidate in candidates:
                 market_a = markets_by_id.get(candidate["market_a_id"])
@@ -272,6 +380,7 @@ class DetectionPipeline:
                 market_a_dict = _market_to_dict(market_a)
                 market_b_dict = _market_to_dict(market_b)
                 similarity = candidate["similarity"]
+                pair_key = _pair_key(market_a.id, market_b.id)
 
                 # High similarity → auto-classify as cross_platform
                 # Moderate similarity → use LLM to verify
@@ -284,13 +393,25 @@ class DetectionPipeline:
                         "reasoning": f"Cross-venue match (similarity={similarity:.3f})",
                     }
                 else:
-                    classification = await classify_pair(
-                        self.openai_client,
-                        self.classifier_model,
-                        market_a_dict,
-                        market_b_dict,
-                        prompt_adapter=self.classifier_prompt_adapter,
-                    )
+                    classification = cached_classifications.get(pair_key)
+                    if classification is None:
+                        classification = await classify_pair(
+                            self.openai_client,
+                            self.classifier_model,
+                            market_a_dict,
+                            market_b_dict,
+                            prompt_adapter=self.classifier_prompt_adapter,
+                        )
+                        cache_row = _build_cache_row(
+                            market_a_dict,
+                            market_b_dict,
+                            classification,
+                            classifier_model=self.classifier_model,
+                            prompt_adapter=self.classifier_prompt_adapter,
+                        )
+                        if cache_row is not None:
+                            cache_rows.append(cache_row)
+                            cached_classifications[pair_key] = classification
 
                 if classification["dependency_type"] == "none":
                     continue
@@ -384,6 +505,7 @@ class DetectionPipeline:
                         },
                     ))
 
+            await self._flush_classification_cache(session, cache_rows)
             await session.commit()
 
         for channel, payload in deferred_events:
@@ -684,6 +806,49 @@ def _market_to_dict(market: Market) -> dict:
         "description": market.description,
         "outcomes": market.outcomes if isinstance(market.outcomes, list) else [],
         "venue": getattr(market, "venue", "polymarket"),
+    }
+
+
+def _pair_key(market_a_id: int, market_b_id: int) -> tuple[int, int]:
+    return (min(market_a_id, market_b_id), max(market_a_id, market_b_id))
+
+
+def _market_fingerprint(market: dict) -> str:
+    payload = {
+        "event_id": market.get("event_id"),
+        "question": market.get("question"),
+        "description": market.get("description"),
+        "outcomes": list(market.get("outcomes") or []),
+        "venue": market.get("venue", "polymarket"),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _build_cache_row(
+    market_a: dict,
+    market_b: dict,
+    classification: dict,
+    *,
+    classifier_model: str,
+    prompt_adapter: str,
+) -> dict | None:
+    if classification.get("classification_source") not in {"llm_vector", "llm_label"}:
+        return None
+
+    market_a_id, market_b_id = _pair_key(market_a["id"], market_b["id"])
+    canonical_a = market_a if market_a["id"] == market_a_id else market_b
+    canonical_b = market_b if market_b["id"] == market_b_id else market_a
+
+    return {
+        "market_a_id": market_a_id,
+        "market_b_id": market_b_id,
+        "classifier_model": classifier_model,
+        "prompt_adapter": prompt_adapter,
+        "cache_version": CLASSIFICATION_CACHE_VERSION,
+        "market_a_fingerprint": _market_fingerprint(canonical_a),
+        "market_b_fingerprint": _market_fingerprint(canonical_b),
+        "classification": classification,
     }
 
 

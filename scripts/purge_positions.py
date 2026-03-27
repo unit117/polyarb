@@ -16,7 +16,7 @@ from shared.db import SessionFactory, init_db
 from shared.events import get_redis
 from shared.logging import setup_logging
 from services.simulator.pipeline import SimulatorPipeline
-from services.simulator.main import _restore_portfolio
+from services.simulator.state import restore_portfolio
 
 logger = structlog.get_logger()
 
@@ -26,7 +26,11 @@ async def main() -> None:
     await init_db()
 
     redis = await get_redis()
-    portfolio = await _restore_portfolio()
+    portfolio = await restore_portfolio(
+        SessionFactory,
+        settings.initial_capital,
+        source="paper",
+    )
 
     logger.info(
         "pre_purge_state",

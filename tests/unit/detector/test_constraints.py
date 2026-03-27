@@ -153,8 +153,8 @@ class TestConditionalMatrix:
             correlation="positive",
         )
         m = result["matrix"]
-        # p_a - p_b = 0.3 > 0.15 threshold → (Yes, No) infeasible
-        assert m[0][1] == 0
+        # Positive conditional no longer infers logical infeasibility from prices.
+        assert m == [[1, 1], [1, 1]]
 
     def test_positive_correlation_no_divergence(self):
         result = build_constraint_matrix(
@@ -183,8 +183,7 @@ class TestConditionalMatrix:
             correlation="positive",
         )
         m = result["matrix"]
-        # sum = 1.3 > 1.15 → (No, No) infeasible
-        assert m[1][1] == 0
+        assert m == [[1, 1], [1, 1]]
 
     def test_both_low_prices(self):
         result = build_constraint_matrix(
@@ -194,8 +193,7 @@ class TestConditionalMatrix:
             correlation="positive",
         )
         m = result["matrix"]
-        # sum = 0.7 < 0.85 → (Yes, Yes) infeasible
-        assert m[0][0] == 0
+        assert m == [[1, 1], [1, 1]]
 
 
 class TestCrossPlatformMatrix:
@@ -277,9 +275,8 @@ class TestConditionalEdgeCases:
             prices_b={"Yes": 0.6, "No": 0.4},
             correlation="positive",
         )
-        # p_b - p_a = 0.3 > 0.15 threshold → (No, Yes) infeasible: matrix[1][0] = 0
         m = result["matrix"]
-        assert m[1][0] == 0
+        assert m == [[1, 1], [1, 1]]
 
     def test_profit_bound_conditional_no_outcomes(self):
         result = build_constraint_matrix(

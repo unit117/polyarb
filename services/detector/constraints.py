@@ -193,28 +193,15 @@ def _conditional_matrix(
         matrix[0][0] = 0
         return matrix
 
-    # Positive correlation: A and B should move together.
-    # Use a divergence threshold — if prices diverge significantly,
-    # the anti-correlated cells become infeasible.
-    DIVERGENCE_THRESHOLD = 0.15
-
-    if p_a - p_b > DIVERGENCE_THRESHOLD:
-        # A is much more likely than B, but they're positively correlated.
-        # (Yes, No) shouldn't happen — if A=Yes, B should also be Yes.
-        matrix[0][1] = 0
-    elif p_b - p_a > DIVERGENCE_THRESHOLD:
-        # B is much more likely than A.
-        # (No, Yes) shouldn't happen — if B=Yes, A should also be Yes.
-        matrix[1][0] = 0
-
-    # If both prices are high (sum > 1.15), they can't both be false
-    if p_a + p_b > 1.15:
-        matrix[1][1] = 0
-
-    # If both prices are low (sum < 0.85), they can't both be true
-    if p_a + p_b < 0.85:
-        matrix[0][0] = 0
-
+    # Positive correlation: all four outcomes remain logically feasible.
+    # Price divergence alone does not eliminate logical possibilities —
+    # inferring infeasibility from prices is circular reasoning that
+    # creates phantom arbitrage (the optimizer "corrects" the divergence
+    # that was used to mark the cell infeasible in the first place).
+    #
+    # If the pair truly has a logical constraint (e.g., A implies B),
+    # it should be classified as "implication", not "conditional".
+    # Conditionals are for correlated-but-not-constrained pairs.
     return matrix
 
 
@@ -381,18 +368,11 @@ def _compute_profit_bound(
             return round(excess, 6) if excess > 0.001 else 0.0
 
         if correlation == "positive":
-            profit = 0.0
-            # Prices diverge beyond threshold — one side is mispriced
-            divergence = abs(p_a - p_b) - 0.15
-            if divergence > 0.001:
-                profit = max(profit, round(divergence, 6))
-            # Both high but can't both be false
-            if p_a + p_b > 1.15:
-                profit = max(profit, round(p_a + p_b - 1.15, 6))
-            # Both low but can't both be true
-            if p_a + p_b < 0.85:
-                profit = max(profit, round(0.85 - p_a - p_b, 6))
-            return profit
+            # Positive conditional: unconstrained matrix → no provable arb.
+            # Price divergence is not a proof of mispricing for merely-
+            # correlated pairs.  If there's a real logical constraint,
+            # the pair should be classified as "implication" instead.
+            return 0.0
 
         return 0.0
 
