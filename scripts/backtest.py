@@ -300,7 +300,7 @@ async def detect_opportunities(
 #  Optimization step (time-bounded)
 # ═══════════════════════════════════════════════════════════════════
 
-async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
+async def optimize_opportunity(session, opp_id: int, as_of: datetime, min_edge: float | None = None) -> dict:
     """Run Frank-Wolfe on a detected opportunity using prices as-of `as_of`."""
     opp = await session.get(ArbitrageOpportunity, opp_id)
     if not opp or opp.status != "detected":
@@ -358,12 +358,13 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
     )
 
     theoretical_profit = float(fresh.get("profit_bound", 0.0))
+    effective_min_edge = min_edge if min_edge is not None else settings.optimizer_min_edge
     trade_info = compute_trades(
         result,
         outcomes_a,
         outcomes_b,
         theoretical_profit=theoretical_profit,
-        min_edge=settings.optimizer_min_edge,
+        min_edge=effective_min_edge,
     )
 
     opp.fw_iterations = result.iterations
@@ -376,6 +377,8 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
         "status": opp.status,
         "estimated_profit": trade_info["estimated_profit"],
         "trades": len(trade_info["trades"]),
+        "max_edge": trade_info.get("max_edge", 0.0),
+        "rejection_reason": trade_info.get("rejection_reason"),
     }
 
 
@@ -394,14 +397,14 @@ async def simulate_opportunity(
     """Execute paper trades for an optimized opportunity using prices as-of `as_of`."""
     opp = await session.get(ArbitrageOpportunity, opp_id)
     if not opp or opp.status not in ("optimized", "unconverged"):
-        return {"status": "skipped"}
+        return {"status": "skipped", "block_reason": "bad_status"}
 
     if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
-        return {"status": "no_trades"}
+        return {"status": "no_trades", "block_reason": "no_trades_data"}
 
     pair = await session.get(MarketPair, opp.pair_id)
     if not pair:
-        return {"status": "no_pair"}
+        return {"status": "no_pair", "block_reason": "no_pair"}
 
     market_a = await session.get(Market, pair.market_a_id)
     market_b = await session.get(Market, pair.market_b_id)
@@ -420,7 +423,7 @@ async def simulate_opportunity(
                 as_of=as_of.isoformat(),
                 resolved_markets=resolved_markets,
             )
-        return {"status": "skipped", "reason": "resolved_market", "trades_executed": 0}
+        return {"status": "skipped", "reason": "resolved_market", "trades_executed": 0, "block_reason": "resolved_market"}
 
     trades_executed = 0
 
@@ -428,7 +431,8 @@ async def simulate_opportunity(
     net_profit = opp.optimal_trades.get("estimated_profit", 0)
     if net_profit <= 0:
         opp.status = "simulated"
-        return {"status": "simulated", "trades_executed": 0}
+        return {"status": "simulated", "trades_executed": 0, "block_reason": "non_positive_profit",
+                "detail": {"estimated_profit": net_profit, "opp_id": opp.id, "pair_id": opp.pair_id}}
     kelly_fraction = min(net_profit * 0.5, 1.0)
 
     # Drawdown scaling — same as live pipeline
@@ -444,19 +448,60 @@ async def simulate_opportunity(
 
     # Pass 1: compute fills for all legs to determine proportional scaling
     leg_fills = []
+    leg_block_reasons = []  # track per-leg block reasons for diagnostics
     for trade in opp.optimal_trades["trades"]:
         market = market_a if trade["market"] == "A" else market_b
         if not market:
             leg_fills.append(None)
+            leg_block_reasons.append("missing_market")
             continue
 
         snapshot = await get_snapshot_at(session, market.id, as_of)
+        if not snapshot:
+            leg_fills.append(None)
+            leg_block_reasons.append("no_snapshot")
+            continue
         order_book = snapshot.order_book if snapshot else None
         midpoint = trade.get("market_price", 0.5)
 
         size = base_size
         fill = compute_vwap(order_book, trade["side"], size, midpoint)
+
+        # Edge-killed-by-slippage check (matches live pipeline)
+        fair_price = trade.get("fair_price", 0.0)
+        if fair_price > 0:
+            if trade["side"] == "BUY":
+                post_vwap_edge = fair_price - fill["vwap_price"]
+            else:
+                post_vwap_edge = fill["vwap_price"] - fair_price
+            per_share_fee = polymarket_fee(fill["vwap_price"], trade["side"])
+            if post_vwap_edge - per_share_fee <= 0:
+                leg_fills.append(None)
+                leg_block_reasons.append("edge_killed_by_slippage")
+                # Abort entire bundle (same as live pipeline)
+                opp.status = "simulated"
+                return {"status": "simulated", "trades_executed": 0,
+                        "block_reason": "edge_killed_by_slippage",
+                        "detail": {"opp_id": opp.id, "pair_id": opp.pair_id,
+                                   "market_id": market.id,
+                                   "fair_price": fair_price,
+                                   "vwap_price": fill["vwap_price"],
+                                   "post_vwap_edge": round(post_vwap_edge, 6),
+                                   "fee": round(per_share_fee, 6),
+                                   "estimated_profit": net_profit}}
+
         leg_fills.append({"fill": fill, "requested_size": size, "market": market, "midpoint": midpoint})
+        leg_block_reasons.append(None)
+
+    # If all legs were blocked in pass 1, report the first leg block reason
+    if all(lf is None for lf in leg_fills):
+        first_reason = next((r for r in leg_block_reasons if r), "no_valid_legs")
+        opp.status = "simulated"
+        return {"status": "simulated", "trades_executed": 0,
+                "block_reason": first_reason,
+                "detail": {"opp_id": opp.id, "pair_id": opp.pair_id,
+                           "estimated_profit": net_profit,
+                           "leg_reasons": leg_block_reasons}}
 
     # Cross-leg proportional scaling: match the smallest fill ratio
     fill_ratios = []
@@ -465,11 +510,14 @@ async def simulate_opportunity(
             fill_ratios.append(lf["fill"]["filled_size"] / lf["requested_size"])
     min_ratio = min(fill_ratios) if fill_ratios else 1.0
 
+    legs_attempted = 0
+    legs_insufficient_cash = 0
     for i, trade in enumerate(opp.optimal_trades["trades"]):
         lf = leg_fills[i]
         if not lf:
             continue
 
+        legs_attempted += 1
         fill = lf["fill"]
         market = lf["market"]
         midpoint = lf["midpoint"]
@@ -522,6 +570,7 @@ async def simulate_opportunity(
                 portfolio.winning_trades += 1
 
         if not result["executed"]:
+            legs_insufficient_cash += 1
             continue
 
         paper_trade = PaperTrade(
@@ -541,7 +590,21 @@ async def simulate_opportunity(
         trades_executed += 1
 
     opp.status = "simulated"
-    return {"status": "simulated", "trades_executed": trades_executed}
+    if trades_executed > 0:
+        return {"status": "simulated", "trades_executed": trades_executed}
+
+    # All legs failed execution — determine reason
+    if legs_insufficient_cash > 0:
+        block_reason = "insufficient_cash"
+    else:
+        block_reason = "all_legs_failed"
+    return {"status": "simulated", "trades_executed": 0,
+            "block_reason": block_reason,
+            "detail": {"opp_id": opp.id, "pair_id": opp.pair_id,
+                       "estimated_profit": net_profit,
+                       "legs_attempted": legs_attempted,
+                       "legs_insufficient_cash": legs_insufficient_cash,
+                       "cash": float(portfolio.cash)}}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -686,6 +749,7 @@ async def run_backtest(
     end_date: str | None = None,
     pair_ids: set[int] | None = None,
     pair_file: str | None = None,
+    min_edge_override: float | None = None,
 ) -> list[dict]:
     """Run the full backtest and return daily results."""
     structlog.configure(
@@ -797,6 +861,14 @@ async def run_backtest(
         "simulator_blocked": 0,
         "simulator_traded": 0,
     }
+    # Per-reason optimizer rejection counters
+    opt_reject_reasons: dict[str, int] = {}
+    opt_rejected_edges: list[float] = []
+    # Per-reason simulator block counters
+    sim_block_reasons: dict[str, int] = {}
+    # Sample of blocked opportunities (up to 10)
+    sim_blocked_samples: list[dict] = []
+    SIM_BLOCKED_SAMPLE_MAX = 10
 
     for step_idx, as_of in enumerate(time_steps):
         day_label = as_of.strftime("%Y-%m-%d")
@@ -842,12 +914,24 @@ async def run_backtest(
 
             # ── Step 3: Optimization ──────────────────────────────
             optimized = 0
+            optimized_opp_ids = []
             for opp_id in opp_ids:
                 try:
-                    res = await optimize_opportunity(session, opp_id, as_of)
+                    res = await optimize_opportunity(session, opp_id, as_of, min_edge=min_edge_override)
                     if res["status"] in ("optimized", "unconverged"):
-                        optimized += 1
-                        total_counters["optimizer_ok"] += 1
+                        if res.get("trades", 0) > 0:
+                            optimized += 1
+                            optimized_opp_ids.append(opp_id)
+                            total_counters["optimizer_ok"] += 1
+                        else:
+                            # Optimizer ran but found no trades above min_edge
+                            total_counters["optimizer_no_trades"] += 1
+                            reason = res.get("rejection_reason", "unknown")
+                            opt_reject_reasons[reason] = opt_reject_reasons.get(reason, 0) + 1
+                            # Track max_edge for rejected opps
+                            me = res.get("max_edge", 0.0)
+                            if me > 0:
+                                opt_rejected_edges.append(me)
                     else:
                         total_counters["optimizer_no_trades"] += 1
                 except Exception:
@@ -856,7 +940,7 @@ async def run_backtest(
 
             # ── Step 4: Simulation ────────────────────────────────
             total_trades = 0
-            for opp_id in opp_ids:
+            for opp_id in optimized_opp_ids:
                 try:
                     res = await simulate_opportunity(
                         session, opp_id, portfolio, as_of,
@@ -868,6 +952,21 @@ async def run_backtest(
                         total_counters["simulator_traded"] += 1
                     else:
                         total_counters["simulator_blocked"] += 1
+                        reason = res.get("block_reason", "unknown")
+                        sim_block_reasons[reason] = sim_block_reasons.get(reason, 0) + 1
+                        if len(sim_blocked_samples) < SIM_BLOCKED_SAMPLE_MAX:
+                            sample = {
+                                "opp_id": opp_id,
+                                "day": day_label,
+                                "block_reason": reason,
+                            }
+                            detail = res.get("detail")
+                            if detail:
+                                sample.update({
+                                    k: v for k, v in detail.items()
+                                    if k != "opp_id"
+                                })
+                            sim_blocked_samples.append(sample)
                 except Exception:
                     log.exception("backtest_simulate_error", opp_id=opp_id, day=day_label)
             day_stats["trades_executed"] = total_trades
@@ -923,10 +1022,12 @@ async def run_backtest(
     log.info(
         "diagnostic_rejection_summary",
         total_pair_evaluations=total_evaluated,
+        sim_block_reasons=sim_block_reasons,
         **total_counters,
     )
+    effective_me = min_edge_override if min_edge_override is not None else settings.optimizer_min_edge
     print("\n" + "=" * 70)
-    print("  DIAGNOSTIC: Per-Stage Rejection Counts")
+    print(f"  DIAGNOSTIC: Per-Stage Rejection Counts  [min_edge={effective_me}]")
     print("=" * 70)
     print(f"  Total pair-day evaluations:  {total_evaluated}")
     print(f"  ── Detection gate ──")
@@ -939,11 +1040,35 @@ async def run_backtest(
     print(f"    → detected:                {total_counters['detected']}")
     print(f"  ── Optimizer gate ──")
     print(f"    optimizer_no_trades:        {total_counters['optimizer_no_trades']}")
+    for reason, count in sorted(opt_reject_reasons.items(), key=lambda x: -x[1]):
+        print(f"      ├─ {reason:30s} {count}")
+    if opt_rejected_edges:
+        sorted_edges = sorted(opt_rejected_edges)
+        p50 = sorted_edges[len(sorted_edges) // 2]
+        p90 = sorted_edges[int(len(sorted_edges) * 0.9)]
+        print(f"      edge distribution (rejected): min={sorted_edges[0]:.4f} "
+              f"p50={p50:.4f} p90={p90:.4f} max={sorted_edges[-1]:.4f}")
     print(f"    → optimizer_ok:             {total_counters['optimizer_ok']}")
     print(f"  ── Simulator gate ──")
     print(f"    simulator_blocked:          {total_counters['simulator_blocked']}")
+    for reason, count in sorted(sim_block_reasons.items(), key=lambda x: -x[1]):
+        print(f"      ├─ {reason:30s} {count}")
     print(f"    → simulator_traded:         {total_counters['simulator_traded']}")
-    print("=" * 70 + "\n")
+    print("=" * 70)
+
+    if sim_blocked_samples:
+        print("\n" + "-" * 70)
+        print("  SIMULATOR BLOCKED SAMPLES (up to 10)")
+        print("-" * 70)
+        for s in sim_blocked_samples:
+            print(f"  opp_id={s.get('opp_id')}, day={s.get('day')}, reason={s.get('block_reason')}")
+            for k, v in s.items():
+                if k not in ("opp_id", "day", "block_reason"):
+                    print(f"    {k}: {v}")
+            print()
+        print("-" * 70)
+
+    print()
 
     return daily_results
 
@@ -1078,6 +1203,8 @@ async def cli_main():
                         help="Comma-separated pair IDs to include (e.g. 1,5,12)")
     parser.add_argument("--pair-file", type=str, default=None,
                         help="File with pair IDs (JSON list or one per line)")
+    parser.add_argument("--min-edge", type=float, default=None,
+                        help="Override optimizer min_edge threshold (default: from settings)")
     args = parser.parse_args()
 
     # Parse --pair-ids into a set
@@ -1095,6 +1222,7 @@ async def cli_main():
         end_date=args.end,
         pair_ids=_pair_ids,
         pair_file=args.pair_file,
+        min_edge_override=args.min_edge,
     )
 
     if results:

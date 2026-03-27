@@ -46,6 +46,13 @@ def compute_trades(
 
     trades = []
 
+    # Compute max per-leg edge across all outcomes (for diagnostics)
+    all_edges = []
+    for vec_q, vec_p in [(q_a, p_a), (q_b, p_b)]:
+        for i in range(len(vec_q)):
+            all_edges.append(abs(float(vec_q[i] - vec_p[i])))
+    max_edge_seen = max(all_edges) if all_edges else 0.0
+
     # For each market, collect all candidate legs then keep only the
     # best-edge leg.  In binary markets BUY Yes and SELL No are mirrors
     # of the same mispricing — executing both pays double fees for the
@@ -77,6 +84,24 @@ def compute_trades(
                 # Multi-outcome markets: keep all legs to preserve hedge structure
                 trades.extend(candidates)
 
+    # If no legs passed min_edge, return early with diagnostic info
+    if not trades:
+        return {
+            "trades": [],
+            "estimated_profit": 0.0,
+            "theoretical_profit": round(theoretical_profit, 6),
+            "max_edge": round(max_edge_seen, 6),
+            "rejection_reason": "below_min_edge",
+            "market_a_prices": {
+                "current": [round(float(x), 6) for x in p_a],
+                "optimal": [round(float(x), 6) for x in q_a],
+            },
+            "market_b_prices": {
+                "current": [round(float(x), 6) for x in p_b],
+                "optimal": [round(float(x), 6) for x in q_b],
+            },
+        }
+
     # Sanity cap: edges above MAX_EDGE are almost certainly misclassified
     # pairs, not real arbitrage.  Drop the entire opportunity.
     for t in trades:
@@ -91,6 +116,8 @@ def compute_trades(
                 "trades": [],
                 "estimated_profit": 0.0,
                 "theoretical_profit": round(theoretical_profit, 6),
+                "max_edge": round(max_edge_seen, 6),
+                "rejection_reason": "edge_sanity_cap",
                 "market_a_prices": {
                     "current": [round(float(x), 6) for x in p_a],
                     "optimal": [round(float(x), 6) for x in q_a],
@@ -134,6 +161,11 @@ def compute_trades(
             "trades": [],
             "estimated_profit": 0.0,
             "theoretical_profit": round(theoretical_profit, 6),
+            "max_edge": round(max_edge_seen, 6),
+            "rejection_reason": "below_min_profit",
+            "raw_edge": round(raw_edge, 6),
+            "est_fees": round(est_fees, 6),
+            "est_slippage": round(est_slippage, 6),
             "market_a_prices": {
                 "current": [round(float(x), 6) for x in p_a],
                 "optimal": [round(float(x), 6) for x in q_a],
@@ -159,6 +191,8 @@ def compute_trades(
                 "trades": [],
                 "estimated_profit": 0.0,
                 "theoretical_profit": round(theoretical_profit, 6),
+                "max_edge": round(max_edge_seen, 6),
+                "rejection_reason": "payout_proof_failed",
                 "market_a_prices": {
                     "current": [round(float(x), 6) for x in p_a],
                     "optimal": [round(float(x), 6) for x in q_a],
@@ -173,6 +207,7 @@ def compute_trades(
         "trades": trades,
         "estimated_profit": round(estimated_profit, 6),
         "theoretical_profit": round(theoretical_profit, 6),
+        "max_edge": round(max_edge_seen, 6),
         "market_a_prices": {
             "current": [round(float(x), 6) for x in p_a],
             "optimal": [round(float(x), 6) for x in q_a],
