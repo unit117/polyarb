@@ -165,7 +165,10 @@ Do **not** start with the simulator refactor.
 - R2 direct download works: `https://r2.pmxt.dev/polymarket_orderbook_YYYY-MM-DDTHH.parquet`
 - Mar 22-23 data (48 more files, ~22GB) available if Mar 21 proves the pipeline
 
-## 8. Phase 0.5 - Live Shadow Logger And Review Queue
+## 8. Phase 0.5 - Live Shadow Logger And Review Queue — IN PROGRESS
+
+**Started:** 2026-03-27
+**Implementation:** Codex built migration, model, pipeline hooks, export script. Claude aligned model to migration schema and enabled in live .env.
 
 ### Objective
 
@@ -216,11 +219,19 @@ Then:
 - manually review them
 - classify the main failure modes
 
-### Suggested artifacts
+### Artifacts (implemented 2026-03-27)
 
-- migration for `shadow_candidate_logs`
-- `scripts/export_live_shadow_queue.py`
-- `docs/research/live_shadow_review_2026-03-xx.md`
+- `alembic/versions/016_shadow_candidate_logs.py` — 51-column table with order book, classifier, verification, optimizer preview fields
+- `shared/models.py` — `ShadowCandidateLog` model aligned to migration
+- `services/detector/shadow_logging.py` — order book summary, silver failure signatures, optimizer preview gate
+- `services/detector/pipeline.py` — `_log_shadow_candidate()` called at every decision point (classified_none, uncertainty_filtered, verification_failed, profit_non_positive, detected)
+- `scripts/export_live_shadow_queue.py` — exports top-N rows by review priority to JSONL with summary stats
+- `shared/config.py` — `shadow_logging_enabled` (default false), `shadow_logging_optimizer_preview` (default true)
+- `.env` — enabled on live (`SHADOW_LOGGING_ENABLED=true`)
+
+### Remaining artifacts
+
+- `docs/research/live_shadow_review_2026-03-xx.md` — after 3-7 days of collection
 - JSONL exports under a dedicated review output directory as needed
 
 ### Acceptance criteria
@@ -340,12 +351,13 @@ Assume `1-3 weeks` depending on what the thin slice proves and how much simulato
 - Mar 21 data downloaded and verified (24 files, 11GB)
 - Filter run confirmed 10.5k pairs with both-side coverage, token_id join path validated
 - No trades data exists (confirmed blocker for fill realism)
-- Phase 0.5 live shadow logger — not started (next priority)
+- Phase 0.5 implementation — complete (2026-03-27), deploy pending
 
-### Week 2
+### Week 2 (starting 2026-03-28)
 
-- collect shadow data
-- manually review high-signal rows
+- deploy shadow logging to NAS, run migration 016
+- collect shadow data for 3-7 days
+- manually review high-signal rows via export script
 - decide which PMXT fields matter most
 
 ### Week 3

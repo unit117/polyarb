@@ -13,11 +13,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish
-from shared.models import ArbitrageOpportunity, Market, MarketPair
+from shared.models import (
+    ArbitrageOpportunity,
+    Market,
+    MarketPair,
+    PriceSnapshot,
+    ShadowCandidateLog,
+)
 from shared.config import settings
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
 from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
+from services.detector.shadow_logging import (
+    derive_silver_failure_signature,
+    extract_order_book_summary,
+    preview_trade_gates,
+)
 from services.detector.verification import verify_pair
 
 logger = structlog.get_logger()
@@ -45,6 +56,132 @@ class DetectionPipeline:
         self.classifier_prompt_adapter = classifier_prompt_adapter
         self._rescan_lock = asyncio.Lock()
         self._detection_lock = asyncio.Lock()
+
+    async def _log_shadow_candidate(
+        self,
+        session,
+        *,
+        pipeline_source: str,
+        similarity: float | None,
+        market_a: Market,
+        market_b: Market,
+        snapshot_a: PriceSnapshot | None,
+        snapshot_b: PriceSnapshot | None,
+        classification: dict,
+        decision_outcome: str,
+        verification: dict | None = None,
+        constraint: dict | None = None,
+        pair_id: int | None = None,
+        opportunity_id: int | None = None,
+    ) -> None:
+        if not _bool_setting("shadow_logging_enabled", False):
+            return
+
+        prices_a = snapshot_a.prices if snapshot_a else None
+        prices_b = snapshot_b.prices if snapshot_b else None
+        summary_a = extract_order_book_summary(snapshot_a.order_book if snapshot_a else None)
+        summary_b = extract_order_book_summary(snapshot_b.order_book if snapshot_b else None)
+        verification_reasons = verification.get("reasons") if verification else None
+        silver_failure_signature = derive_silver_failure_signature(verification_reasons)
+
+        profit = None
+        passed_to_optimization = False
+        preview_status = None
+        preview_estimated_profit = None
+        preview_trade_count = None
+        preview_max_edge = None
+        preview_rejection_reason = None
+        would_trade = False
+
+        if constraint:
+            raw_profit = constraint.get("profit_bound")
+            if raw_profit is not None:
+                profit = Decimal(str(raw_profit))
+
+        if verification and verification.get("verified") and profit and profit > 0:
+            passed_to_optimization = True
+            if _bool_setting("shadow_logging_optimizer_preview", True):
+                preview = preview_trade_gates(
+                    constraint,
+                    prices_a,
+                    prices_b,
+                    venue_a=getattr(market_a, "venue", "polymarket"),
+                    venue_b=getattr(market_b, "venue", "polymarket"),
+                    min_edge=settings.optimizer_min_edge,
+                    max_iterations=settings.fw_max_iterations,
+                    gap_tolerance=settings.fw_gap_tolerance,
+                    ip_timeout_ms=settings.fw_ip_timeout_ms,
+                    skip_conditional=settings.optimizer_skip_conditional,
+                )
+                preview_status = preview.get("status")
+                if preview.get("estimated_profit") is not None:
+                    preview_estimated_profit = Decimal(
+                        str(preview["estimated_profit"])
+                    )
+                preview_trade_count = preview.get("trade_count")
+                preview_max_edge = preview.get("max_edge")
+                preview_rejection_reason = preview.get("rejection_reason")
+                would_trade = bool(preview.get("would_trade"))
+                if would_trade:
+                    decision_outcome = "would_trade"
+                elif decision_outcome == "detected":
+                    decision_outcome = "optimizer_rejected"
+
+        session.add(
+            ShadowCandidateLog(
+                pipeline_source=pipeline_source,
+                decision_outcome=decision_outcome,
+                similarity=similarity,
+                pair_id=pair_id,
+                opportunity_id=opportunity_id,
+                market_a_id=market_a.id,
+                market_b_id=market_b.id,
+                market_a_event_id=market_a.event_id,
+                market_b_event_id=market_b.event_id,
+                market_a_question=market_a.question,
+                market_b_question=market_b.question,
+                market_a_outcomes=market_a.outcomes if isinstance(market_a.outcomes, list) else None,
+                market_b_outcomes=market_b.outcomes if isinstance(market_b.outcomes, list) else None,
+                market_a_venue=getattr(market_a, "venue", "polymarket"),
+                market_b_venue=getattr(market_b, "venue", "polymarket"),
+                market_a_liquidity=market_a.liquidity,
+                market_b_liquidity=market_b.liquidity,
+                market_a_volume=market_a.volume,
+                market_b_volume=market_b.volume,
+                snapshot_a_timestamp=snapshot_a.timestamp if snapshot_a else None,
+                snapshot_b_timestamp=snapshot_b.timestamp if snapshot_b else None,
+                prices_a=prices_a,
+                prices_b=prices_b,
+                market_a_best_bid=summary_a["best_bid"],
+                market_a_best_ask=summary_a["best_ask"],
+                market_a_spread=summary_a["spread"],
+                market_a_visible_depth=summary_a["visible_depth"],
+                market_b_best_bid=summary_b["best_bid"],
+                market_b_best_ask=summary_b["best_ask"],
+                market_b_spread=summary_b["spread"],
+                market_b_visible_depth=summary_b["visible_depth"],
+                dependency_type=classification.get("dependency_type"),
+                implication_direction=classification.get("implication_direction"),
+                classification_source=classification.get("classification_source"),
+                classifier_model=self.classifier_model,
+                classifier_prompt_adapter=self.classifier_prompt_adapter,
+                classifier_confidence=classification.get("confidence"),
+                classification_reasoning=classification.get("reasoning"),
+                verification_passed=(
+                    verification.get("verified") if verification is not None else None
+                ),
+                verification_reasons=verification_reasons,
+                silver_failure_signature=silver_failure_signature,
+                profit_bound=profit,
+                passed_to_optimization=passed_to_optimization,
+                optimizer_preview_status=preview_status,
+                optimizer_preview_estimated_profit=preview_estimated_profit,
+                optimizer_preview_trade_count=preview_trade_count,
+                optimizer_preview_max_edge=preview_max_edge,
+                optimizer_preview_rejection_reason=preview_rejection_reason,
+                would_trade=would_trade,
+            )
+        )
 
     async def run_once(self) -> dict:
         """Execute one full detection cycle. Returns stats dict.
@@ -105,11 +242,34 @@ class DetectionPipeline:
                 )
 
                 if classification["dependency_type"] == "none":
+                    if _bool_setting("shadow_logging_enabled", False):
+                        snapshot_a = await _get_latest_snapshot(
+                            session, market_a.id, settings.max_snapshot_age_seconds
+                        )
+                        snapshot_b = await _get_latest_snapshot(
+                            session, market_b.id, settings.max_snapshot_age_seconds
+                        )
+                        await self._log_shadow_candidate(
+                            session,
+                            pipeline_source="similarity",
+                            similarity=candidate.get("similarity"),
+                            market_a=market_a,
+                            market_b=market_b,
+                            snapshot_a=snapshot_a,
+                            snapshot_b=snapshot_b,
+                            classification=classification,
+                            decision_outcome="classified_none",
+                        )
                     continue
 
-                # Get latest prices for profit computation
-                prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
-                prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
+                snapshot_a = await _get_latest_snapshot(
+                    session, market_a.id, settings.max_snapshot_age_seconds
+                )
+                snapshot_b = await _get_latest_snapshot(
+                    session, market_b.id, settings.max_snapshot_age_seconds
+                )
+                prices_a = snapshot_a.prices if snapshot_a else None
+                prices_b = snapshot_b.prices if snapshot_b else None
 
                 # Uncertainty filter: skip near-resolved markets
                 if prices_a and prices_b and not _passes_uncertainty_filter(
@@ -119,6 +279,17 @@ class DetectionPipeline:
                         "uncertainty_filter_rejected",
                         market_a_id=market_a.id,
                         market_b_id=market_b.id,
+                    )
+                    await self._log_shadow_candidate(
+                        session,
+                        pipeline_source="similarity",
+                        similarity=candidate.get("similarity"),
+                        market_a=market_a,
+                        market_b=market_b,
+                        snapshot_a=snapshot_a,
+                        snapshot_b=snapshot_b,
+                        classification=classification,
+                        decision_outcome="uncertainty_filtered",
                     )
                     continue
 
@@ -190,6 +361,7 @@ class DetectionPipeline:
 
                 # If there's a theoretical profit on a verified pair, record an opportunity
                 profit = constraint.get("profit_bound", 0.0)
+                opp = None
                 if profit > 0 and verification["verified"]:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
@@ -211,6 +383,28 @@ class DetectionPipeline:
                             "theoretical_profit": float(profit),
                         },
                     ))
+
+                decision_outcome = "detected"
+                if not verification["verified"]:
+                    decision_outcome = "verification_failed"
+                elif profit <= 0:
+                    decision_outcome = "profit_non_positive"
+
+                await self._log_shadow_candidate(
+                    session,
+                    pipeline_source="similarity",
+                    similarity=candidate.get("similarity"),
+                    market_a=market_a,
+                    market_b=market_b,
+                    snapshot_a=snapshot_a,
+                    snapshot_b=snapshot_b,
+                    classification=classification,
+                    verification=verification,
+                    constraint=constraint,
+                    decision_outcome=decision_outcome,
+                    pair_id=pair.id,
+                    opportunity_id=opp.id if opp else None,
+                )
 
             await session.commit()
 
@@ -293,10 +487,34 @@ class DetectionPipeline:
                     )
 
                 if classification["dependency_type"] == "none":
+                    if _bool_setting("shadow_logging_enabled", False):
+                        snapshot_a = await _get_latest_snapshot(
+                            session, market_a.id, settings.max_snapshot_age_seconds
+                        )
+                        snapshot_b = await _get_latest_snapshot(
+                            session, market_b.id, settings.max_snapshot_age_seconds
+                        )
+                        await self._log_shadow_candidate(
+                            session,
+                            pipeline_source="cross_venue",
+                            similarity=similarity,
+                            market_a=market_a,
+                            market_b=market_b,
+                            snapshot_a=snapshot_a,
+                            snapshot_b=snapshot_b,
+                            classification=classification,
+                            decision_outcome="classified_none",
+                        )
                     continue
 
-                prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
-                prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
+                snapshot_a = await _get_latest_snapshot(
+                    session, market_a.id, settings.max_snapshot_age_seconds
+                )
+                snapshot_b = await _get_latest_snapshot(
+                    session, market_b.id, settings.max_snapshot_age_seconds
+                )
+                prices_a = snapshot_a.prices if snapshot_a else None
+                prices_b = snapshot_b.prices if snapshot_b else None
 
                 if classification.get("valid_outcomes"):
                     constraint = build_constraint_matrix_from_vectors(
@@ -362,6 +580,7 @@ class DetectionPipeline:
                 ))
 
                 profit = constraint.get("profit_bound", 0.0)
+                opp = None
                 if profit > 0 and verification["verified"]:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
@@ -383,6 +602,28 @@ class DetectionPipeline:
                             "theoretical_profit": float(profit),
                         },
                     ))
+
+                decision_outcome = "detected"
+                if not verification["verified"]:
+                    decision_outcome = "verification_failed"
+                elif profit <= 0:
+                    decision_outcome = "profit_non_positive"
+
+                await self._log_shadow_candidate(
+                    session,
+                    pipeline_source="cross_venue",
+                    similarity=similarity,
+                    market_a=market_a,
+                    market_b=market_b,
+                    snapshot_a=snapshot_a,
+                    snapshot_b=snapshot_b,
+                    classification=classification,
+                    verification=verification,
+                    constraint=constraint,
+                    decision_outcome=decision_outcome,
+                    pair_id=pair.id,
+                    opportunity_id=opp.id if opp else None,
+                )
 
             await session.commit()
 
@@ -768,10 +1009,13 @@ def _passes_uncertainty_filter(
     return True
 
 
-async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
-    """Fetch the most recent price snapshot for a market."""
+async def _get_latest_snapshot(
+    session,
+    market_id: int,
+    max_age_seconds: int = 0,
+) -> PriceSnapshot | None:
+    """Fetch the most recent price snapshot row for a market."""
     from datetime import timedelta
-    from shared.models import PriceSnapshot
 
     query = (
         select(PriceSnapshot)
@@ -783,5 +1027,15 @@ async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) 
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
         query = query.where(PriceSnapshot.timestamp >= cutoff)
     result = await session.execute(query)
-    snapshot = result.scalar_one_or_none()
+    return result.scalar_one_or_none()
+
+
+async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
+    """Fetch the most recent price payload for a market."""
+    snapshot = await _get_latest_snapshot(session, market_id, max_age_seconds)
     return snapshot.prices if snapshot else None
+
+
+def _bool_setting(name: str, default: bool) -> bool:
+    value = getattr(settings, name, default)
+    return value if isinstance(value, bool) else default

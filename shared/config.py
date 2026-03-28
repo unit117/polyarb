@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
     shadow_classifier_base_url: str = ""
+    shadow_logging_enabled: bool = False
+    shadow_logging_optimizer_preview: bool = True
     detection_interval_seconds: int = 60
 
     # Uncertainty filter — reject near-resolved markets in detector
