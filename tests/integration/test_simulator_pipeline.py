@@ -215,6 +215,40 @@ class TestSimulateOpportunity:
         assert result["status"] == "blocked"
         assert result["trades_executed"] == 0
 
+    @pytest.mark.asyncio
+    async def test_skips_optimized_opportunity_when_pair_is_unverified(self):
+        factory_fn, session = _mock_session_factory()
+        redis = AsyncMock()
+        portfolio = Portfolio(10000.0)
+
+        opp = _make_opportunity()
+        pair = _make_pair()
+        pair.verified = False
+
+        async def mock_get(model, id_):
+            from shared.models import ArbitrageOpportunity, MarketPair
+            if model == ArbitrageOpportunity:
+                return opp
+            if model == MarketPair:
+                return pair
+            return None
+
+        session.get = AsyncMock(side_effect=mock_get)
+
+        pipeline = SimulatorPipeline(
+            session_factory=factory_fn,
+            redis=redis,
+            portfolio=portfolio,
+            max_position_size=100.0,
+        )
+
+        result = await pipeline.simulate_opportunity(1)
+
+        assert result == {"status": "skipped", "reason": "pair_unverified"}
+        assert opp.status == "skipped"
+        assert portfolio.total_trades == 0
+        assert session.commit.await_count == 2
+
 
 class TestSettleResolvedMarkets:
     @pytest.mark.asyncio

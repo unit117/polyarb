@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.detector.pipeline import DetectionPipeline, _market_to_dict
+from services.detector.pipeline import (
+    DetectionPipeline,
+    _invalidate_open_opportunities_for_pair,
+    _market_to_dict,
+)
 from shared.models import ShadowCandidateLog
 
 
@@ -307,3 +311,17 @@ class TestDetectionPipelineRunOnce:
         assert len(shadow_logs) == 1
         assert shadow_logs[0].decision_outcome == "would_trade"
         assert shadow_logs[0].passed_to_optimization is True
+
+
+class TestInvalidateOpenOpportunities:
+    @pytest.mark.asyncio
+    async def test_skips_open_opportunities_for_unverified_pair(self):
+        session = AsyncMock()
+        result = MagicMock()
+        result.fetchall = MagicMock(return_value=[(101,), (102,)])
+        session.execute = AsyncMock(return_value=result)
+
+        count = await _invalidate_open_opportunities_for_pair(session, 77)
+
+        assert count == 2
+        session.execute.assert_awaited()

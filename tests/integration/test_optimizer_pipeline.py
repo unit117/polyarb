@@ -209,6 +209,39 @@ class TestOptimizeOpportunity:
         assert result["status"] == "no_constraints"
 
     @pytest.mark.asyncio
+    async def test_skips_detected_opportunity_when_pair_is_unverified(self):
+        factory_fn, session = _mock_session_factory()
+        redis = AsyncMock()
+
+        opp = _make_opportunity()
+        pair = _make_pair()
+        pair.verified = False
+
+        async def mock_get(model, id_):
+            from shared.models import ArbitrageOpportunity, MarketPair
+            if model == ArbitrageOpportunity:
+                return opp
+            if model == MarketPair:
+                return pair
+            return None
+
+        session.get = AsyncMock(side_effect=mock_get)
+
+        pipeline = OptimizerPipeline(
+            session_factory=factory_fn,
+            redis=redis,
+            max_iterations=50,
+            gap_tolerance=0.01,
+            ip_timeout_ms=5000,
+        )
+
+        result = await pipeline.optimize_opportunity(1)
+
+        assert result == {"status": "skipped", "reason": "pair_unverified"}
+        assert opp.status == "skipped"
+        session.commit.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_invalid_constraint_matrix_returns_error(self):
         """Empty outcomes_a/b in constraint_matrix → invalid_constraints."""
         factory_fn, session = _mock_session_factory()

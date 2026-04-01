@@ -59,6 +59,15 @@ class OptimizerPipeline:
             if not pair or not pair.constraint_matrix:
                 logger.warning("pair_missing_constraints", pair_id=opp.pair_id)
                 return {"status": "no_constraints"}
+            if not pair.verified:
+                opp.status = "skipped"
+                await session.commit()
+                logger.info(
+                    "skipping_unverified_pair_opportunity",
+                    opportunity_id=opportunity_id,
+                    pair_id=pair.id,
+                )
+                return {"status": "skipped", "reason": "pair_unverified"}
 
             constraint = pair.constraint_matrix
             dep_type = constraint.get("type", "")
@@ -102,8 +111,12 @@ class OptimizerPipeline:
             prices_b = await _get_latest_prices(session, pair.market_b_id, max_age)
 
             if prices_a is None or prices_b is None:
+                # Don't retry forever — skip so detector can create a fresh
+                # opportunity later when prices become available.
+                opp.status = "skipped"
+                await session.commit()
                 logger.warning("missing_prices", pair_id=pair.id)
-                return {"status": "no_prices"}
+                return {"status": "skipped", "reason": "no_prices"}
 
             # Build price vectors aligned with outcomes
             p_a = np.array([prices_a.get(o, 0.5) for o in outcomes_a], dtype=np.float64)
@@ -202,6 +215,9 @@ class OptimizerPipeline:
                 .join(MarketA, MarketA.id == MarketPair.market_a_id)
                 .join(MarketB, MarketB.id == MarketPair.market_b_id)
                 .where(ArbitrageOpportunity.status == "detected")
+                .where(MarketPair.verified == True)  # noqa: E712
+                .where(MarketA.active == True)  # noqa: E712
+                .where(MarketB.active == True)  # noqa: E712
                 .where((MarketA.end_date == None) | (MarketA.end_date >= now))  # noqa: E711
                 .where((MarketB.end_date == None) | (MarketB.end_date >= now))  # noqa: E711
                 .order_by(ArbitrageOpportunity.timestamp.desc())

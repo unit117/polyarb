@@ -8,7 +8,7 @@ from decimal import Decimal
 import openai
 import redis.asyncio as aioredis
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -32,6 +32,28 @@ from services.detector.shadow_logging import (
 from services.detector.verification import verify_pair
 
 logger = structlog.get_logger()
+
+
+async def _invalidate_open_opportunities_for_pair(session, pair_id: int) -> int:
+    """Skip stale opportunities when a pair fails re-verification."""
+    result = await session.execute(
+        update(ArbitrageOpportunity)
+        .where(
+            ArbitrageOpportunity.pair_id == pair_id,
+            ArbitrageOpportunity.status.in_(("detected", "optimized", "unconverged")),
+        )
+        .values(status="skipped")
+        .returning(ArbitrageOpportunity.id)
+    )
+    invalidated = [row[0] for row in result.fetchall()]
+    if invalidated:
+        logger.info(
+            "invalidated_stale_opportunities",
+            pair_id=pair_id,
+            count=len(invalidated),
+            opportunity_ids=invalidated,
+        )
+    return len(invalidated)
 
 
 class DetectionPipeline:
@@ -697,6 +719,7 @@ class DetectionPipeline:
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
+                    await _invalidate_open_opportunities_for_pair(session, pair.id)
                     logger.info("pair_unverified_on_rescan", pair_id=pair.id, reasons=re_verification["reasons"])
                     continue
 
@@ -827,6 +850,7 @@ class DetectionPipeline:
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
+                    await _invalidate_open_opportunities_for_pair(session, pair.id)
                     logger.info("pair_unverified_on_rescan", pair_id=pair.id, reasons=re_verification["reasons"])
                     continue
 

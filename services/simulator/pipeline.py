@@ -151,10 +151,13 @@ class SimulatorPipeline:
                 return {"status": "skipped", "reason": "status_changed"}
 
             pair = await session.get(MarketPair, opp.pair_id)
-            if not pair:
-                opp.status = "optimized"
+            if not pair or not pair.verified:
+                opp.status = "skipped"
                 await session.commit()
-                return {"status": "no_pair"}
+                return {
+                    "status": "skipped",
+                    "reason": "pair_unverified" if pair else "no_pair",
+                }
 
             market_a = await session.get(Market, pair.market_a_id)
             market_b = await session.get(Market, pair.market_b_id)
@@ -253,7 +256,7 @@ class SimulatorPipeline:
                     }
                 )
 
-            opp.status = "simulated" if trades_executed > 0 else "optimized"
+            opp.status = "simulated" if trades_executed > 0 else "skipped"
             await session.commit()
 
             for event in deferred_trade_events:

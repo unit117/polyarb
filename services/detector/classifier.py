@@ -547,7 +547,7 @@ async def classify_llm(
             messages=list(rendered_prompt.messages),
             temperature=0.1,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            max_tokens=1024 if "minimax" in model else 256,
+            max_tokens=1024 if _is_reasoning_model(model) else 256,
         )
 
         msg = response.choices[0].message
@@ -619,6 +619,11 @@ async def classify_llm(
     except (json.JSONDecodeError, KeyError, openai.APIError) as e:
         logger.error("llm_classification_failed", error=str(e))
         return {"dependency_type": "none", "confidence": 0.0, "reasoning": str(e)}
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Return True for models that emit reasoning/think tokens."""
+    return any(t in model.lower() for t in ("minimax", "gemini", "deepseek", "o1", "o3"))
 
 
 def _strip_think_tags(raw: str) -> str:
@@ -743,7 +748,7 @@ async def classify_llm_resolution(
             "messages": list(rendered_prompt.messages),
             "temperature": 0.0,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            "max_tokens": 2048 if "minimax" in model else 512,
+            "max_tokens": 2048 if _is_reasoning_model(model) else 512,
         }
         # Use JSON response format when model supports it
         if _supports_json_response_format(model):
