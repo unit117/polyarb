@@ -20,11 +20,12 @@ async def find_similar_pairs(
     Only returns pairs above the similarity threshold that don't already
     exist in market_pairs.
     """
-    # Pick a batch of active markets to search from
+    # Pick a batch of active, non-expired markets to search from
     anchor_query = text("""
         SELECT id, embedding
         FROM markets
         WHERE active = true AND embedding IS NOT NULL
+          AND (end_date IS NULL OR end_date >= NOW())
         ORDER BY RANDOM()
         LIMIT :batch_size
     """)
@@ -47,6 +48,7 @@ async def find_similar_pairs(
             WHERE m.active = true
               AND m.embedding IS NOT NULL
               AND m.id != :anchor_id
+              AND (m.end_date IS NULL OR m.end_date >= NOW())
             ORDER BY m.embedding <=> (SELECT embedding FROM markets WHERE id = :anchor_id)
             LIMIT :k
         """)
@@ -105,13 +107,14 @@ async def find_cross_venue_pairs(
     nearest Polymarket neighbor. Only returns pairs above threshold that
     don't already exist in market_pairs.
     """
-    # Get all active Kalshi markets with embeddings as anchors
+    # Get all active, non-expired Kalshi markets with embeddings as anchors
     anchor_query = text("""
         SELECT id, embedding
         FROM markets
         WHERE active = true
           AND embedding IS NOT NULL
           AND venue = 'kalshi'
+          AND (end_date IS NULL OR end_date >= NOW())
     """)
     anchors = await session.execute(anchor_query)
     anchor_rows = anchors.fetchall()
@@ -132,6 +135,7 @@ async def find_cross_venue_pairs(
             WHERE m.active = true
               AND m.embedding IS NOT NULL
               AND m.venue = 'polymarket'
+              AND (m.end_date IS NULL OR m.end_date >= NOW())
             ORDER BY m.embedding <=> (SELECT embedding FROM markets WHERE id = :anchor_id)
             LIMIT 1
         """)

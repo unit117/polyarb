@@ -8,6 +8,7 @@ import redis.asyncio as aioredis
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from shared.config import settings
 from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish
@@ -190,9 +191,19 @@ class OptimizerPipeline:
         stats = {"processed": 0, "optimized": 0, "failed": 0}
 
         async with self.session_factory() as session:
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc)
+            MarketA = aliased(Market, name="market_a")
+            MarketB = aliased(Market, name="market_b")
             result = await session.execute(
                 select(ArbitrageOpportunity.id)
+                .join(MarketPair, ArbitrageOpportunity.pair_id == MarketPair.id)
+                .join(MarketA, MarketA.id == MarketPair.market_a_id)
+                .join(MarketB, MarketB.id == MarketPair.market_b_id)
                 .where(ArbitrageOpportunity.status == "detected")
+                .where((MarketA.end_date == None) | (MarketA.end_date >= now))  # noqa: E711
+                .where((MarketB.end_date == None) | (MarketB.end_date >= now))  # noqa: E711
                 .order_by(ArbitrageOpportunity.timestamp.desc())
                 .limit(50)
             )

@@ -170,6 +170,21 @@ class MarketPoller:
                 .values(active=False)
             )
 
+            # Deactivate markets past their end_date — Gamma may still return
+            # them as active but they can't be traded and waste pipeline cycles.
+            expired_result = await session.execute(
+                update(Market)
+                .where(
+                    Market.active == True,  # noqa: E712
+                    Market.end_date != None,  # noqa: E711
+                    Market.end_date < datetime.now(timezone.utc),
+                )
+                .values(active=False)
+            )
+            expired_count = expired_result.rowcount or 0
+            if expired_count:
+                log.info("sync_markets_expired_deactivated", count=expired_count)
+
             await session.commit()
 
             result = await session.execute(
