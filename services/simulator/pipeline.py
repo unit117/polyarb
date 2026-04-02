@@ -203,13 +203,20 @@ class SimulatorPipeline:
                     fees=leg.fees,
                 )
 
-                if is_exit and existing_position != 0 and result["executed"]:
-                    close_size = min(abs(existing_position), Decimal(str(leg.size)))
+                if not result["executed"]:
+                    continue
+
+                # Use the actual executed size (may be clipped for margin)
+                actual_size = Decimal(str(result["size"]))
+                actual_fees = Decimal(str(result["fees"]))
+
+                if is_exit and existing_position != 0:
+                    close_size = min(abs(existing_position), actual_size)
                     avg_entry = pre_trade_cost / abs(existing_position)
                     exit_price = Decimal(str(leg.vwap_price))
                     exit_fees = (
-                        Decimal(str(leg.fees)) * close_size / Decimal(str(leg.size))
-                        if leg.size > 0
+                        actual_fees * close_size / actual_size
+                        if actual_size > 0
                         else Decimal("0")
                     )
 
@@ -222,19 +229,16 @@ class SimulatorPipeline:
                     if self.circuit_breaker and realized < 0:
                         self.circuit_breaker.record_loss(float(abs(realized)))
 
-                if not result["executed"]:
-                    continue
-
                 paper_trade = PaperTrade(
                     opportunity_id=opp.id,
                     market_id=leg.market_id,
                     outcome=leg.outcome,
                     side=leg.side,
-                    size=Decimal(str(leg.size)),
+                    size=actual_size,
                     entry_price=Decimal(str(leg.entry_price)),
                     vwap_price=Decimal(str(leg.vwap_price)),
                     slippage=Decimal(str(leg.slippage)),
-                    fees=Decimal(str(leg.fees)),
+                    fees=actual_fees,
                     status="filled",
                     source=self.source,
                     venue=leg.trade_venue,
@@ -250,7 +254,7 @@ class SimulatorPipeline:
                         "market_id": leg.market_id,
                         "outcome": leg.outcome,
                         "side": leg.side,
-                        "size": leg.size,
+                        "size": float(actual_size),
                         "vwap_price": leg.vwap_price,
                         "slippage": leg.slippage,
                     }
@@ -328,7 +332,17 @@ class SimulatorPipeline:
                 return None
 
             midpoint = trade.get("market_price", 0.5)
-            fill = compute_vwap(snapshot.order_book, trade["side"], base_size, midpoint)
+            # Use per-outcome order book when available, fall back to
+            # the legacy first-outcome book for backwards compatibility.
+            outcome_book = None
+            if snapshot.order_book and isinstance(snapshot.order_book, dict):
+                per_outcome = snapshot.order_book.get("order_books")
+                if per_outcome and trade["outcome"] in per_outcome:
+                    outcome_book = per_outcome[trade["outcome"]]
+                elif "bids" in snapshot.order_book or "asks" in snapshot.order_book:
+                    # Legacy format: top-level bids/asks from first outcome
+                    outcome_book = snapshot.order_book
+            fill = compute_vwap(outcome_book, trade["side"], base_size, midpoint)
             trade_venue = trade.get("venue", getattr(market, "venue", "polymarket"))
             fees = (
                 venue_fee(trade_venue, fill["vwap_price"], trade["side"])

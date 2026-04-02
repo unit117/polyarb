@@ -85,14 +85,21 @@ class ClobClient:
                 midpoints[outcome] = mid
                 prices[outcome] = mid
 
-        order_book = None
-        if fetch_order_books and token_ids:
-            order_book = await self.get_order_book(token_ids[0])
+        order_books: dict[str, dict] = {}
+        if fetch_order_books:
+            for i, token_id in enumerate(token_ids):
+                outcome = outcomes[i] if i < len(outcomes) else f"outcome_{i}"
+                book = await self.get_order_book(token_id)
+                if book:
+                    order_books[outcome] = book
 
         return {
             "prices": prices,
             "midpoints": midpoints,
-            "order_book": order_book,
+            # Keep backwards-compatible "order_book" key (first outcome's book)
+            # for existing consumers, plus new per-outcome "order_books" dict.
+            "order_book": order_books.get(outcomes[0]) if outcomes and order_books else None,
+            "order_books": order_books,
         }
 
     async def close(self) -> None:

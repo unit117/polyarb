@@ -338,9 +338,20 @@ def _compute_profit_bound(
         return round(net, 6) if net > 0.001 else 0.0
 
     if dependency_type == "partition":
-        total = sum(_f(prices_a.get(o, 0)) for o in outcomes_a) + sum(
-            _f(prices_b.get(o, 0)) for o in outcomes_b
-        )
+        # Partition: outcomes across both markets are exhaustive, exactly
+        # one wins.  For binary markets, sum first (Yes/Over) outcome
+        # from each.  For multi-outcome with shared names, sum the
+        # shared outcomes' primary prices.
+        shared = set(outcomes_a) & set(outcomes_b)
+        if shared and (len(outcomes_a) > 2 or len(outcomes_b) > 2):
+            # Multi-outcome partition: sum shared outcome prices
+            total = sum(_f(prices_a.get(o, 0)) for o in shared) + sum(
+                _f(prices_b.get(o, 0)) for o in shared
+            )
+        else:
+            p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
+            p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
+            total = p_a + p_b
         deviation = abs(total - 1.0)
         return round(deviation, 6) if deviation > 0.001 else 0.0
 

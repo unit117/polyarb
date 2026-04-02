@@ -3,10 +3,10 @@ from __future__ import annotations
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import desc, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from shared.models import PaperTrade, PortfolioSnapshot
+from shared.models import PaperTrade
 from services.simulator.portfolio import Portfolio
 
 logger = structlog.get_logger()
@@ -16,8 +16,21 @@ def replay_trades_into_portfolio(
     portfolio: Portfolio,
     trades: list[PaperTrade],
 ) -> None:
-    """Rebuild cost basis from a source-filtered trade history."""
-    replay_positions: dict[str, Decimal] = {}
+    """Rebuild cash, positions, cost_basis, and counters from trade history.
+
+    This is the single source of truth for portfolio state on restore.
+    Every field is recomputed from the trade ledger so that trades
+    recorded after the last snapshot are never lost.
+    """
+    portfolio.cash = portfolio.initial_capital
+    portfolio.positions = {}
+    portfolio.cost_basis = {}
+    portfolio.realized_pnl = Decimal("0")
+    portfolio.total_trades = 0
+    portfolio.winning_trades = 0
+    portfolio.settled_trades = 0
+
+    pending_purge = False
 
     for trade in trades:
         key = f"{trade.market_id}:{trade.outcome}"
@@ -25,54 +38,47 @@ def replay_trades_into_portfolio(
         price_d = Decimal(str(trade.vwap_price))
         fees_d = Decimal(str(trade.fees or 0))
 
-        if trade.side in ("SETTLE", "PURGE"):
-            portfolio.cost_basis.pop(key, None)
-            replay_positions.pop(key, None)
-        elif trade.side == "BUY":
-            current = replay_positions.get(key, Decimal("0"))
-            if current < 0:
-                cover_size = min(size_d, abs(current))
-                remainder = size_d - cover_size
-                if key in portfolio.cost_basis and current != 0:
-                    avg_credit = portfolio.cost_basis[key] / abs(current)
-                    portfolio.cost_basis[key] -= cover_size * avg_credit
-                new_pos = current + size_d
-                if new_pos == 0:
-                    portfolio.cost_basis.pop(key, None)
-                elif new_pos > 0:
-                    portfolio.cost_basis[key] = remainder * price_d
+        if trade.side == "PURGE":
+            # PURGE rows close positions at mark-to-market.  After all
+            # PURGE rows in a batch, the live code zeroes counters to
+            # establish a new baseline.  We replicate that by flagging
+            # the batch and resetting counters once we leave it.
+            pending_purge = True
+            if key in portfolio.positions:
+                portfolio.close_position(key, float(price_d))
             else:
-                portfolio.cost_basis[key] = portfolio.cost_basis.get(
-                    key, Decimal("0")
-                ) + size_d * price_d
-            replay_positions[key] = replay_positions.get(key, Decimal("0")) + size_d
-        elif trade.side == "SELL":
-            current = replay_positions.get(key, Decimal("0"))
-            if current > 0:
-                close_size = min(size_d, current)
-                remainder = size_d - close_size
-                if key in portfolio.cost_basis and current > 0:
-                    avg_entry = portfolio.cost_basis[key] / current
-                    portfolio.cost_basis[key] -= close_size * avg_entry
-                new_pos = current - size_d
-                if new_pos == 0:
-                    portfolio.cost_basis.pop(key, None)
-                elif new_pos < 0:
-                    proportional_short_fees = (
-                        fees_d * remainder / size_d if size_d > 0 else Decimal("0")
-                    )
-                    portfolio.cost_basis[key] = (
-                        remainder * price_d - proportional_short_fees
-                    )
-            elif current <= 0:
-                portfolio.cost_basis[key] = portfolio.cost_basis.get(
-                    key, Decimal("0")
-                ) + size_d * price_d - fees_d
-            replay_positions[key] = current - size_d
+                portfolio.cost_basis.pop(key, None)
+        elif trade.side == "SETTLE":
+            if key in portfolio.positions:
+                portfolio.close_position(key, float(price_d))
+            else:
+                portfolio.cost_basis.pop(key, None)
+        else:
+            # On the first non-PURGE trade after a purge batch, reset
+            # counters so post-purge state starts from a clean baseline.
+            if pending_purge:
+                pending_purge = False
+                portfolio.total_trades = 0
+                portfolio.settled_trades = 0
+                portfolio.winning_trades = 0
+                portfolio.realized_pnl = Decimal("0")
 
-    for key in list(portfolio.cost_basis.keys()):
-        if key not in portfolio.positions:
-            del portfolio.cost_basis[key]
+            portfolio.execute_trade(
+                market_id=trade.market_id,
+                outcome=trade.outcome,
+                side=trade.side,
+                size=float(size_d),
+                vwap_price=float(price_d),
+                fees=float(fees_d),
+            )
+
+    # If the ledger ends with PURGE rows (no subsequent trades), still
+    # apply the counter reset.
+    if pending_purge:
+        portfolio.total_trades = 0
+        portfolio.settled_trades = 0
+        portfolio.winning_trades = 0
+        portfolio.realized_pnl = Decimal("0")
 
 
 async def restore_portfolio(
@@ -84,42 +90,22 @@ async def restore_portfolio(
     portfolio = Portfolio(initial_capital)
 
     async with session_factory() as session:
-        latest = await session.scalar(
-            select(PortfolioSnapshot)
-            .where(PortfolioSnapshot.source == source)
-            .order_by(desc(PortfolioSnapshot.timestamp))
-            .limit(1)
-        )
-
-        if not latest:
-            logger.info(
-                "portfolio_fresh_start",
-                source=source,
-                msg="No snapshot found, starting fresh",
-            )
-            return portfolio
-
-        portfolio.cash = Decimal(str(latest.cash))
-        portfolio.realized_pnl = Decimal(str(latest.realized_pnl))
-        portfolio.total_trades = latest.total_trades
-        portfolio.settled_trades = latest.settled_trades or 0
-        portfolio.winning_trades = latest.winning_trades
-
-        if latest.positions:
-            for key, shares in latest.positions.items():
-                portfolio.positions[key] = Decimal(str(shares))
-
         trades_result = await session.execute(
             select(PaperTrade)
             .where(PaperTrade.source == source)
             .order_by(PaperTrade.executed_at)
         )
         trades = trades_result.scalars().all()
-        replay_trades_into_portfolio(portfolio, trades)
 
-        trade_count = await session.scalar(
-            select(func.count()).select_from(PaperTrade).where(PaperTrade.source == source)
-        )
+        if not trades:
+            logger.info(
+                "portfolio_fresh_start",
+                source=source,
+                msg="No trades found, starting fresh",
+            )
+            return portfolio
+
+        replay_trades_into_portfolio(portfolio, trades)
 
         logger.info(
             "portfolio_restored",
@@ -129,7 +115,7 @@ async def restore_portfolio(
             total_value=portfolio.total_value(),
             total_trades=portfolio.total_trades,
             cost_basis_entries=len(portfolio.cost_basis),
-            trades_in_db=trade_count,
+            trades_in_db=len(trades),
         )
 
     return portfolio

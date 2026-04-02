@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import openai
@@ -810,8 +810,28 @@ class DetectionPipeline:
                 in_flight_opps = {
                     opp.pair_id: opp for opp in opp_result.scalars().all()
                 }
+
+                # Cooldown: find pairs with a recently-simulated opportunity.
+                # This prevents the same pair from generating new opps every
+                # price tick, which caused massive position concentration.
+                cooldown_cutoff = datetime.now(timezone.utc) - timedelta(
+                    seconds=settings.pair_cooldown_seconds
+                )
+                cooldown_result = await session.execute(
+                    select(ArbitrageOpportunity.pair_id)
+                    .where(
+                        ArbitrageOpportunity.pair_id.in_(pair_ids),
+                        ArbitrageOpportunity.status == "simulated",
+                        ArbitrageOpportunity.timestamp >= cooldown_cutoff,
+                    )
+                    .distinct()
+                )
+                cooled_down_pairs = {
+                    row[0] for row in cooldown_result.fetchall()
+                }
             else:
                 in_flight_opps = {}
+                cooled_down_pairs = set()
 
             for pair in pairs:
                 constraint = pair.constraint_matrix
@@ -901,6 +921,11 @@ class DetectionPipeline:
                         })
                     stats["refreshed"] += 1
                 elif profit > 0:
+                    # Cooldown: skip if this pair was recently traded
+                    if pair.id in cooled_down_pairs:
+                        stats["cooldown_skipped"] = stats.get("cooldown_skipped", 0) + 1
+                        continue
+
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",

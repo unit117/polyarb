@@ -88,8 +88,8 @@ def _midpoint_fill(midpoint: float, side: str, size: float) -> dict:
 
     # Partial fill for large orders: assume liquidity caps at ~50 shares
     # without order book data
-    max_fill = max(size, 50.0) if midpoint > 0 else size
-    filled_size = min(size, max_fill)
+    max_fill = min(size, 50.0) if midpoint > 0 else size
+    filled_size = max_fill
 
     return {
         "vwap_price": round(vwap_price, 6),

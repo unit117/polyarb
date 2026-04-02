@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     shadow_logging_enabled: bool = False
     shadow_logging_optimizer_preview: bool = True
     detection_interval_seconds: int = 60
+    pair_cooldown_seconds: int = 1800  # 30 min cooldown after simulated opp before new opp on same pair
 
     # Uncertainty filter — reject near-resolved markets in detector
     uncertainty_price_floor: float = 0.05
@@ -72,7 +73,7 @@ class Settings(BaseSettings):
 
     # Circuit breaker settings
     cb_max_daily_loss: float = 500.0
-    cb_max_position_per_market: float = 200.0
+    cb_max_position_per_market: float = 25.0
     cb_max_drawdown_pct: float = 10.0
     cb_max_consecutive_errors: int = 5
     cb_cooldown_seconds: int = 300  # 5-minute cooldown

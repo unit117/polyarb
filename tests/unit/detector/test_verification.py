@@ -34,13 +34,13 @@ class TestConfidenceCheck:
 
 class TestStructuralChecks:
     def test_partition_same_event(self):
-        # Prices must sum close to 1.0 across both markets for partition
+        # Primary outcome (Yes) prices must sum close to 1.0 for binary partition
         result = verify_pair(
             "partition",
             {"outcomes": ["Yes", "No"], "event_id": "evt1"},
             {"outcomes": ["Yes", "No"], "event_id": "evt1"},
-            {"Yes": 0.3, "No": 0.2},
-            {"Yes": 0.25, "No": 0.25},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.45, "No": 0.55},
             confidence=0.95,
         )
         assert result["verified"] is True
@@ -168,11 +168,11 @@ class TestPriceConsistency:
             "partition",
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
-            {"Yes": 0.3, "No": 0.2},
-            {"Yes": 0.25, "No": 0.25},
+            {"Yes": 0.60, "No": 0.40},
+            {"Yes": 0.40, "No": 0.60},
             confidence=0.90,
         )
-        # sum = 1.0 → passes
+        # primary sum = 0.60 + 0.40 = 1.0 → passes
         assert result["verified"] is True
 
     def test_implication_extreme_violation(self):
@@ -244,10 +244,11 @@ class TestPriceConsistency:
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
             {"Yes": None, "No": 0.5},
-            {"Yes": 0.25, "No": 0.25},
+            {"Yes": 0.90, "No": 0.10},
             confidence=0.90,
         )
-        # None price → _f returns 0.0; sum = 0+0.5+0.25+0.25 = 1.0 → passes
+        # None price → _f returns 0.0; primary sum = 0.0 + 0.90 = 0.90
+        # abs(0.90 - 1.0) = 0.10 < 0.25 → passes
         assert result["verified"] is True
 
     def test_unknown_type_price_check_passes(self):

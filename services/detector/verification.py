@@ -194,13 +194,36 @@ def _check_price_consistency(
     outcomes_b = market_b.get("outcomes", [])
 
     if dependency_type == "partition":
-        # Sum of all prices across both markets should be near 1.0
-        total = sum(_f(prices_a.get(o, 0)) for o in outcomes_a) + sum(
-            _f(prices_b.get(o, 0)) for o in outcomes_b
-        )
-        if abs(total - 1.0) > 0.25:
-            reasons.append(f"partition: price sum {total:.2f} too far from 1.0")
-            return False
+        # A partition means outcomes across both markets are mutually
+        # exclusive and exhaustive (exactly one wins).
+        #
+        # Binary (2x2): each market has Yes/No that sum to ~1 internally.
+        # The partition constraint is P(A=Yes) + P(B=Yes) ≈ 1.0.
+        #
+        # Multi-outcome with shared outcome names: the partition spans all
+        # shared outcomes, and the sum of their Yes prices should be ~1.0.
+        # We sum the first outcome's price from each market (for binary)
+        # or all shared outcomes (for multi-outcome).
+        shared = set(outcomes_a) & set(outcomes_b)
+        if shared and (len(outcomes_a) > 2 or len(outcomes_b) > 2):
+            total = sum(_f(prices_a.get(o, 0)) for o in shared) + sum(
+                _f(prices_b.get(o, 0)) for o in shared
+            )
+            # Each shared outcome appears in both markets; for a proper
+            # partition only one market's price per outcome should be near
+            # the true probability.  This heuristic is imperfect for
+            # multi-outcome — accept wider tolerance.
+            if abs(total - 1.0) > 0.50:
+                reasons.append(f"partition: shared-outcome price sum {total:.2f} too far from 1.0")
+                return False
+        else:
+            # Binary partition: sum of first (Yes/Over) outcome from each
+            primary_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
+            primary_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
+            total = primary_a + primary_b
+            if abs(total - 1.0) > 0.25:
+                reasons.append(f"partition: primary price sum {total:.2f} too far from 1.0")
+                return False
         return True
 
     if dependency_type == "implication":

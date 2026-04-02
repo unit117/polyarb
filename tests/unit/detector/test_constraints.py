@@ -107,8 +107,8 @@ class TestPartitionMatrix:
             prices_a={"Yes": 0.3, "No": 0.7},
             prices_b={"Yes": 0.4, "No": 0.6},
         )
-        # total = 0.3+0.7+0.4+0.6 = 2.0, deviation from 1.0 = 1.0
-        assert result["profit_bound"] == pytest.approx(1.0, abs=0.001)
+        # Binary partition: primary sum = 0.3 + 0.4 = 0.7, deviation = |0.7 - 1.0| = 0.3
+        assert result["profit_bound"] == pytest.approx(0.3, abs=0.001)
 
 
 class TestMutualExclusionMatrix:

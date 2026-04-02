@@ -229,8 +229,12 @@ def _worst_case_payoff(
 
     For each feasible (outcome_a, outcome_b) combination, compute the
     net PnL of the trade bundle assuming that combination resolves.
+    Includes per-share fees to avoid passing bundles that are only
+    profitable before execution costs.
     Returns the minimum payoff (worst case).
     """
+    from shared.config import venue_fee
+
     worst = float("inf")
 
     for i, oa in enumerate(outcomes_a):
@@ -244,6 +248,9 @@ def _worst_case_payoff(
                 outcome = t["outcome"]
                 side = t["side"]
                 price = t["market_price"]
+                per_share_fee = venue_fee(
+                    t.get("venue", "polymarket"), price, side
+                )
 
                 # Determine settlement: 1.0 if this outcome wins, 0.0 otherwise
                 if t["market"] == "A":
@@ -251,13 +258,13 @@ def _worst_case_payoff(
                 else:
                     settlement = 1.0 if outcome == ob else 0.0
 
-                # Per-share PnL
+                # Per-share PnL including fees
                 if side == "BUY":
-                    # Paid price, receive settlement
-                    pnl = settlement - price
+                    # Paid price + fees, receive settlement
+                    pnl = settlement - price - per_share_fee
                 else:
-                    # Received price, pay settlement
-                    pnl = price - settlement
+                    # Received price - fees, pay settlement
+                    pnl = price - settlement - per_share_fee
 
                 total_pnl += pnl
 

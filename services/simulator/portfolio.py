@@ -38,6 +38,7 @@ class Portfolio:
         price_d = Decimal(str(vwap_price))
         fees_d = Decimal(str(fees))
         key = f"{market_id}:{outcome}"
+        sell_size = size_d  # may be clipped below for margin
 
         if side == "BUY":
             cost = size_d * price_d + fees_d
@@ -131,19 +132,23 @@ class Portfolio:
 
         self.total_trades += 1
 
+        # Return the actual executed size, which may have been clipped
+        # for insufficient capital (BUY) or margin (SELL).
+        executed_size = sell_size if side == "SELL" else size_d
+
         logger.info(
             "trade_executed",
             market_id=market_id,
             outcome=outcome,
             side=side,
-            size=float(size_d),
+            size=float(executed_size),
             price=float(price_d),
             cash_remaining=float(self.cash),
         )
 
         return {
             "executed": True,
-            "size": float(size_d),
+            "size": float(executed_size),
             "price": float(price_d),
             "fees": float(fees_d),
             "cash_remaining": float(self.cash),

@@ -25,7 +25,7 @@ class CircuitBreaker:
         self,
         redis: aioredis.Redis,
         max_daily_loss: float = 500.0,
-        max_position_per_market: float = 200.0,
+        max_position_per_market: float = 25.0,
         max_drawdown_pct: float = 10.0,
         max_consecutive_errors: int = 5,
         cooldown_seconds: int = 300,

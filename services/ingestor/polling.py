@@ -256,12 +256,22 @@ class MarketPoller:
                     fetch_order_books=self._fetch_order_books,
                 )
                 if snapshot_data["prices"]:
+                    # Store per-outcome order books inside the order_book
+                    # JSONB column so the simulator can select the correct
+                    # book for each leg.  Backwards compatible: the top-level
+                    # bids/asks (first outcome's book) remain for legacy
+                    # consumers; "order_books" holds the per-outcome dict.
+                    ob = snapshot_data["order_book"] or {}
+                    per_outcome = snapshot_data.get("order_books")
+                    if per_outcome:
+                        ob = dict(ob) if ob else {}
+                        ob["order_books"] = per_outcome
                     snapshots_to_insert.append(
                         {
                             "market_id": market.id,
                             "prices": snapshot_data["prices"],
                             "midpoints": snapshot_data["midpoints"],
-                            "order_book": snapshot_data["order_book"],
+                            "order_book": ob or None,
                         }
                     )
             except Exception:
