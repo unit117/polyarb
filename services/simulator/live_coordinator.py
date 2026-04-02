@@ -356,13 +356,16 @@ class LiveTradingCoordinator:
         if not result["executed"]:
             raise RuntimeError(f"failed_to_apply_live_fill:{live_order.id}")
 
+        actual_size = Decimal(str(result["size"]))
+        actual_fees = Decimal(str(result["fees"]))
+
         if is_exit and existing_position != 0:
-            close_size = min(abs(existing_position), Decimal(str(fill.fill_size)))
+            close_size = min(abs(existing_position), actual_size)
             avg_entry = pre_trade_cost / abs(existing_position)
             exit_price = Decimal(str(fill.fill_price))
             exit_fees = (
-                Decimal(str(fill.fees)) * close_size / Decimal(str(fill.fill_size))
-                if fill.fill_size > 0
+                actual_fees * close_size / actual_size
+                if actual_size > 0
                 else Decimal("0")
             )
 
@@ -382,9 +385,9 @@ class LiveTradingCoordinator:
                 outcome=live_order.outcome,
                 side=live_order.side,
                 venue_fill_id=fill.venue_fill_id,
-                fill_size=Decimal(str(fill.fill_size)),
+                fill_size=actual_size,
                 fill_price=Decimal(str(fill.fill_price)),
-                fees=Decimal(str(fill.fees)),
+                fees=actual_fees,
                 filled_at=fill.filled_at,
             )
         )
@@ -394,11 +397,11 @@ class LiveTradingCoordinator:
                 market_id=live_order.market_id,
                 outcome=live_order.outcome,
                 side=live_order.side,
-                size=Decimal(str(fill.fill_size)),
+                size=actual_size,
                 entry_price=Decimal(str(live_order.requested_price)),
                 vwap_price=Decimal(str(fill.fill_price)),
                 slippage=Decimal(str(abs(fill.fill_price - float(live_order.requested_price)))),
-                fees=Decimal(str(fill.fees)),
+                fees=actual_fees,
                 status="filled",
                 source="live",
                 venue="polymarket",

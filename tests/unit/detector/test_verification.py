@@ -34,13 +34,13 @@ class TestConfidenceCheck:
 
 class TestStructuralChecks:
     def test_partition_same_event(self):
-        # Prices must sum close to 1.0 across both markets for partition
+        # Binary partition: the two primary contracts should sum to 1.0.
         result = verify_pair(
             "partition",
             {"outcomes": ["Yes", "No"], "event_id": "evt1"},
             {"outcomes": ["Yes", "No"], "event_id": "evt1"},
-            {"Yes": 0.3, "No": 0.2},
-            {"Yes": 0.25, "No": 0.25},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.45, "No": 0.55},
             confidence=0.95,
         )
         assert result["verified"] is True
@@ -160,7 +160,7 @@ class TestPriceConsistency:
             {"Yes": 0.3, "No": 0.7},
             confidence=0.90,
         )
-        # sum = 2.0, deviation 1.0 > 0.5 threshold → fail price check
+        # primary sum = 0.3 + 0.3 = 0.6, deviation 0.4 > 0.25 threshold
         assert result["verified"] is False
 
     def test_partition_sum_close_to_one(self):
@@ -168,11 +168,11 @@ class TestPriceConsistency:
             "partition",
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
-            {"Yes": 0.3, "No": 0.2},
-            {"Yes": 0.25, "No": 0.25},
+            {"Yes": 0.60, "No": 0.40},
+            {"Yes": 0.40, "No": 0.60},
             confidence=0.90,
         )
-        # sum = 1.0 → passes
+        # primary sum = 1.0 → passes
         assert result["verified"] is True
 
     def test_implication_extreme_violation(self):
@@ -244,10 +244,22 @@ class TestPriceConsistency:
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
             {"outcomes": ["Yes", "No"], "event_id": "e1"},
             {"Yes": None, "No": 0.5},
-            {"Yes": 0.25, "No": 0.25},
+            {"Yes": 0.90, "No": 0.10},
             confidence=0.90,
         )
-        # None price → _f returns 0.0; sum = 0+0.5+0.25+0.25 = 1.0 → passes
+        # None price → _f returns 0.0; primary sum = 0.0 + 0.90 = 0.90
+        # abs(0.90 - 1.0) = 0.10 < 0.25 → passes
+        assert result["verified"] is True
+
+    def test_partition_multi_outcome_skips_binary_price_math(self):
+        result = verify_pair(
+            "partition",
+            {"outcomes": ["Alice", "Bob", "Charlie"], "event_id": "e1"},
+            {"outcomes": ["Alice", "Bob", "Dave"], "event_id": "e1"},
+            {"Alice": 0.30, "Bob": 0.25, "Charlie": 0.45},
+            {"Alice": 0.31, "Bob": 0.24, "Dave": 0.45},
+            confidence=0.90,
+        )
         assert result["verified"] is True
 
     def test_unknown_type_price_check_passes(self):

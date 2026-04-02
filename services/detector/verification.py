@@ -194,12 +194,17 @@ def _check_price_consistency(
     outcomes_b = market_b.get("outcomes", [])
 
     if dependency_type == "partition":
-        # Sum of all prices across both markets should be near 1.0
-        total = sum(_f(prices_a.get(o, 0)) for o in outcomes_a) + sum(
-            _f(prices_b.get(o, 0)) for o in outcomes_b
+        if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+            # Multi-outcome partition pricing needs richer modeling than the
+            # binary "Yes + Yes ~= 1" invariant used for winner-take-all pairs.
+            return True
+        total = _f(prices_a.get(outcomes_a[0], 0)) + _f(
+            prices_b.get(outcomes_b[0], 0)
         )
         if abs(total - 1.0) > 0.25:
-            reasons.append(f"partition: price sum {total:.2f} too far from 1.0")
+            reasons.append(
+                f"partition: primary price sum {total:.2f} too far from 1.0"
+            )
             return False
         return True
 

@@ -107,8 +107,18 @@ class TestPartitionMatrix:
             prices_a={"Yes": 0.3, "No": 0.7},
             prices_b={"Yes": 0.4, "No": 0.6},
         )
-        # total = 0.3+0.7+0.4+0.6 = 2.0, deviation from 1.0 = 1.0
-        assert result["profit_bound"] == pytest.approx(1.0, abs=0.001)
+        # Binary partition: primary sum = 0.3 + 0.4 = 0.7, deviation = 0.3
+        assert result["profit_bound"] == pytest.approx(0.3, abs=0.001)
+
+    def test_multi_outcome_partition_profit_bound_is_disabled(self):
+        result = build_constraint_matrix(
+            "partition",
+            ["Alice", "Bob", "Charlie"],
+            ["Alice", "Bob", "Dave"],
+            prices_a={"Alice": 0.30, "Bob": 0.25, "Charlie": 0.45},
+            prices_b={"Alice": 0.31, "Bob": 0.24, "Dave": 0.45},
+        )
+        assert result["profit_bound"] == 0.0
 
 
 class TestMutualExclusionMatrix:

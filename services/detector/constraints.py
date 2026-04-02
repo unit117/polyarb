@@ -325,8 +325,12 @@ def _compute_profit_bound(
         return round(net, 6) if net > 0.001 else 0.0
 
     if dependency_type == "partition":
-        total = sum(_f(prices_a.get(o, 0)) for o in outcomes_a) + sum(
-            _f(prices_b.get(o, 0)) for o in outcomes_b
+        if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+            # Multi-outcome partition pricing does not reduce to a single
+            # scalar bound. Avoid overstating edge until it is modeled.
+            return 0.0
+        total = _f(prices_a.get(outcomes_a[0], 0)) + _f(
+            prices_b.get(outcomes_b[0], 0)
         )
         deviation = abs(total - 1.0)
         return round(deviation, 6) if deviation > 0.001 else 0.0

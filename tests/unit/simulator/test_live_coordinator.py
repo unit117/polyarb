@@ -499,3 +499,72 @@ async def test_apply_reconciliation_writes_fill_and_updates_portfolio(monkeypatc
     # Portfolio was mutated (BUY 10 shares)
     assert "1:Yes" in portfolio.positions
     assert live_order.status == "filled"
+
+
+@pytest.mark.asyncio
+async def test_apply_reconciliation_persists_actual_clipped_fill(monkeypatch):
+    async def fake_set_runtime_status(_redis, payload):
+        return payload
+
+    monkeypatch.setattr(
+        "services.simulator.live_coordinator.set_live_runtime_status",
+        fake_set_runtime_status,
+    )
+
+    live_order = LiveOrder(
+        id=1,
+        opportunity_id=100,
+        market_id=1,
+        outcome="Yes",
+        token_id="tok_yes",
+        side="BUY",
+        requested_size=Decimal("10"),
+        requested_price=Decimal("0.40"),
+        status="submitted",
+        dry_run=False,
+        venue_order_id="ord-1",
+    )
+
+    class _PriceSession(FakeSession):
+        async def scalar(self, _query):
+            return None
+
+    recon_session = FakeReconSession(live_order=live_order, existing_fill_ids=[])
+    snapshot_prices_session = _PriceSession()
+    snapshot_write_session = FakeSession()
+
+    coordinator = LiveTradingCoordinator(
+        session_factory=FakeSessionFactory(
+            [recon_session, snapshot_prices_session, snapshot_write_session]
+        ),
+        redis=FakeRedis(),
+        portfolio=Portfolio(1.0),
+        venue_adapter=FakeVenueAdapter(),
+        circuit_breaker=None,
+        dry_run=False,
+    )
+
+    fills = [
+        ReconciledFill(
+            venue_fill_id="trade-1",
+            fill_size=10.0,
+            fill_price=0.41,
+            fees=0.02,
+            filled_at=datetime(2026, 3, 23, 12, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    result = await coordinator.apply_reconciliation(
+        live_order.id,
+        status="filled",
+        fills=fills,
+    )
+
+    assert result["status"] == "ok"
+
+    live_fills = [o for o in recon_session.added if isinstance(o, LiveFill)]
+    paper_trades = [o for o in recon_session.added if isinstance(o, PaperTrade)]
+    assert len(live_fills) == 1
+    assert len(paper_trades) == 1
+    assert live_fills[0].fill_size == paper_trades[0].size
+    assert live_fills[0].fill_size < Decimal("10")
