@@ -86,6 +86,79 @@ async def get_stats(request: Request, source: str | None = None):
     }
 
 
+@router.get("/positions")
+async def get_positions(source: str | None = None):
+    """Open positions from the latest portfolio snapshot, enriched with market info."""
+    async with SessionFactory() as session:
+        portfolio_query = (
+            select(PortfolioSnapshot)
+            .order_by(desc(PortfolioSnapshot.timestamp))
+            .limit(1)
+        )
+        if source:
+            portfolio_query = portfolio_query.where(PortfolioSnapshot.source == source)
+        latest = await session.scalar(portfolio_query)
+
+        if not latest or not latest.positions:
+            return {"positions": [], "total": 0, "snapshot_timestamp": None}
+
+        # Collect market IDs from position keys
+        market_ids: set[int] = set()
+        for key in latest.positions:
+            parts = key.split(":")
+            if len(parts) == 2:
+                try:
+                    market_ids.add(int(parts[0]))
+                except ValueError:
+                    pass
+
+        # Batch-fetch market details
+        markets_by_id: dict[int, Market] = {}
+        if market_ids:
+            result = await session.execute(
+                select(Market).where(Market.id.in_(market_ids))
+            )
+            for m in result.scalars().all():
+                markets_by_id[m.id] = m
+
+        # Build response
+        cost_basis_dict = latest.cost_basis or {}
+        positions = []
+        for key, shares in latest.positions.items():
+            parts = key.split(":")
+            if len(parts) != 2:
+                continue
+            try:
+                market_id = int(parts[0])
+            except ValueError:
+                continue
+            outcome = parts[1]
+            market = markets_by_id.get(market_id)
+            cb = cost_basis_dict.get(key)
+
+            entry: dict = {
+                "key": key,
+                "market_id": market_id,
+                "outcome": outcome,
+                "shares": shares,
+                "cost_basis": cb,
+                "market_question": market.question[:120] if market else None,
+                "venue": getattr(market, "venue", "polymarket") if market else None,
+                "resolved_outcome": market.resolved_outcome if market else None,
+                "resolved": market.resolved_outcome is not None if market else False,
+            }
+            positions.append(entry)
+
+        # Sort: unresolved first, then by abs(shares) descending
+        positions.sort(key=lambda p: (p["resolved"], -abs(p["shares"])))
+
+    return {
+        "positions": positions,
+        "total": len(positions),
+        "snapshot_timestamp": latest.timestamp.isoformat(),
+    }
+
+
 @router.get("/opportunities")
 async def get_opportunities(limit: int = 200, offset: int = 0, status: str | None = None):
     """Recent arbitrage opportunities."""

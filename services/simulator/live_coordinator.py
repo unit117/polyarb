@@ -314,6 +314,7 @@ class LiveTradingCoordinator:
                 PortfolioSnapshot(
                     cash=Decimal(str(snap["cash"])),
                     positions=snap["positions"],
+                    cost_basis=snap.get("cost_basis"),
                     total_value=Decimal(str(snap["total_value"])),
                     realized_pnl=Decimal(str(snap["realized_pnl"])),
                     unrealized_pnl=Decimal(str(snap["unrealized_pnl"])),
@@ -413,12 +414,40 @@ class LiveTradingCoordinator:
         if not self.portfolio.positions:
             return prices
 
+        # Collect market IDs
+        market_ids: set[int] = set()
+        for key in self.portfolio.positions:
+            parts = key.split(":")
+            if len(parts) == 2:
+                market_ids.add(int(parts[0]))
+
         async with self.session_factory() as session:
+            # Batch-query resolved markets
+            resolved: dict[int, str] = {}
+            if market_ids:
+                result = await session.execute(
+                    select(Market.id, Market.resolved_outcome).where(
+                        Market.id.in_(market_ids),
+                        Market.resolved_outcome.isnot(None),
+                    )
+                )
+                for mid, res_outcome in result.all():
+                    resolved[mid] = res_outcome
+
             for key in self.portfolio.positions:
-                market_id_s, outcome = key.split(":", 1)
+                parts = key.split(":")
+                if len(parts) != 2:
+                    continue
+                market_id = int(parts[0])
+                outcome = parts[1]
+
+                if market_id in resolved:
+                    prices[key] = 1.0 if outcome == resolved[market_id] else 0.0
+                    continue
+
                 snapshot = await session.scalar(
                     select(PriceSnapshot)
-                    .where(PriceSnapshot.market_id == int(market_id_s))
+                    .where(PriceSnapshot.market_id == market_id)
                     .order_by(PriceSnapshot.timestamp.desc())
                     .limit(1)
                 )

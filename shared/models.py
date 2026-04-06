@@ -225,6 +225,7 @@ class PortfolioSnapshot(Base):
     )
     cash: Mapped[Decimal] = mapped_column(Numeric)
     positions: Mapped[dict] = mapped_column(JSONB)
+    cost_basis: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     total_value: Mapped[Decimal] = mapped_column(Numeric)
     realized_pnl: Mapped[Decimal] = mapped_column(Numeric)
     unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric)

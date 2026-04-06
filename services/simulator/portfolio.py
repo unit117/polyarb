@@ -129,6 +129,9 @@ class Portfolio:
                 proportional_fees = fees_d * sell_size / size_d if size_d > 0 else fees_d
                 self.cost_basis[key] = self.cost_basis.get(key, Decimal("0")) + sell_size * price_d - proportional_fees
 
+        # Track actual size (may differ from requested due to capital/margin limits).
+        # BUY modifies size_d in-place; SELL uses a separate sell_size variable.
+        actual_size = sell_size if side == "SELL" else size_d  # noqa: F821 — sell_size defined in SELL branch
         self.total_trades += 1
 
         logger.info(
@@ -136,14 +139,14 @@ class Portfolio:
             market_id=market_id,
             outcome=outcome,
             side=side,
-            size=float(size_d),
+            size=float(actual_size),
             price=float(price_d),
             cash_remaining=float(self.cash),
         )
 
         return {
             "executed": True,
-            "size": float(size_d),
+            "size": float(actual_size),
             "price": float(price_d),
             "fees": float(fees_d),
             "cash_remaining": float(self.cash),
@@ -207,7 +210,7 @@ class Portfolio:
     def total_value(self, current_prices: dict[str, float] | None = None) -> float:
         """Compute total portfolio value (cash + positions at market)."""
         pos_value = Decimal("0")
-        if current_prices:
+        if current_prices is not None:
             for key, shares in self.positions.items():
                 if key in current_prices:
                     price = Decimal(str(current_prices[key]))

@@ -558,6 +558,7 @@ async def snapshot_portfolio(session, portfolio: Portfolio, as_of: datetime) -> 
         timestamp=as_of,
         cash=Decimal(str(snap_dict["cash"])),
         positions=snap_dict["positions"],
+        cost_basis=snap_dict.get("cost_basis"),
         total_value=Decimal(str(snap_dict["total_value"])),
         realized_pnl=Decimal(str(snap_dict["realized_pnl"])),
         unrealized_pnl=Decimal(str(snap_dict["unrealized_pnl"])),

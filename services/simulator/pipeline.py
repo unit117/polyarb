@@ -222,12 +222,14 @@ class SimulatorPipeline:
                 if not result["executed"]:
                     continue
 
+                # Use actual executed size (may be reduced by capital/margin limits)
+                actual_size = result["size"]
                 paper_trade = PaperTrade(
                     opportunity_id=opp.id,
                     market_id=leg.market_id,
                     outcome=leg.outcome,
                     side=leg.side,
-                    size=Decimal(str(leg.size)),
+                    size=Decimal(str(actual_size)),
                     entry_price=Decimal(str(leg.entry_price)),
                     vwap_price=Decimal(str(leg.vwap_price)),
                     slippage=Decimal(str(leg.slippage)),
@@ -295,7 +297,10 @@ class SimulatorPipeline:
         if net_profit <= 0:
             return None
 
-        kelly_fraction = min(net_profit * 0.5, 1.0)
+        # Half-Kelly with a conservative cap — the edge estimates from
+        # the optimizer are noisy, so capping at 0.25 keeps per-trade
+        # exposure ≤ 25% of max_position_size (~25 shares).
+        kelly_fraction = min(net_profit * 0.5, 0.25)
         current_prices = await self._get_current_prices()
 
         total_value = self.portfolio.total_value(current_prices)
@@ -549,25 +554,59 @@ class SimulatorPipeline:
         return stats
 
     async def _get_current_prices(self) -> dict[str, float]:
-        """Fetch latest prices for all open positions."""
+        """Fetch latest prices for all open positions.
+
+        Resolved markets are priced at their settlement value (1.0 or 0.0)
+        regardless of stale snapshots, so that total_value and drawdown
+        calculations stay accurate even when the settlement loop hasn't
+        run yet.
+        """
         prices: dict[str, float] = {}
         if not self.portfolio.positions:
             return prices
 
+        # Collect market IDs from open positions
+        market_ids: set[int] = set()
+        for key in self.portfolio.positions:
+            parts = key.split(":")
+            if len(parts) == 2:
+                market_ids.add(int(parts[0]))
+
+        if not market_ids:
+            return prices
+
         async with self.session_factory() as session:
+            # Batch-query resolved markets — use settlement price instead
+            # of stale snapshots so valuation stays accurate.
+            resolved: dict[int, str] = {}
+            result = await session.execute(
+                select(Market.id, Market.resolved_outcome).where(
+                    Market.id.in_(market_ids),
+                    Market.resolved_outcome.isnot(None),
+                )
+            )
+            for mid, outcome in result.all():
+                resolved[mid] = outcome
+
             for key in self.portfolio.positions:
                 parts = key.split(":")
                 if len(parts) != 2:
                     continue
                 market_id = int(parts[0])
-                outcome = parts[1]
+                position_outcome = parts[1]
+
+                # Resolved market → settlement price
+                if market_id in resolved:
+                    prices[key] = 1.0 if position_outcome == resolved[market_id] else 0.0
+                    continue
+
                 snapshot = await _get_latest_snapshot(session, market_id)
                 if snapshot and snapshot.midpoints:
-                    price = snapshot.midpoints.get(outcome)
+                    price = snapshot.midpoints.get(position_outcome)
                     if price is not None:
                         prices[key] = float(price)
                 elif snapshot and snapshot.prices:
-                    price = snapshot.prices.get(outcome)
+                    price = snapshot.prices.get(position_outcome)
                     if price is not None:
                         prices[key] = float(price)
         return prices
@@ -587,6 +626,7 @@ class SimulatorPipeline:
                 PortfolioSnapshot(
                     cash=Decimal(str(snap["cash"])),
                     positions=snap["positions"],
+                    cost_basis=snap.get("cost_basis"),
                     total_value=Decimal(str(snap["total_value"])),
                     realized_pnl=Decimal(str(snap["realized_pnl"])),
                     unrealized_pnl=Decimal(str(snap["unrealized_pnl"])),
