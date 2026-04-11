@@ -26,6 +26,8 @@ def compute_trades(
     min_edge: float = 0.03,
     venue_a: str = "polymarket",
     venue_b: str = "polymarket",
+    fee_rate_bps_a: int | None = None,
+    fee_rate_bps_b: int | None = None,
 ) -> dict:
     """Compute optimal trades from the FW result.
 
@@ -50,9 +52,9 @@ def compute_trades(
     # best-edge leg.  In binary markets BUY Yes and SELL No are mirrors
     # of the same mispricing — executing both pays double fees for the
     # same edge.
-    for market_label, outcomes, q_vec, p_vec, venue in [
-        ("A", outcomes_a, q_a, p_a, venue_a),
-        ("B", outcomes_b, q_b, p_b, venue_b),
+    for market_label, outcomes, q_vec, p_vec, venue, fee_bps in [
+        ("A", outcomes_a, q_a, p_a, venue_a, fee_rate_bps_a),
+        ("B", outcomes_b, q_b, p_b, venue_b, fee_rate_bps_b),
     ]:
         candidates = []
         for i, outcome in enumerate(outcomes):
@@ -67,6 +69,7 @@ def compute_trades(
                     "market_price": round(float(p_vec[i]), 6),
                     "fair_price": round(float(q_vec[i]), 6),
                     "venue": venue,
+                    "fee_rate_bps": fee_bps,
                 })
         if candidates:
             if len(outcomes) <= 2:
@@ -107,7 +110,8 @@ def compute_trades(
 
     # Estimated fees: per-leg using venue fee schedule at trade price
     est_fees = sum(
-        venue_fee(t.get("venue", "polymarket"), t["market_price"], t["side"])
+        venue_fee(t.get("venue", "polymarket"), t["market_price"], t["side"],
+                  fee_rate_bps=t.get("fee_rate_bps"))
         for t in trades
     )
 

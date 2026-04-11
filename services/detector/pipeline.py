@@ -224,6 +224,8 @@ class DetectionPipeline:
                     continue
 
                 # Build constraint matrix — use vectors directly when available
+                fr_a = market_a_dict.get("fee_rate_bps")
+                fr_b = market_b_dict.get("fee_rate_bps")
                 if classification.get("valid_outcomes"):
                     constraint = build_constraint_matrix_from_vectors(
                         classification["valid_outcomes"],
@@ -236,6 +238,8 @@ class DetectionPipeline:
                         implication_direction=classification.get("implication_direction"),
                         venue_a=market_a_dict.get("venue", "polymarket"),
                         venue_b=market_b_dict.get("venue", "polymarket"),
+                        fee_rate_bps_a=fr_a,
+                        fee_rate_bps_b=fr_b,
                     )
                 else:
                     constraint = build_constraint_matrix(
@@ -248,6 +252,8 @@ class DetectionPipeline:
                         venue_a=market_a_dict.get("venue", "polymarket"),
                         venue_b=market_b_dict.get("venue", "polymarket"),
                         implication_direction=classification.get("implication_direction"),
+                        fee_rate_bps_a=fr_a,
+                        fee_rate_bps_b=fr_b,
                     )
 
                 # Verify pair before persisting
@@ -419,6 +425,8 @@ class DetectionPipeline:
                 prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
                 prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
 
+                fr_a = market_a_dict.get("fee_rate_bps")
+                fr_b = market_b_dict.get("fee_rate_bps")
                 if classification.get("valid_outcomes"):
                     constraint = build_constraint_matrix_from_vectors(
                         classification["valid_outcomes"],
@@ -431,6 +439,8 @@ class DetectionPipeline:
                         implication_direction=classification.get("implication_direction"),
                         venue_a=market_a_dict.get("venue", "polymarket"),
                         venue_b=market_b_dict.get("venue", "polymarket"),
+                        fee_rate_bps_a=fr_a,
+                        fee_rate_bps_b=fr_b,
                     )
                 else:
                     constraint = build_constraint_matrix(
@@ -443,6 +453,8 @@ class DetectionPipeline:
                         venue_a=market_a_dict.get("venue", "polymarket"),
                         venue_b=market_b_dict.get("venue", "polymarket"),
                         implication_direction=classification.get("implication_direction"),
+                        fee_rate_bps_a=fr_a,
+                        fee_rate_bps_b=fr_b,
                     )
 
                 verification = verify_pair(
@@ -806,6 +818,7 @@ def _market_to_dict(market: Market) -> dict:
         "description": market.description,
         "outcomes": market.outcomes if isinstance(market.outcomes, list) else [],
         "venue": getattr(market, "venue", "polymarket"),
+        "fee_rate_bps": getattr(market, "fee_rate_bps", None),
     }
 
 

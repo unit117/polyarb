@@ -70,6 +70,18 @@ class ClobClient:
             "GET", "/book", params={"token_id": token_id}
         )
 
+    async def get_fee_rate(self, token_id: str) -> int | None:
+        """Fetch taker fee rate in basis points from CLOB API.
+
+        The CLOB returns {"base_fee": N} where N is already in basis points.
+        """
+        result = await self._request(
+            "GET", "/fee-rate", params={"token_id": token_id}
+        )
+        if result and "base_fee" in result:
+            return int(result["base_fee"])
+        return None
+
     async def get_snapshot_for_market(
         self,
         token_ids: list[str],

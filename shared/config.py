@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     optimizer_interval_seconds: int = 30
     optimizer_min_edge: float = 0.03
     optimizer_skip_conditional: bool = True
+    optimizer_max_snapshot_age_seconds: int = 900  # Optimizer tolerates older prices (15 min)
 
     # Simulator settings
     initial_capital: float = 10000.0
@@ -121,21 +122,26 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def polymarket_fee(price: float, side: str) -> float:
-    """Polymarket taker fee: price * (1 - price) * 0.015.
+def polymarket_fee(price: float, side: str = "BUY", fee_rate_bps: int | None = None) -> float:
+    """Polymarket taker fee: price * (1 - price) * (fee_rate_bps / 10000).
 
     The formula is symmetric — the same for BUY and SELL because Polymarket
     charges on the probability of payout, which is price*(1-price) regardless
     of direction. Maker orders pay 0%; we conservatively assume taker.
+
+    fee_rate_bps: per-token rate from CLOB API. Most markets are 0 bps
+    (free); some categories charge 1000 bps (10%).
+    Falls back to 150 bps if unknown (market not yet synced).
     """
-    return price * (1.0 - price) * 0.015
+    rate = (fee_rate_bps if fee_rate_bps is not None else 150) / 10_000
+    return price * (1.0 - price) * rate
 
 
-def venue_fee(venue: str, price: float, side: str = "BUY") -> float:
+def venue_fee(venue: str, price: float, side: str = "BUY", fee_rate_bps: int | None = None) -> float:
     """Route fee calculation to the correct venue fee schedule."""
     if venue == "kalshi":
         return kalshi_fee(price)
-    return polymarket_fee(price, side)
+    return polymarket_fee(price, side, fee_rate_bps=fee_rate_bps)
 
 
 def kalshi_fee(price: float) -> float:

@@ -55,6 +55,7 @@ class Market(Base):
     volume: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     liquidity: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     embedding: Mapped[Optional[list]] = mapped_column(Vector(384), nullable=True)
+    fee_rate_bps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     resolved_outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

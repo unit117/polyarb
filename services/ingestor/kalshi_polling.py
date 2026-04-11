@@ -113,13 +113,24 @@ class KalshiPoller:
                 )
                 await session.execute(stmt)
 
-            # Mark stale Kalshi markets inactive
-            await session.execute(
-                update(Market)
-                .where(Market.active == True, Market.venue == "kalshi")  # noqa: E712
-                .where(~Market.polymarket_id.in_(list(rows_by_id.keys())))
-                .values(active=False)
+            # Mark stale Kalshi markets inactive.
+            # Use Python-side set diff to avoid asyncpg 32767 parameter limit.
+            kalshi_seen = set(rows_by_id.keys())
+            active_kalshi = await session.execute(
+                select(Market.id, Market.polymarket_id).where(
+                    Market.active == True, Market.venue == "kalshi"  # noqa: E712
+                )
             )
+            stale_ids = [
+                row.id for row in active_kalshi.all()
+                if row.polymarket_id not in kalshi_seen
+            ]
+            STALE_CHUNK = 10_000
+            for i in range(0, len(stale_ids), STALE_CHUNK):
+                chunk = stale_ids[i : i + STALE_CHUNK]
+                await session.execute(
+                    update(Market).where(Market.id.in_(chunk)).values(active=False)
+                )
 
             await session.commit()
 

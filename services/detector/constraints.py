@@ -21,6 +21,8 @@ def build_constraint_matrix(
     venue_a: str = "polymarket",
     venue_b: str = "polymarket",
     implication_direction: str | None = None,
+    fee_rate_bps_a: int | None = None,
+    fee_rate_bps_b: int | None = None,
 ) -> dict:
     """Build a constraint matrix for a market pair.
 
@@ -70,6 +72,7 @@ def build_constraint_matrix(
     profit_bound = _compute_profit_bound(
         dependency_type, matrix, outcomes_a, outcomes_b, prices_a, prices_b,
         correlation, venue_a=venue_a, venue_b=venue_b,
+        fee_rate_bps_a=fee_rate_bps_a, fee_rate_bps_b=fee_rate_bps_b,
     )
 
     result = {
@@ -234,6 +237,8 @@ def build_constraint_matrix_from_vectors(
     implication_direction: str | None = None,
     venue_a: str = "polymarket",
     venue_b: str = "polymarket",
+    fee_rate_bps_a: int | None = None,
+    fee_rate_bps_b: int | None = None,
 ) -> dict:
     """Build constraint matrix directly from resolution vectors.
 
@@ -262,6 +267,7 @@ def build_constraint_matrix_from_vectors(
     profit_bound = _compute_profit_bound(
         dependency_type, matrix, outcomes_a, outcomes_b, prices_a, prices_b,
         correlation, venue_a=venue_a, venue_b=venue_b,
+        fee_rate_bps_a=fee_rate_bps_a, fee_rate_bps_b=fee_rate_bps_b,
     )
 
     result = {
@@ -295,6 +301,8 @@ def _compute_profit_bound(
     correlation: str | None = None,
     venue_a: str = "polymarket",
     venue_b: str = "polymarket",
+    fee_rate_bps_a: int | None = None,
+    fee_rate_bps_b: int | None = None,
 ) -> float:
     """Compute a theoretical profit bound from price inconsistency.
 
@@ -319,8 +327,8 @@ def _compute_profit_bound(
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         spread = abs(p_a - p_b)
         # Fee on the buy leg (cheaper side) and the sell leg (dearer side)
-        fee_a = venue_fee(venue_a, p_a, "BUY")
-        fee_b = venue_fee(venue_b, p_b, "BUY")
+        fee_a = venue_fee(venue_a, p_a, "BUY", fee_rate_bps=fee_rate_bps_a)
+        fee_b = venue_fee(venue_b, p_b, "BUY", fee_rate_bps=fee_rate_bps_b)
         net = spread - fee_a - fee_b
         return round(net, 6) if net > 0.001 else 0.0
 

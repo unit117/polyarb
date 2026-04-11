@@ -134,7 +134,7 @@ class MarketPoller:
                 "liquidity": _safe_decimal(raw.get("liquidityNum")),
             }
         rows = list(rows_by_id.values())
-        seen_ids = list(rows_by_id.keys())
+        seen_ids = set(rows_by_id.keys())
         log.info("sync_markets_deduped", unique=len(rows), raw=len(raw_markets))
 
         BATCH_SIZE = 500
@@ -160,15 +160,29 @@ class MarketPoller:
 
             # Gamma returns the currently active Polymarket markets, so only rows
             # outside that seen set need to be flipped inactive.
-            stale_result = await session.execute(
-                update(Market)
-                .where(
+            # Chunk seen_ids to stay under asyncpg's 32767 parameter limit.
+            # Strategy: fetch all active polymarket IDs, compute stale set in
+            # Python, then batch-update those.
+            active_result = await session.execute(
+                select(Market.id, Market.polymarket_id).where(
                     Market.venue == "polymarket",
                     Market.active == True,  # noqa: E712
-                    ~Market.polymarket_id.in_(seen_ids),
                 )
-                .values(active=False)
             )
+            stale_market_ids = [
+                row.id for row in active_result.all()
+                if row.polymarket_id not in seen_ids
+            ]
+            stale_count = 0
+            STALE_CHUNK = 10_000
+            for i in range(0, len(stale_market_ids), STALE_CHUNK):
+                chunk = stale_market_ids[i : i + STALE_CHUNK]
+                r = await session.execute(
+                    update(Market)
+                    .where(Market.id.in_(chunk))
+                    .values(active=False)
+                )
+                stale_count += r.rowcount or 0
 
             await session.commit()
 
@@ -180,7 +194,7 @@ class MarketPoller:
         log.info(
             "sync_markets_done",
             active_count=len(markets),
-            stale_marked_inactive=stale_result.rowcount or 0,
+            stale_marked_inactive=stale_count,
         )
         await publish(
             self._redis,
@@ -188,6 +202,78 @@ class MarketPoller:
             {"action": "sync", "count": len(markets)},
         )
         return markets
+
+    async def sync_fee_rates(self, markets: list[Market]) -> None:
+        """Populate fee_rate_bps from CLOB API for markets missing it.
+
+        Prioritizes markets in active pairs (needed by optimizer/simulator)
+        and caps per-cycle work to avoid blocking the poll loop.
+        """
+        need_fee = [m for m in markets if m.fee_rate_bps is None and m.token_ids]
+        if not need_fee:
+            return
+
+        # Prioritize: markets in pairs with recent opportunities first,
+        # then other paired markets, then unpaired.
+        need_by_id = {m.id: m for m in need_fee}
+        from datetime import datetime, timedelta, timezone as tz
+        from shared.models import ArbitrageOpportunity
+        hot_ids: set[int] = set()
+        paired_ids: set[int] = set()
+        async with self._session_factory() as session:
+            # Markets in pairs with recent opportunities (last 24h)
+            cutoff = datetime.now(tz.utc) - timedelta(hours=24)
+            result = await session.execute(
+                select(MarketPair.market_a_id, MarketPair.market_b_id)
+                .join(ArbitrageOpportunity, ArbitrageOpportunity.pair_id == MarketPair.id)
+                .where(ArbitrageOpportunity.timestamp > cutoff)
+                .distinct()
+            )
+            for row in result.fetchall():
+                hot_ids.add(row.market_a_id)
+                hot_ids.add(row.market_b_id)
+            # All paired markets
+            result = await session.execute(
+                select(MarketPair.market_a_id, MarketPair.market_b_id)
+            )
+            for row in result.fetchall():
+                paired_ids.add(row.market_a_id)
+                paired_ids.add(row.market_b_id)
+
+        hot_need = [need_by_id[mid] for mid in hot_ids if mid in need_by_id]
+        cold_paired = [m for m in need_fee if m.id in paired_ids and m.id not in hot_ids]
+        unpaired_need = [m for m in need_fee if m.id not in paired_ids]
+
+        # Cap per-cycle: all hot + 500 cold paired + 200 unpaired.
+        MAX_COLD_PAIRED = 500
+        MAX_UNPAIRED = 200
+        batch = hot_need + cold_paired[:MAX_COLD_PAIRED] + unpaired_need[:MAX_UNPAIRED]
+        log.info("fee_rates_start", hot=len(hot_need),
+                 cold_paired=min(len(cold_paired), MAX_COLD_PAIRED),
+                 unpaired_batch=min(len(unpaired_need), MAX_UNPAIRED),
+                 total_remaining=len(need_fee))
+
+        updated = 0
+        COMMIT_EVERY = 100
+        async with self._session_factory() as session:
+            for idx, market in enumerate(batch):
+                token_id = str(market.token_ids[0])
+                try:
+                    bps = await self._clob.get_fee_rate(token_id)
+                    if bps is not None:
+                        await session.execute(
+                            update(Market)
+                            .where(Market.id == market.id)
+                            .values(fee_rate_bps=bps)
+                        )
+                        updated += 1
+                except Exception:
+                    log.debug("fee_rate_fetch_failed", market_id=market.id)
+                # Intermediate commit to avoid losing progress on failure
+                if (idx + 1) % COMMIT_EVERY == 0:
+                    await session.commit()
+            await session.commit()
+        log.info("fee_rates_done", updated=updated, batch_size=len(batch))
 
     async def compute_embeddings(self, markets: list[Market]) -> None:
         need_embedding = [m for m in markets if m.embedding is None]
@@ -213,24 +299,40 @@ class MarketPoller:
         log.info("embeddings_done", count=len(need_embedding))
 
     async def snapshot_prices(self, markets: list[Market]) -> None:
-        # Top N by liquidity + any market that's part of a detected pair
+        # Top N by liquidity + paired markets with recent opportunities.
+        # Cap total to avoid multi-hour poll cycles at 2 RPS.
+        # WS already provides real-time prices for subscribed markets;
+        # CLOB midpoint is a fallback for markets WS might miss.
         markets_by_id = {m.id: m for m in markets if m.token_ids}
 
         # Start with top N by liquidity
         by_liquidity = sorted(markets_by_id.values(), key=lambda m: m.liquidity or 0, reverse=True)
         eligible_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
 
-        # Add markets from detected pairs
+        # Add markets from pairs with recent opportunities (not ALL pairs)
+        from datetime import datetime, timedelta, timezone as tz
+        from shared.models import ArbitrageOpportunity
+        cutoff = datetime.now(tz.utc) - timedelta(hours=24)
         async with self._session_factory() as session:
-            result = await session.execute(select(MarketPair.market_a_id, MarketPair.market_b_id))
+            result = await session.execute(
+                select(MarketPair.market_a_id, MarketPair.market_b_id)
+                .join(ArbitrageOpportunity, ArbitrageOpportunity.pair_id == MarketPair.id)
+                .where(ArbitrageOpportunity.timestamp > cutoff)
+                .distinct()
+            )
             for row in result.fetchall():
                 if row.market_a_id in markets_by_id:
                     eligible_ids.add(row.market_a_id)
                 if row.market_b_id in markets_by_id:
                     eligible_ids.add(row.market_b_id)
 
+        # Hard cap to keep poll cycle under ~10 min at 2 RPS
+        MAX_CLOB_SNAPSHOTS = 500
         eligible = [markets_by_id[mid] for mid in eligible_ids if mid in markets_by_id]
-        log.info("snapshots_start", eligible=len(eligible), paired_extra=len(eligible_ids) - self._max_snapshot_markets, total=len(markets))
+        if len(eligible) > MAX_CLOB_SNAPSHOTS:
+            eligible.sort(key=lambda m: m.liquidity or 0, reverse=True)
+            eligible = eligible[:MAX_CLOB_SNAPSHOTS]
+        log.info("snapshots_start", eligible=len(eligible), total=len(markets))
 
         snapshots_to_insert = []
         for market in eligible:
@@ -374,6 +476,13 @@ class MarketPoller:
             await self.snapshot_prices(markets)
         except Exception:
             log.exception("snapshot_prices_error")
+
+        # Fee rates before resolved check — fee sync is fast and needed by
+        # optimizer/simulator, while resolved check paginates 130k+ markets.
+        try:
+            await self.sync_fee_rates(markets)
+        except Exception:
+            log.exception("sync_fee_rates_error")
 
         try:
             await self.check_resolved_markets()

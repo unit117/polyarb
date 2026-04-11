@@ -95,8 +95,9 @@ class OptimizerPipeline:
                     )
                     return {"status": "skipped", "reason": "conditional_unconstrained"}
 
-            # Fetch latest prices (reject stale snapshots)
-            max_age = settings.max_snapshot_age_seconds
+            # Fetch latest prices — optimizer uses a looser staleness threshold
+            # than the simulator since it's computing fair values, not executing.
+            max_age = settings.optimizer_max_snapshot_age_seconds
             prices_a = await _get_latest_prices(session, pair.market_a_id, max_age)
             prices_b = await _get_latest_prices(session, pair.market_b_id, max_age)
 
@@ -125,11 +126,13 @@ class OptimizerPipeline:
                 ip_timeout_ms=self.ip_timeout_ms,
             )
 
-            # Load market venues for fee routing
+            # Load market venues and fee rates for fee routing
             market_a = await session.get(Market, pair.market_a_id)
             market_b = await session.get(Market, pair.market_b_id)
             v_a = getattr(market_a, "venue", "polymarket") if market_a else "polymarket"
             v_b = getattr(market_b, "venue", "polymarket") if market_b else "polymarket"
+            fr_a = getattr(market_a, "fee_rate_bps", None) if market_a else None
+            fr_b = getattr(market_b, "fee_rate_bps", None) if market_b else None
 
             # Compute trades
             theoretical_profit = float(constraint.get("profit_bound", 0.0))
@@ -141,6 +144,8 @@ class OptimizerPipeline:
                 min_edge=self.min_edge,
                 venue_a=v_a,
                 venue_b=v_b,
+                fee_rate_bps_a=fr_a,
+                fee_rate_bps_b=fr_b,
             )
 
             # Update opportunity
@@ -188,6 +193,28 @@ class OptimizerPipeline:
     async def process_pending(self) -> dict:
         """Find and optimize all pending (detected) opportunities."""
         stats = {"processed": 0, "optimized": 0, "failed": 0}
+
+        # Expire stale detected opportunities that will never get fresh prices
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import update
+
+        async with self.session_factory() as session:
+            cutoff = datetime.now(timezone.utc) - timedelta(
+                seconds=settings.optimizer_max_snapshot_age_seconds
+            )
+            expired = await session.execute(
+                update(ArbitrageOpportunity)
+                .where(
+                    ArbitrageOpportunity.status == "detected",
+                    ArbitrageOpportunity.timestamp < cutoff,
+                )
+                .values(status="expired")
+                .returning(ArbitrageOpportunity.id)
+            )
+            expired_ids = [row[0] for row in expired.fetchall()]
+            if expired_ids:
+                await session.commit()
+                logger.info("expired_stale_detected", count=len(expired_ids))
 
         async with self.session_factory() as session:
             result = await session.execute(

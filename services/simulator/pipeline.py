@@ -332,8 +332,10 @@ class SimulatorPipeline:
             midpoint = trade.get("market_price", 0.5)
             fill = compute_vwap(snapshot.order_book, trade["side"], base_size, midpoint)
             trade_venue = trade.get("venue", getattr(market, "venue", "polymarket"))
+            fee_bps = trade.get("fee_rate_bps", getattr(market, "fee_rate_bps", None))
             fees = (
-                venue_fee(trade_venue, fill["vwap_price"], trade["side"])
+                venue_fee(trade_venue, fill["vwap_price"], trade["side"],
+                          fee_rate_bps=fee_bps)
                 * fill["filled_size"]
             )
 
@@ -361,7 +363,8 @@ class SimulatorPipeline:
                     post_vwap_edge = fair_price - fill["vwap_price"]
                 else:
                     post_vwap_edge = fill["vwap_price"] - fair_price
-                per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade["side"])
+                per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade["side"],
+                                         fee_rate_bps=fee_bps)
                 if post_vwap_edge - per_share_fee <= 0:
                     logger.info(
                         "edge_killed_by_slippage",
@@ -674,6 +677,27 @@ class SimulatorPipeline:
             await self._revert_stale_pending()
         except Exception:
             logger.exception("stale_pending_revert_error")
+
+        # Expire stale opportunities older than 24h — they clog the batch
+        # and will never have fresh enough snapshots for execution
+        try:
+            async with self.session_factory() as session:
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+                expired = await session.execute(
+                    update(ArbitrageOpportunity)
+                    .where(
+                        ArbitrageOpportunity.status.in_(("optimized", "unconverged")),
+                        ArbitrageOpportunity.timestamp < cutoff,
+                    )
+                    .values(status="expired")
+                    .returning(ArbitrageOpportunity.id)
+                )
+                expired_ids = [row[0] for row in expired.fetchall()]
+                if expired_ids:
+                    await session.commit()
+                    logger.info("expired_stale_opps", count=len(expired_ids))
+        except Exception:
+            logger.exception("expire_stale_opps_error")
 
         async with self.session_factory() as session:
             result = await session.execute(
