@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+from collections.abc import AsyncIterator
 import json
 import random
 import time
@@ -89,6 +90,27 @@ class GammaClient:
             offset += limit
             log.info("gamma_paginating", offset=offset, total_so_far=len(all_markets))
         return all_markets
+
+    async def iter_market_pages(
+        self, limit: int = 100, active: bool = True, closed: bool = False
+    ) -> AsyncIterator[list[dict]]:
+        """Yield pages of markets without accumulating all in memory."""
+        offset = 0
+        while True:
+            params = {
+                "limit": limit,
+                "offset": offset,
+                "active": str(active).lower(),
+                "closed": str(closed).lower(),
+            }
+            batch = await self._request("GET", "/markets", params=params)
+            if not isinstance(batch, list) or not batch:
+                break
+            yield batch
+            if len(batch) < limit:
+                break
+            offset += limit
+            log.info("gamma_paginating", offset=offset)
 
     async def close(self) -> None:
         await self._client.aclose()

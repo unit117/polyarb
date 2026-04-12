@@ -399,53 +399,75 @@ class MarketPoller:
         )
 
     async def check_resolved_markets(self) -> None:
-        """Fetch closed markets from Gamma API and mark resolved ones in DB."""
+        """Fetch closed markets from Gamma API and mark resolved ones in DB.
+
+        Streams pages from Gamma instead of loading all closed markets into
+        memory, and pre-loads the set of unresolved polymarket_ids we track
+        so each page only does set lookups instead of per-row DB queries.
+        """
         try:
-            closed_markets = await self._gamma.list_markets(active=False, closed=True)
-        except Exception:
-            log.exception("resolution_check_error")
-            return
-
-        resolved_count = 0
-        deferred_resolution_events: list[dict] = []
-        async with self._session_factory() as session:
-            for raw in closed_markets:
-                polymarket_id = str(raw.get("id", ""))
-                if not polymarket_id:
-                    continue
-
+            # Pre-load unresolved polymarket_ids we care about
+            async with self._session_factory() as session:
                 result = await session.execute(
-                    select(Market).where(
-                        Market.polymarket_id == polymarket_id,
+                    select(Market.polymarket_id, Market.id).where(
                         Market.venue == "polymarket",
+                        Market.resolved_outcome.is_(None),
+                        Market.active.is_(True),
                     )
                 )
-                market = result.scalar_one_or_none()
-                if not market or market.resolved_outcome:
-                    continue
+                unresolved = {row[0]: row[1] for row in result.fetchall()}
 
-                # Determine winner: the outcome whose token price is ~1.0
-                winning_outcome = _extract_winner(raw)
-                if not winning_outcome:
-                    continue
+            if not unresolved:
+                return
 
-                market.resolved_outcome = winning_outcome
-                market.resolved_at = datetime.now(timezone.utc)
-                market.active = False
-                resolved_count += 1
+            resolved_count = 0
+            deferred_resolution_events: list[dict] = []
+            pages = 0
 
-                deferred_resolution_events.append({
-                    "market_id": market.id,
-                    "resolved_outcome": winning_outcome,
-                    "source": "gamma_api",
-                })
+            async for page in self._gamma.iter_market_pages(
+                active=False, closed=True
+            ):
+                pages += 1
+                async with self._session_factory() as session:
+                    for raw in page:
+                        polymarket_id = str(raw.get("id", ""))
+                        if polymarket_id not in unresolved:
+                            continue
+
+                        market_db_id = unresolved[polymarket_id]
+                        market = await session.get(Market, market_db_id)
+                        if not market or market.resolved_outcome:
+                            continue
+
+                        winning_outcome = _extract_winner(raw)
+                        if not winning_outcome:
+                            continue
+
+                        market.resolved_outcome = winning_outcome
+                        market.resolved_at = datetime.now(timezone.utc)
+                        market.active = False
+                        resolved_count += 1
+                        del unresolved[polymarket_id]
+
+                        deferred_resolution_events.append({
+                            "market_id": market.id,
+                            "resolved_outcome": winning_outcome,
+                            "source": "gamma_api",
+                        })
+
+                    await session.commit()
+
+                # All tracked markets resolved — no need to keep paginating
+                if not unresolved:
+                    log.info("resolution_early_exit", pages=pages)
+                    break
 
             if resolved_count > 0:
-                await session.commit()
-                # Publish after commit so subscribers see durable rows
                 for event in deferred_resolution_events:
                     await publish(self._redis, CHANNEL_MARKET_RESOLVED, event)
-                log.info("resolution_check_done", resolved=resolved_count)
+                log.info("resolution_check_done", resolved=resolved_count, pages=pages)
+        except Exception:
+            log.exception("resolution_check_error")
 
     async def poll_once(self) -> list[Market]:
         log.info("poll_cycle_start")
