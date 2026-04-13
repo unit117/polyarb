@@ -111,7 +111,14 @@ class SimulatorPipeline:
                 return {"status": "skipped", "reason": opp.status}
 
             if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
-                return {"status": "no_trades"}
+                opp.status = "expired"
+                opp.expired_at = datetime.now(timezone.utc)
+                await session.commit()
+                logger.info(
+                    "expired_empty_trades",
+                    opportunity_id=opp.id,
+                )
+                return {"status": "expired", "reason": "no_trades"}
 
             opp.status = "pending"
             opp.pending_at = datetime.now(timezone.utc)
@@ -166,7 +173,16 @@ class SimulatorPipeline:
                 market_b=market_b,
             )
             if not bundle or not bundle.legs:
-                opp.status = "optimized"
+                # Expire if either market is resolved — no point recycling
+                either_resolved = any(
+                    m and m.resolved_outcome is not None
+                    for m in (market_a, market_b)
+                )
+                if either_resolved:
+                    opp.status = "expired"
+                    opp.expired_at = datetime.now(timezone.utc)
+                else:
+                    opp.status = "optimized"
                 await session.commit()
                 logger.info(
                     "simulation_complete",
@@ -293,6 +309,18 @@ class SimulatorPipeline:
         market_a: Market | None,
         market_b: Market | None,
     ) -> ValidatedExecutionBundle | None:
+        # Reject opportunities on resolved or inactive markets
+        for m in (market_a, market_b):
+            if m and (m.resolved_outcome is not None or not m.active):
+                logger.info(
+                    "resolved_market_skipped",
+                    opportunity_id=opp.id,
+                    market_id=m.id,
+                    resolved=m.resolved_outcome,
+                    active=m.active,
+                )
+                return None
+
         net_profit = opp.optimal_trades.get("estimated_profit", 0)
         if net_profit <= 0:
             return None
