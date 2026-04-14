@@ -48,7 +48,7 @@ The dashboard will be available at `http://localhost:8081`.
 
 ### Configuration
 
-All settings are managed via environment variables in `.env` (see `.env.example` for all 69+ settings). Key groups:
+All settings are managed via environment variables in `.env` (see `.env.example` for all 76 settings). Key groups:
 
 | Group | Examples |
 |-------|----------|
@@ -64,7 +64,7 @@ All settings are managed via environment variables in `.env` (see `.env.example`
 
 ## Database
 
-PostgreSQL 16 with pgvector. Schema managed by Alembic (15 migrations, run automatically on service start via `entrypoint.sh`). Extensions: `vector` (pgvector), `dblink` (backtest setup only).
+PostgreSQL 16 with pgvector. Schema managed by Alembic (18 migrations, run automatically on service start via `entrypoint.sh`). Extensions: `vector` (pgvector), `dblink` (backtest setup only).
 
 ### Schema
 
@@ -80,7 +80,8 @@ outcomes        JSONB      midpoints       JSONB     constraint_matrix JSONB
 token_ids       JSONB                                resolution_vectors JSONB
 active          Bool                                 verified        Bool
 embedding       Vector(384)                          detected_at
-resolved_outcome
+fee_rate_bps    Int                                  implication_direction
+resolved_outcome                                     classification_cache JSONB
 resolved_at
 end_date, volume, liquidity
 created_at, updated_at
@@ -97,7 +98,8 @@ optimal_trades  JSONB      entry_price               unrealized_pnl
 fw_iterations              vwap_price                total_trades    Int
 bregman_gap     Float      slippage                  settled_trades  Int
 status          *          fees                      winning_trades  Int
-pending_at                 executed_at               source (paper|live)
+pending_at                 executed_at               cost_basis      JSONB
+                                                     source (paper|live)
 expired_at                 status
 dependency_type            source (paper|live)
                            venue
@@ -164,6 +166,9 @@ docker compose exec ingestor alembic current
 | 013 | Backfill pending_at timestamps |
 | 014 | live_orders and live_fills tables for live trading audit trail |
 | 015 | live fill IDs and order status check constraint |
+| 016 | Pair classification cache for detector LLM reuse |
+| 017 | cost_basis JSONB column on portfolio_snapshots |
+| 018 | fee_rate_bps column on markets |
 
 ## Backtesting
 
@@ -207,7 +212,7 @@ E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. Aft
 │   ├── simulator/     # Paper trading + live trading engine
 │   └── dashboard/     # FastAPI backend + React frontend
 ├── shared/            # Cross-service models, DB, events, config, circuit breaker
-├── alembic/           # Database migrations (15 revisions)
+├── alembic/           # Database migrations (18 revisions)
 ├── scripts/           # Backtest, backfill, eval, and maintenance scripts
 ├── reports/           # Classifier evals, audit reports, performance analysis
 ├── tests/             # Unit + integration tests
@@ -267,13 +272,13 @@ Areas that slow AI comprehension:
 
 | File | Lines | Verdict |
 |------|-------|---------|
-| `services/dashboard/api/routes.py` | 784 | Split into route modules |
-| `services/simulator/pipeline.py` | 660 | Extract validation from execution |
-| `services/detector/pipeline.py` | 623 | Deduplicate detection logic |
-| `services/detector/classifier.py` | 579 | Fine — mostly rule-based classifiers |
-| `services/ingestor/polling.py` | 405 | Borderline — could extract snapshot logic |
-| `services/detector/constraints.py` | 307 | Borderline |
-| Everything else | <225 | Clean |
+| `services/detector/pipeline.py` | 965 | Deduplicate detection logic |
+| `services/detector/classifier.py` | 868 | Fine — mostly rule-based classifiers |
+| `services/dashboard/api/routes.py` | 840 | Split into route modules |
+| `services/simulator/pipeline.py` | 776 | Extract validation from execution |
+| `services/ingestor/polling.py` | 540 | Borderline — could extract snapshot logic |
+| `services/detector/constraints.py` | 407 | Borderline |
+| Everything else | <270 | Clean |
 
 ### Top refactoring targets
 
@@ -301,15 +306,14 @@ Mixes portfolio stats, opportunity/trade/pair queries, time-series metrics, corr
 | `0.005` (fallback slippage) | simulator/vwap.py | `FALLBACK_SLIPPAGE` |
 | `0.20` (max edge cap) | optimizer/trades.py | `MAX_EDGE_CAP` |
 | `0.15` (divergence threshold) | detector/constraints.py | `DIVERGENCE_THRESHOLD` |
-| `500` (upsert batch size) | ingestor/polling.py | `UPSERT_BATCH_SIZE` |
 
 ### What's already clean
 
-- **Optimizer module** — `frank_wolfe.py` (168 lines), `bregman.py` (65 lines), `ip_oracle.py` (100 lines), `trades.py` (129 lines) — well-decomposed, single-responsibility
-- **Shared module** — `models.py`, `db.py`, `events.py`, `config.py`, `circuit_breaker.py` — all under 200 lines, clear contracts
+- **Optimizer module** — `frank_wolfe.py` (171 lines), `bregman.py` (64 lines), `ip_oracle.py` (100 lines), `trades.py` (236 lines) — well-decomposed, single-responsibility
+- **Shared module** — `models.py`, `db.py`, `events.py`, `config.py`, `circuit_breaker.py` — all under 310 lines, clear contracts
 - **No circular imports** — services communicate via Redis, not cross-imports
 - **Type hints** — mostly present on public functions, a few missing return types on internal helpers
 
 ## License
 
-Private.
+All rights reserved. Not open source.
