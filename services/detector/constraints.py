@@ -10,6 +10,27 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Outcome labels treated as the "positive" (index-0) outcome for binary markets.
+_POSITIVE_OUTCOMES = {"Yes", "Over"}
+
+
+def _positive_first(outcomes: list[str]) -> list[str]:
+    """Ensure the positive outcome is at index 0 for binary markets.
+
+    The label-based matrix builders assume outcomes[0] is the positive/Yes
+    outcome.  Markets with outcomes like ["Over", "Under"] or ["Under", "Over"]
+    need normalisation so the matrix positions are semantically correct.
+    Prices are dict-keyed by outcome name, so only the list order matters.
+    """
+    if len(outcomes) != 2:
+        return outcomes
+    if outcomes[0] in _POSITIVE_OUTCOMES:
+        return outcomes
+    if outcomes[1] in _POSITIVE_OUTCOMES:
+        return [outcomes[1], outcomes[0]]
+    # Neither label is a known positive — keep as-is (arbitrary but consistent)
+    return outcomes
+
 
 def build_constraint_matrix(
     dependency_type: str,
@@ -34,18 +55,13 @@ def build_constraint_matrix(
     - profit_bound: theoretical profit if prices violate constraints
     - correlation: "positive" or "negative" for conditional pairs
     """
+    # Normalise binary outcome order so positive is at index 0.
+    # Prices are dict-keyed by name — only the list order changes.
+    outcomes_a = _positive_first(outcomes_a)
+    outcomes_b = _positive_first(outcomes_b)
+
     n_a = len(outcomes_a)
     n_b = len(outcomes_b)
-
-    # Guard: binary matrix logic assumes outcomes[0]="Yes", outcomes[1]="No"
-    for label, outcomes in [("a", outcomes_a), ("b", outcomes_b)]:
-        if len(outcomes) == 2 and outcomes[0] != "Yes":
-            logger.warning(
-                "unexpected_outcome_order",
-                market=label,
-                outcomes=outcomes,
-                msg="Expected outcomes[0]='Yes'; constraint matrix may be inverted",
-            )
 
     if dependency_type == "implication":
         if not implication_direction:

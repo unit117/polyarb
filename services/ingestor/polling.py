@@ -108,55 +108,56 @@ class MarketPoller:
 
     async def sync_markets(self) -> list[Market]:
         log.info("sync_markets_start")
-        raw_markets = await self._gamma.list_markets()
-        log.info("sync_markets_fetched", count=len(raw_markets))
 
-        if not raw_markets:
-            return []
+        # Stream pages from Gamma instead of accumulating all 30k+ markets.
+        seen_ids: set[str] = set()
+        total_raw = 0
 
-        # Prepare all rows for batch upsert, deduplicating by polymarket_id
-        rows_by_id: dict[str, dict] = {}
-        for raw in raw_markets:
-            polymarket_id = str(raw.get("id", ""))
-            if not polymarket_id:
-                continue
-            rows_by_id[polymarket_id] = {
-                "venue": "polymarket",
-                "polymarket_id": polymarket_id,
-                "event_id": raw.get("eventId"),
-                "question": raw.get("question", ""),
-                "description": raw.get("description"),
-                "outcomes": parse_stringified_json(raw.get("outcomes", "[]")),
-                "token_ids": parse_stringified_json(raw.get("clobTokenIds", "[]")),
-                "active": raw.get("active", True),
-                "end_date": _parse_iso_date(raw.get("endDateIso")),
-                "volume": _safe_decimal(raw.get("volumeNum")),
-                "liquidity": _safe_decimal(raw.get("liquidityNum")),
-            }
-        rows = list(rows_by_id.values())
-        seen_ids = set(rows_by_id.keys())
-        log.info("sync_markets_deduped", unique=len(rows), raw=len(raw_markets))
-
-        BATCH_SIZE = 500
         async with self._session_factory() as session:
-            for i in range(0, len(rows), BATCH_SIZE):
-                batch = rows[i : i + BATCH_SIZE]
-                stmt = insert(Market).values(batch)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["venue", "polymarket_id"],
-                    set_={
-                        "question": stmt.excluded.question,
-                        "description": stmt.excluded.description,
-                        "outcomes": stmt.excluded.outcomes,
-                        "token_ids": stmt.excluded.token_ids,
-                        "active": stmt.excluded.active,
-                        "end_date": stmt.excluded.end_date,
-                        "volume": stmt.excluded.volume,
-                        "liquidity": stmt.excluded.liquidity,
-                    },
-                )
-                await session.execute(stmt)
-                log.info("sync_markets_batch", offset=i, batch_size=len(batch))
+            async for page in self._gamma.iter_market_pages():
+                total_raw += len(page)
+
+                rows: list[dict] = []
+                for raw in page:
+                    polymarket_id = str(raw.get("id", ""))
+                    if not polymarket_id or polymarket_id in seen_ids:
+                        continue
+                    seen_ids.add(polymarket_id)
+                    rows.append({
+                        "venue": "polymarket",
+                        "polymarket_id": polymarket_id,
+                        "event_id": raw.get("eventId"),
+                        "question": raw.get("question", ""),
+                        "description": raw.get("description"),
+                        "outcomes": parse_stringified_json(raw.get("outcomes", "[]")),
+                        "token_ids": parse_stringified_json(raw.get("clobTokenIds", "[]")),
+                        "active": raw.get("active", True),
+                        "end_date": _parse_iso_date(raw.get("endDateIso")),
+                        "volume": _safe_decimal(raw.get("volumeNum")),
+                        "liquidity": _safe_decimal(raw.get("liquidityNum")),
+                    })
+
+                if rows:
+                    stmt = insert(Market).values(rows)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["venue", "polymarket_id"],
+                        set_={
+                            "question": stmt.excluded.question,
+                            "description": stmt.excluded.description,
+                            "outcomes": stmt.excluded.outcomes,
+                            "token_ids": stmt.excluded.token_ids,
+                            "active": stmt.excluded.active,
+                            "end_date": stmt.excluded.end_date,
+                            "volume": stmt.excluded.volume,
+                            "liquidity": stmt.excluded.liquidity,
+                        },
+                    )
+                    await session.execute(stmt)
+
+            log.info("sync_markets_fetched", raw=total_raw, unique=len(seen_ids))
+
+            if not seen_ids:
+                return []
 
             # Gamma returns the currently active Polymarket markets, so only rows
             # outside that seen set need to be flipped inactive.
@@ -421,13 +422,13 @@ class MarketPoller:
                 return
 
             resolved_count = 0
-            deferred_resolution_events: list[dict] = []
             pages = 0
 
             async for page in self._gamma.iter_market_pages(
                 active=False, closed=True
             ):
                 pages += 1
+                page_events: list[dict] = []
                 async with self._session_factory() as session:
                     for raw in page:
                         polymarket_id = str(raw.get("id", ""))
@@ -449,7 +450,7 @@ class MarketPoller:
                         resolved_count += 1
                         del unresolved[polymarket_id]
 
-                        deferred_resolution_events.append({
+                        page_events.append({
                             "market_id": market.id,
                             "resolved_outcome": winning_outcome,
                             "source": "gamma_api",
@@ -457,14 +458,17 @@ class MarketPoller:
 
                     await session.commit()
 
+                # Publish events immediately after commit — avoids unbounded
+                # accumulation across 2000+ pages of closed markets.
+                for event in page_events:
+                    await publish(self._redis, CHANNEL_MARKET_RESOLVED, event)
+
                 # All tracked markets resolved — no need to keep paginating
                 if not unresolved:
                     log.info("resolution_early_exit", pages=pages)
                     break
 
             if resolved_count > 0:
-                for event in deferred_resolution_events:
-                    await publish(self._redis, CHANNEL_MARKET_RESOLVED, event)
                 log.info("resolution_check_done", resolved=resolved_count, pages=pages)
         except Exception:
             log.exception("resolution_check_error")
