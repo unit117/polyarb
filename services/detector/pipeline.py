@@ -208,9 +208,45 @@ class DetectionPipeline:
                 if classification["dependency_type"] == "none":
                     continue
 
+                # Fast-fail structural pre-check: skip pairs that will
+                # inevitably fail verification, saving price fetches and
+                # constraint matrix builds.
+                dep_type = classification["dependency_type"]
+                if dep_type == "mutual_exclusion":
+                    event_a = market_a_dict.get("event_id")
+                    event_b = market_b_dict.get("event_id")
+                    if not event_a and not event_b:
+                        logger.info(
+                            "skipped_structural_precheck",
+                            market_a_id=market_a.id,
+                            market_b_id=market_b.id,
+                            reason="mutual_exclusion_no_event_ids",
+                        )
+                        continue
+                    outcomes_a = market_a_dict.get("outcomes", [])
+                    outcomes_b = market_b_dict.get("outcomes", [])
+                    if len(outcomes_a) != 2 or len(outcomes_b) != 2:
+                        logger.info(
+                            "skipped_structural_precheck",
+                            market_a_id=market_a.id,
+                            market_b_id=market_b.id,
+                            reason="mutual_exclusion_non_binary",
+                        )
+                        continue
+
                 # Get latest prices for profit computation
                 prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
                 prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
+
+                # Fast-fail: both prices missing means Check 3 will always
+                # fail regardless of dependency type — skip constraint build
+                if not prices_a and not prices_b:
+                    logger.info(
+                        "skipped_no_price_data",
+                        market_a_id=market_a.id,
+                        market_b_id=market_b.id,
+                    )
+                    continue
 
                 # Uncertainty filter: skip near-resolved markets
                 if prices_a and prices_b and not _passes_uncertainty_filter(

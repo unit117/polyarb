@@ -86,4 +86,4 @@ The zero verification rate and low opportunity yield (3% of pairs) suggest the p
 
 ---
 
-*Report generated automatically at 2026-03-21 ~08:45 UTC. Data sourced from PolyArb dashboard API at $NAS_HOST:8081.*
+*Report generated automatically at 2026-03-21 ~08:45 UTC. Data sourced from PolyArb dashboard API.*

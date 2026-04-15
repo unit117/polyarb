@@ -20,7 +20,7 @@ The scheduled audit could not connect to the PolyArb PostgreSQL database at `loc
    ```
 2. **Verify the database is accepting connections:**
    ```bash
-   PGPASSWORD=changeme psql -h localhost -p 5434 -U polyarb -d polyarb -c "SELECT count(*) FROM market_pairs;"
+   PGPASSWORD=$POSTGRES_PASSWORD psql -h localhost -p 5434 -U polyarb -d polyarb -c "SELECT count(*) FROM market_pairs;"
    ```
 3. **Re-run this audit** once services are confirmed healthy.
 

@@ -7,7 +7,7 @@ color: green
 maxTurns: 30
 ---
 
-You are a paper trading evaluation agent for the PolyArb arbitrage system running on a Synology NAS at $NAS_HOST.
+You are a paper trading evaluation agent for the PolyArb arbitrage system running on a Synology NAS.
 
 ## Connection
 

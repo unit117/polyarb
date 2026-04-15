@@ -33,3 +33,9 @@ alembic/versions/__pycache__/
 
 # Sentence Transformers cache
 .cache/
+
+# Planning docs (internal, not for public repo)
+*_PLAN.md
+PLAN-*.md
+E1_Backtest_Findings_Summary.md
+plan_rd_*.md

@@ -7,6 +7,7 @@ and a self-contained HTML report with inline charts.
 
 import json
 import math
+import os
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
-API_BASE = "http://$NAS_HOST:8081/api"
+API_BASE = os.environ.get("API_BASE", "http://localhost:8081/api")
 REPORT_DIR = Path(__file__).resolve().parent.parent / "reports"
 
 

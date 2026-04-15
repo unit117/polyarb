@@ -6,7 +6,7 @@ export default function DeploymentNas() {
       <H1>Deployment & NAS Setup</H1>
 
       <P>
-        PolyArb runs on a Synology NAS at <Code>$NAS_HOST</Code>. Deployment is done
+        PolyArb runs on a Synology NAS. Deployment is done
         from a local Mac via tar-over-SSH (scp doesn't work on Synology).
       </P>
 

@@ -78,6 +78,8 @@ class SimulatorPipeline:
         self.source = source
         self._in_flight: set[int] = set()
         self._execution_lock = asyncio.Lock()
+        self._retry_counts: dict[int, int] = {}
+        self._max_retries = settings.max_opportunity_retries
 
     async def simulate_opportunity(
         self,
@@ -113,6 +115,7 @@ class SimulatorPipeline:
             if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
                 opp.status = "expired"
                 opp.expired_at = datetime.now(timezone.utc)
+                self._retry_counts.pop(opp.id, None)
                 await session.commit()
                 logger.info(
                     "expired_empty_trades",
@@ -181,13 +184,29 @@ class SimulatorPipeline:
                 if either_resolved:
                     opp.status = "expired"
                     opp.expired_at = datetime.now(timezone.utc)
+                    self._retry_counts.pop(opp.id, None)
                 else:
-                    opp.status = "optimized"
+                    # Track retry count — expire after max_retries to avoid
+                    # infinite loops on permanently blocked opportunities
+                    retries = self._retry_counts.get(opp.id, 0) + 1
+                    self._retry_counts[opp.id] = retries
+                    if retries >= self._max_retries:
+                        opp.status = "expired"
+                        opp.expired_at = datetime.now(timezone.utc)
+                        self._retry_counts.pop(opp.id, None)
+                        logger.warning(
+                            "expired_max_retries",
+                            opportunity_id=opp.id,
+                            retries=retries,
+                        )
+                    else:
+                        opp.status = "optimized"
                 await session.commit()
                 logger.info(
                     "simulation_complete",
                     opportunity_id=opp.id,
                     trades_executed=0,
+                    retries=self._retry_counts.get(opp.id, 0),
                     cash_remaining=float(self.portfolio.cash),
                 )
                 return {
@@ -271,7 +290,11 @@ class SimulatorPipeline:
                     }
                 )
 
-            opp.status = "simulated" if trades_executed > 0 else "optimized"
+            if trades_executed > 0:
+                opp.status = "simulated"
+                self._retry_counts.pop(opp.id, None)
+            else:
+                opp.status = "optimized"
             await session.commit()
 
             for event in deferred_trade_events:

@@ -294,7 +294,7 @@ If Phase 2 finds a viable model:
 - If you have other uses for the hardware (other AI projects, general compute)
 - If you want to run rapid experimental iterations without API billing anxiety
 
-**The NAS you already have** (Synology at $NAS_HOST) is not suitable for LLM inference — it lacks a GPU. The classification task is too latency-sensitive for CPU-only inference.
+**The NAS you already have** (Synology) is not suitable for LLM inference — it lacks a GPU. The classification task is too latency-sensitive for CPU-only inference.
 
 ---
 

@@ -28,7 +28,7 @@ export default function WebSocketStreaming() {
       </P>
 
       <CodeBlock lang="javascript">{`// Frontend WebSocket connection
-const ws = new WebSocket("ws://$NAS_HOST:8081/ws");
+const ws = new WebSocket("ws://localhost:8081/ws");
 
 ws.onmessage = (event) => {
   const data = JSON.parse(event.data);

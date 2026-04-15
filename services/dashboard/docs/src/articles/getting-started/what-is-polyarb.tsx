@@ -75,7 +75,7 @@ Markets    Pairs    Opportunities  Portfolio   Web UI
       </UL>
 
       <P>
-        The system runs 24/7 on a NAS at <Code>$NAS_HOST</Code>, with the dashboard
+        The system runs 24/7 on a NAS, with the dashboard
         accessible at port <Code>8081</Code>.
       </P>
     </>

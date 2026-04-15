@@ -36,6 +36,7 @@ class OptimizerPipeline:
         self.ip_timeout_ms = ip_timeout_ms
         self.min_edge = min_edge
         self.skip_conditional = skip_conditional
+        self._consecutive_zero_profit_batches = 0
 
     async def optimize_opportunity(self, opportunity_id: int) -> dict:
         """Optimize a single detected arbitrage opportunity.
@@ -225,12 +226,15 @@ class OptimizerPipeline:
             )
             opp_ids = [row[0] for row in result.fetchall()]
 
+        zero_profit_count = 0
         for opp_id in opp_ids:
             try:
                 result = await self.optimize_opportunity(opp_id)
                 stats["processed"] += 1
                 if result["status"] in ("optimized", "unconverged"):
                     stats["optimized"] += 1
+                    if result.get("estimated_profit", 0) == 0:
+                        zero_profit_count += 1
                 else:
                     stats["failed"] += 1
             except Exception:
@@ -238,7 +242,20 @@ class OptimizerPipeline:
                 stats["failed"] += 1
 
         if stats["processed"] > 0:
+            stats["zero_profit"] = zero_profit_count
+            all_zero = zero_profit_count == stats["optimized"] and stats["optimized"] > 0
+            if all_zero:
+                self._consecutive_zero_profit_batches += 1
+            else:
+                self._consecutive_zero_profit_batches = 0
+            stats["consecutive_zero_profit_batches"] = self._consecutive_zero_profit_batches
             logger.info("batch_optimization_complete", **stats)
+            if self._consecutive_zero_profit_batches >= 5:
+                logger.warning(
+                    "zero_profit_streak",
+                    consecutive_batches=self._consecutive_zero_profit_batches,
+                    msg="all opportunities zero-profit for 5+ consecutive batches — market may be efficiently priced",
+                )
         return stats
 
 
