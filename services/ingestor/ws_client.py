@@ -117,15 +117,20 @@ class ClobWebSocket:
                 paired_ids.add(row.market_b_id)
 
             # Fetch tokens for paired markets not already in top N
+            # Chunk to avoid exceeding PostgreSQL's bound-parameter limit
             missing = paired_ids - eligible_ids
             if missing:
-                missing_result = await session.execute(
-                    select(Market.id, Market.token_ids)
-                    .where(Market.id.in_(missing))
-                    .where(Market.token_ids != None)  # noqa: E711
-                )
-                for row in missing_result.fetchall():
-                    market_tokens[row.id] = [str(t) for t in row.token_ids] if row.token_ids else []
+                CHUNK = 5000
+                missing_list = list(missing)
+                for i in range(0, len(missing_list), CHUNK):
+                    chunk = missing_list[i : i + CHUNK]
+                    missing_result = await session.execute(
+                        select(Market.id, Market.token_ids)
+                        .where(Market.id.in_(chunk))
+                        .where(Market.token_ids != None)  # noqa: E711
+                    )
+                    for row in missing_result.fetchall():
+                        market_tokens[row.id] = [str(t) for t in row.token_ids] if row.token_ids else []
                 eligible_ids |= missing
 
         token_ids = []

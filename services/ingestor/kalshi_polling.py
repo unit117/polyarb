@@ -245,16 +245,22 @@ class KalshiPoller:
             return
 
         # Find our active Kalshi markets that match settled tickers
+        # Chunk to avoid exceeding PostgreSQL's bound-parameter limit
+        CHUNK = 5000
+        ticker_list = list(settled_by_ticker.keys())
+        to_resolve: list[Market] = []
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(Market).where(
-                    Market.venue == "kalshi",
-                    Market.active == True,  # noqa: E712
-                    Market.resolved_outcome.is_(None),
-                    Market.polymarket_id.in_(list(settled_by_ticker.keys())),
+            for i in range(0, len(ticker_list), CHUNK):
+                chunk = ticker_list[i : i + CHUNK]
+                result = await session.execute(
+                    select(Market).where(
+                        Market.venue == "kalshi",
+                        Market.active == True,  # noqa: E712
+                        Market.resolved_outcome.is_(None),
+                        Market.polymarket_id.in_(chunk),
+                    )
                 )
-            )
-            to_resolve = result.scalars().all()
+                to_resolve.extend(result.scalars().all())
 
             for market in to_resolve:
                 result_val = settled_by_ticker[market.polymarket_id]

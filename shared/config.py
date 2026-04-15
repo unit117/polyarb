@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     max_position_size: float = 100.0
     slippage_model: str = "vwap"
     simulator_interval_seconds: int = 60
-    max_snapshot_age_seconds: int = 120  # Reject price snapshots older than this
+    max_snapshot_age_seconds: int = 600  # Reject price snapshots older than this (10 min)
     max_opportunity_retries: int = 10  # Expire opportunity after this many blocked attempts
     simulator_reset_epoch: Optional[datetime] = None  # Filter dashboard to only show data after this timestamp
 
