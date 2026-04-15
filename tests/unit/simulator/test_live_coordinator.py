@@ -8,7 +8,7 @@ import pytest
 from shared.models import LiveFill, LiveOrder, Market, PaperTrade, PortfolioSnapshot
 from services.simulator.live_coordinator import LiveTradingCoordinator, token_id_for_outcome
 from services.simulator.live_reconciler import ReconciledFill
-from services.simulator.pipeline import ValidatedExecutionBundle, ValidatedLeg
+from services.simulator.validation import ValidatedExecutionBundle, ValidatedLeg
 from services.simulator.portfolio import Portfolio
 
 

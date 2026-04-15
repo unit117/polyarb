@@ -24,7 +24,7 @@ from services.simulator.portfolio import Portfolio
 if TYPE_CHECKING:
     from services.simulator.live_executor import LiveExecutor
     from services.simulator.live_reconciler import ReconciledFill
-    from services.simulator.pipeline import ValidatedExecutionBundle
+    from services.simulator.validation import ValidatedExecutionBundle
 
 logger = structlog.get_logger()
 

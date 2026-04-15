@@ -1,8 +1,7 @@
-"""Simulator pipeline: executes paper trades for optimized opportunities."""
+"""Simulator pipeline: orchestrates paper trade execution for optimized opportunities."""
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -13,13 +12,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.circuit_breaker import CircuitBreaker
-from shared.config import settings, venue_fee
+from shared.config import settings
 from shared.events import (
     CHANNEL_PORTFOLIO_UPDATED,
     CHANNEL_TRADE_EXECUTED,
     publish_event,
 )
-from shared.schemas import OptimalTrades, PortfolioUpdatedEvent, TradeExecutedEvent
+from shared.schemas import PortfolioUpdatedEvent, TradeExecutedEvent
 from shared.lifecycle import OppStatus, TradeStatus, bulk_transition_values, transition
 from shared.models import (
     ArbitrageOpportunity,
@@ -30,36 +29,21 @@ from shared.models import (
     PriceSnapshot,
 )
 from services.simulator.portfolio import Portfolio
-from services.simulator.vwap import compute_vwap
+from services.simulator.validation import (
+    ValidatedExecutionBundle,
+    ValidatedLeg,
+    build_validated_bundle,
+    get_latest_snapshot,
+)
+from services.simulator.settlement import (
+    settle_resolved_markets as _settle_resolved,
+    purge_contaminated_positions as _purge_positions,
+)
 
 if TYPE_CHECKING:
     from services.simulator.live_coordinator import LiveTradingCoordinator
 
 logger = structlog.get_logger()
-
-
-@dataclass(frozen=True)
-class ValidatedLeg:
-    market_id: int
-    outcome: str
-    side: str
-    size: float
-    entry_price: float
-    vwap_price: float
-    slippage: float
-    fees: float
-    fair_price: float
-    trade_venue: str
-
-
-@dataclass(frozen=True)
-class ValidatedExecutionBundle:
-    opportunity_id: int
-    pair_id: int
-    estimated_profit: float
-    kelly_fraction: float
-    current_prices: dict[str, float]
-    legs: list[ValidatedLeg]
 
 
 class SimulatorPipeline:
@@ -82,6 +66,10 @@ class SimulatorPipeline:
         self._execution_lock = asyncio.Lock()
         self._retry_counts: dict[int, int] = {}
         self._max_retries = settings.max_opportunity_retries
+
+    # ------------------------------------------------------------------
+    # Entry point
+    # ------------------------------------------------------------------
 
     async def simulate_opportunity(
         self,
@@ -118,10 +106,7 @@ class SimulatorPipeline:
                 transition(opp, OppStatus.EXPIRED)
                 self._retry_counts.pop(opp.id, None)
                 await session.commit()
-                logger.info(
-                    "expired_empty_trades",
-                    opportunity_id=opp.id,
-                )
+                logger.info("expired_empty_trades", opportunity_id=opp.id)
                 return {"status": "expired", "reason": "no_trades"}
 
             transition(opp, OppStatus.PENDING)
@@ -129,14 +114,10 @@ class SimulatorPipeline:
 
         try:
             return await self._execute_pending(
-                opportunity_id,
-                live_coordinator=live_coordinator,
+                opportunity_id, live_coordinator=live_coordinator,
             )
         except Exception:
-            logger.exception(
-                "pending_execution_failed",
-                opportunity_id=opportunity_id,
-            )
+            logger.exception("pending_execution_failed", opportunity_id=opportunity_id)
             try:
                 async with self.session_factory() as session:
                     opp = await session.get(ArbitrageOpportunity, opportunity_id)
@@ -144,11 +125,12 @@ class SimulatorPipeline:
                         transition(opp, OppStatus.OPTIMIZED)
                         await session.commit()
             except Exception:
-                logger.exception(
-                    "pending_revert_failed",
-                    opportunity_id=opportunity_id,
-                )
+                logger.exception("pending_revert_failed", opportunity_id=opportunity_id)
             raise
+
+    # ------------------------------------------------------------------
+    # Execution
+    # ------------------------------------------------------------------
 
     async def _execute_pending(
         self,
@@ -169,49 +151,16 @@ class SimulatorPipeline:
             market_a = await session.get(Market, pair.market_a_id)
             market_b = await session.get(Market, pair.market_b_id)
 
-            bundle = await self._build_validated_bundle(
-                session=session,
-                opp=opp,
-                market_a=market_a,
-                market_b=market_b,
+            current_prices = await self._get_current_prices()
+            bundle = await build_validated_bundle(
+                session, opp, market_a, market_b,
+                portfolio=self.portfolio,
+                max_position_size=self.max_position_size,
+                circuit_breaker=self.circuit_breaker,
+                current_prices=current_prices,
             )
             if not bundle or not bundle.legs:
-                # Expire if either market is resolved — no point recycling
-                either_resolved = any(
-                    m and m.resolved_outcome is not None
-                    for m in (market_a, market_b)
-                )
-                if either_resolved:
-                    transition(opp, OppStatus.EXPIRED)
-                    self._retry_counts.pop(opp.id, None)
-                else:
-                    # Track retry count — expire after max_retries to avoid
-                    # infinite loops on permanently blocked opportunities
-                    retries = self._retry_counts.get(opp.id, 0) + 1
-                    self._retry_counts[opp.id] = retries
-                    if retries >= self._max_retries:
-                        transition(opp, OppStatus.EXPIRED)
-                        self._retry_counts.pop(opp.id, None)
-                        logger.warning(
-                            "expired_max_retries",
-                            opportunity_id=opp.id,
-                            retries=retries,
-                        )
-                    else:
-                        transition(opp, OppStatus.OPTIMIZED)
-                await session.commit()
-                logger.info(
-                    "simulation_complete",
-                    opportunity_id=opp.id,
-                    trades_executed=0,
-                    retries=self._retry_counts.get(opp.id, 0),
-                    cash_remaining=float(self.portfolio.cash),
-                )
-                return {
-                    "status": "blocked",
-                    "trades_executed": 0,
-                    "cash_remaining": float(self.portfolio.cash),
-                }
+                return await self._handle_blocked(session, opp, market_a, market_b)
 
             trades_executed = 0
             deferred_trade_events: list[TradeExecutedEvent] = []
@@ -255,7 +204,6 @@ class SimulatorPipeline:
                 if not result["executed"]:
                     continue
 
-                # Use actual executed size (may be reduced by capital/margin limits)
                 actual_size = result["size"]
                 paper_trade = PaperTrade(
                     opportunity_id=opp.id,
@@ -300,10 +248,7 @@ class SimulatorPipeline:
                 try:
                     await live_coordinator.submit_validated_bundle(bundle)
                 except Exception:
-                    logger.exception(
-                        "live_submission_error",
-                        opportunity_id=opp.id,
-                    )
+                    logger.exception("live_submission_error", opportunity_id=opp.id)
 
             if self.circuit_breaker and trades_executed > 0:
                 self.circuit_breaker.record_success()
@@ -321,306 +266,82 @@ class SimulatorPipeline:
                 "cash_remaining": float(self.portfolio.cash),
             }
 
-    async def _build_validated_bundle(
-        self,
-        session,
-        opp: ArbitrageOpportunity,
-        market_a: Market | None,
-        market_b: Market | None,
-    ) -> ValidatedExecutionBundle | None:
-        # Reject opportunities on resolved or inactive markets
-        for m in (market_a, market_b):
-            if m and (m.resolved_outcome is not None or not m.active):
-                logger.info(
-                    "resolved_market_skipped",
-                    opportunity_id=opp.id,
-                    market_id=m.id,
-                    resolved=m.resolved_outcome,
-                    active=m.active,
-                )
-                return None
-
-        try:
-            optimal = OptimalTrades.model_validate(opp.optimal_trades)
-        except Exception:
-            logger.warning("invalid_optimal_trades", opportunity_id=opp.id)
-            return None
-
-        if optimal.estimated_profit <= 0:
-            return None
-        net_profit = optimal.estimated_profit
-
-        # Half-Kelly with a conservative cap — the edge estimates from
-        # the optimizer are noisy, so capping at 0.25 keeps per-trade
-        # exposure ≤ 25% of max_position_size (~25 shares).
-        kelly_fraction = min(net_profit * 0.5, 0.25)
-        current_prices = await self._get_current_prices()
-
-        total_value = self.portfolio.total_value(current_prices)
-        drawdown = 1.0 - (total_value / float(self.portfolio.initial_capital))
-        if drawdown > 0.05:
-            drawdown_scale = max(0.5, 1.0 - (drawdown - 0.05) / 0.10)
-            kelly_fraction *= drawdown_scale
-
-        base_size = kelly_fraction * self.max_position_size
-        validated_legs: list[ValidatedLeg] = []
-        reserved_cash = Decimal("0")
-
-        for trade in optimal.trades:
-            market = market_a if trade.market == "A" else market_b
-            if not market:
-                return None
-
-            snapshot = await _get_latest_snapshot(
-                session, market.id, settings.max_snapshot_age_seconds
-            )
-            if not snapshot:
-                logger.info(
-                    "stale_snapshot_skipped",
-                    opportunity_id=opp.id,
-                    market_id=market.id,
-                )
-                return None
-
-            midpoint = trade.market_price or 0.5
-            fill = compute_vwap(snapshot.order_book, trade.side, base_size, midpoint)
-            trade_venue = trade.venue or getattr(market, "venue", "polymarket")
-            fee_bps = trade.fee_rate_bps if trade.fee_rate_bps is not None else getattr(market, "fee_rate_bps", None)
-            fees = (
-                venue_fee(trade_venue, fill["vwap_price"], trade.side,
-                          fee_rate_bps=fee_bps)
-                * fill["filled_size"]
-            )
-
-            if trade.side == "BUY":
-                cost = (
-                    Decimal(str(fill["filled_size"]))
-                    * Decimal(str(fill["vwap_price"]))
-                    + Decimal(str(fees))
-                )
-                available = self.portfolio.cash - reserved_cash
-                if cost > available:
-                    logger.info(
-                        "insufficient_cash_for_leg",
-                        opportunity_id=opp.id,
-                        market_id=market.id,
-                        cost=float(cost),
-                        available=float(available),
-                    )
-                    return None
-                reserved_cash += cost
-
-            if trade.fair_price > 0:
-                if trade.side == "BUY":
-                    post_vwap_edge = trade.fair_price - fill["vwap_price"]
-                else:
-                    post_vwap_edge = fill["vwap_price"] - trade.fair_price
-                per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade.side,
-                                         fee_rate_bps=fee_bps)
-                if post_vwap_edge - per_share_fee <= 0:
-                    logger.info(
-                        "edge_killed_by_slippage",
-                        opportunity_id=opp.id,
-                        market_id=market.id,
-                        fair_price=trade.fair_price,
-                        vwap_price=fill["vwap_price"],
-                        post_vwap_edge=round(post_vwap_edge, 6),
-                        fee=round(per_share_fee, 6),
-                    )
-                    return None
-
-            if self.circuit_breaker:
-                allowed, reason = await self.circuit_breaker.pre_trade_check(
-                    self.portfolio,
-                    market.id,
-                    fill["filled_size"],
-                    trade_side=trade.side,
-                    outcome=trade.outcome,
-                    current_prices=current_prices,
-                )
-                if not allowed:
-                    logger.warning(
-                        "trade_blocked_by_circuit_breaker",
-                        opportunity_id=opp.id,
-                        market_id=market.id,
-                        reason=reason,
-                    )
-                    return None
-
-            validated_legs.append(
-                ValidatedLeg(
-                    market_id=market.id,
-                    outcome=trade.outcome,
-                    side=trade.side,
-                    size=fill["filled_size"],
-                    entry_price=midpoint,
-                    vwap_price=fill["vwap_price"],
-                    slippage=fill["slippage"],
-                    fees=fees,
-                    fair_price=trade.fair_price,
-                    trade_venue=trade_venue,
-                )
-            )
-
-        if not validated_legs:
-            return None
-
-        return ValidatedExecutionBundle(
-            opportunity_id=opp.id,
-            pair_id=opp.pair_id,
-            estimated_profit=float(opp.estimated_profit or 0),
-            kelly_fraction=kelly_fraction,
-            current_prices=current_prices,
-            legs=validated_legs,
+    async def _handle_blocked(self, session, opp, market_a, market_b) -> dict:
+        """Handle validation failure: expire or retry based on market state."""
+        either_resolved = any(
+            m and m.resolved_outcome is not None
+            for m in (market_a, market_b)
         )
+        if either_resolved:
+            transition(opp, OppStatus.EXPIRED)
+            self._retry_counts.pop(opp.id, None)
+        else:
+            retries = self._retry_counts.get(opp.id, 0) + 1
+            self._retry_counts[opp.id] = retries
+            if retries >= self._max_retries:
+                transition(opp, OppStatus.EXPIRED)
+                self._retry_counts.pop(opp.id, None)
+                logger.warning(
+                    "expired_max_retries",
+                    opportunity_id=opp.id,
+                    retries=retries,
+                )
+            else:
+                transition(opp, OppStatus.OPTIMIZED)
+        await session.commit()
+        logger.info(
+            "simulation_complete",
+            opportunity_id=opp.id,
+            trades_executed=0,
+            retries=self._retry_counts.get(opp.id, 0),
+            cash_remaining=float(self.portfolio.cash),
+        )
+        return {
+            "status": "blocked",
+            "trades_executed": 0,
+            "cash_remaining": float(self.portfolio.cash),
+        }
+
+    # ------------------------------------------------------------------
+    # Settlement (delegates to settlement module)
+    # ------------------------------------------------------------------
 
     async def settle_resolved_markets(self) -> dict:
         """Close all positions in markets that have resolved."""
         async with self._execution_lock:
-            return await self._settle_resolved_markets_inner()
-
-    async def _settle_resolved_markets_inner(self) -> dict:
-        stats = {"settled": 0, "pnl_realized": 0.0}
-        if not self.portfolio.positions:
-            return stats
-
-        position_market_ids = set()
-        for key in self.portfolio.positions:
-            parts = key.split(":")
-            if len(parts) == 2:
-                position_market_ids.add(int(parts[0]))
-
-        if not position_market_ids:
-            return stats
-
-        async with self.session_factory() as session:
-            result = await session.execute(
-                select(Market).where(
-                    Market.resolved_outcome.isnot(None),
-                    Market.id.in_(position_market_ids),
-                )
+            stats = await _settle_resolved(
+                self.session_factory, self.portfolio,
+                self.circuit_breaker, self.source,
             )
-
-            for market in result.scalars().all():
-                for key in list(self.portfolio.positions.keys()):
-                    if not key.startswith(f"{market.id}:"):
-                        continue
-
-                    position_outcome = key.split(":")[1]
-                    is_winner = position_outcome == market.resolved_outcome
-                    settlement_price = 1.0 if is_winner else 0.0
-
-                    close_result = self.portfolio.close_position(key, settlement_price)
-                    if not close_result["closed"]:
-                        continue
-
-                    stats["settled"] += 1
-                    stats["pnl_realized"] += close_result["pnl"]
-                    if self.circuit_breaker and close_result["pnl"] < 0:
-                        self.circuit_breaker.record_loss(abs(close_result["pnl"]))
-
-                    session.add(
-                        PaperTrade(
-                            opportunity_id=None,
-                            market_id=market.id,
-                            outcome=position_outcome,
-                            side="SETTLE",
-                            size=Decimal(str(close_result["shares"])),
-                            entry_price=Decimal(str(settlement_price)),
-                            vwap_price=Decimal(str(settlement_price)),
-                            slippage=Decimal("0"),
-                            fees=Decimal("0"),
-                            status=TradeStatus.SETTLED,
-                            source=self.source,
-                        )
-                    )
-
-            await session.commit()
-
-        if stats["settled"] > 0:
-            await self._snapshot_portfolio_inner()
-            logger.info("settlement_complete", **stats)
-
-        return stats
+            if stats["settled"] > 0:
+                await self._snapshot_portfolio_inner()
+            return stats
 
     async def purge_contaminated_positions(self) -> dict:
         """One-time cleanup: close ALL open positions at current market prices."""
         async with self._execution_lock:
-            return await self._purge_contaminated_positions_inner()
+            current_prices = await self._get_current_prices()
+            stats = await _purge_positions(
+                self.session_factory, self.portfolio,
+                self.source, current_prices,
+            )
+            await self._snapshot_portfolio_inner()
+            return stats
 
-    async def _purge_contaminated_positions_inner(self) -> dict:
-        if not self.portfolio.positions:
-            return {"purged": 0, "pnl_realized": 0.0}
-
-        current_prices = await self._get_current_prices()
-        stats = {
-            "purged": 0,
-            "pnl_realized": 0.0,
-            "positions_before": len(self.portfolio.positions),
-        }
-
-        async with self.session_factory() as session:
-            for key in list(self.portfolio.positions.keys()):
-                parts = key.split(":")
-                if len(parts) != 2:
-                    continue
-
-                market_id = int(parts[0])
-                outcome = parts[1]
-                price = current_prices.get(key, 0.5)
-
-                close_result = self.portfolio.close_position(key, price)
-                if not close_result["closed"]:
-                    continue
-
-                stats["purged"] += 1
-                stats["pnl_realized"] += close_result["pnl"]
-                session.add(
-                    PaperTrade(
-                        opportunity_id=None,
-                        market_id=market_id,
-                        outcome=outcome,
-                        side="PURGE",
-                        size=Decimal(str(close_result["shares"])),
-                        entry_price=Decimal(str(price)),
-                        vwap_price=Decimal(str(price)),
-                        slippage=Decimal("0"),
-                        fees=Decimal("0"),
-                        status=TradeStatus.PURGED,
-                        source=self.source,
-                    )
-                )
-
-            await session.commit()
-
-        self.portfolio.total_trades = 0
-        self.portfolio.settled_trades = 0
-        self.portfolio.winning_trades = 0
-        self.portfolio.realized_pnl = Decimal("0")
-
-        await self._snapshot_portfolio_inner()
-
-        logger.info(
-            "contamination_purge_complete",
-            positions_closed=stats["purged"],
-            pnl_realized=stats["pnl_realized"],
-            cash_after=float(self.portfolio.cash),
-        )
-        return stats
+    # ------------------------------------------------------------------
+    # Portfolio snapshots & pricing
+    # ------------------------------------------------------------------
 
     async def _get_current_prices(self) -> dict[str, float]:
         """Fetch latest prices for all open positions.
 
         Resolved markets are priced at their settlement value (1.0 or 0.0)
-        regardless of stale snapshots, so that total_value and drawdown
-        calculations stay accurate even when the settlement loop hasn't
-        run yet.
+        regardless of stale snapshots.
         """
         prices: dict[str, float] = {}
         if not self.portfolio.positions:
             return prices
 
-        # Collect market IDs from open positions
         market_ids: set[int] = set()
         for key in self.portfolio.positions:
             parts = key.split(":")
@@ -631,8 +352,6 @@ class SimulatorPipeline:
             return prices
 
         async with self.session_factory() as session:
-            # Batch-query resolved markets — use settlement price instead
-            # of stale snapshots so valuation stays accurate.
             resolved: dict[int, str] = {}
             result = await session.execute(
                 select(Market.id, Market.resolved_outcome).where(
@@ -650,12 +369,11 @@ class SimulatorPipeline:
                 market_id = int(parts[0])
                 position_outcome = parts[1]
 
-                # Resolved market → settlement price
                 if market_id in resolved:
                     prices[key] = 1.0 if position_outcome == resolved[market_id] else 0.0
                     continue
 
-                snapshot = await _get_latest_snapshot(session, market_id)
+                snapshot = await get_latest_snapshot(session, market_id)
                 if snapshot and snapshot.midpoints:
                     price = snapshot.midpoints.get(position_outcome)
                     if price is not None:
@@ -699,6 +417,10 @@ class SimulatorPipeline:
             PortfolioUpdatedEvent.model_validate(snap),
         )
 
+    # ------------------------------------------------------------------
+    # Batch processing
+    # ------------------------------------------------------------------
+
     async def _revert_stale_pending(self) -> None:
         """Revert pending opportunities older than 5 minutes to optimized."""
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
@@ -734,8 +456,7 @@ class SimulatorPipeline:
         except Exception:
             logger.exception("stale_pending_revert_error")
 
-        # Expire stale opportunities older than 24h — they clog the batch
-        # and will never have fresh enough snapshots for execution
+        # Expire stale opportunities older than 24h
         try:
             async with self.session_factory() as session:
                 cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -767,8 +488,7 @@ class SimulatorPipeline:
         for opp_id in opp_ids:
             try:
                 result = await self.simulate_opportunity(
-                    opp_id,
-                    live_coordinator=live_coordinator,
+                    opp_id, live_coordinator=live_coordinator,
                 )
                 stats["processed"] += 1
                 if result["status"] == "simulated":
@@ -788,17 +508,3 @@ class SimulatorPipeline:
             logger.info("batch_simulation_complete", **stats)
 
         return stats
-
-
-async def _get_latest_snapshot(session, market_id: int, max_age_seconds: int = 0):
-    query = (
-        select(PriceSnapshot)
-        .where(PriceSnapshot.market_id == market_id)
-        .order_by(PriceSnapshot.timestamp.desc())
-        .limit(1)
-    )
-    if max_age_seconds > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
-        query = query.where(PriceSnapshot.timestamp >= cutoff)
-    result = await session.execute(query)
-    return result.scalar_one_or_none()
