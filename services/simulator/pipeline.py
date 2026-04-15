@@ -17,8 +17,9 @@ from shared.config import settings, venue_fee
 from shared.events import (
     CHANNEL_PORTFOLIO_UPDATED,
     CHANNEL_TRADE_EXECUTED,
-    publish,
+    publish_event,
 )
+from shared.schemas import OptimalTrades, PortfolioUpdatedEvent, TradeExecutedEvent
 from shared.lifecycle import OppStatus, TradeStatus, bulk_transition_values, transition
 from shared.models import (
     ArbitrageOpportunity,
@@ -113,7 +114,7 @@ class SimulatorPipeline:
             if opp.status not in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED):
                 return {"status": "skipped", "reason": opp.status}
 
-            if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
+            if not opp.optimal_trades or not opp.optimal_trades.get("trades", []):
                 transition(opp, OppStatus.EXPIRED)
                 self._retry_counts.pop(opp.id, None)
                 await session.commit()
@@ -213,7 +214,7 @@ class SimulatorPipeline:
                 }
 
             trades_executed = 0
-            deferred_trade_events: list[dict] = []
+            deferred_trade_events: list[TradeExecutedEvent] = []
             for leg in bundle.legs:
                 key = f"{leg.market_id}:{leg.outcome}"
                 existing_position = self.portfolio.positions.get(key, Decimal("0"))
@@ -274,18 +275,16 @@ class SimulatorPipeline:
                 await session.flush()
                 trades_executed += 1
 
-                deferred_trade_events.append(
-                    {
-                        "trade_id": paper_trade.id,
-                        "opportunity_id": opp.id,
-                        "market_id": leg.market_id,
-                        "outcome": leg.outcome,
-                        "side": leg.side,
-                        "size": leg.size,
-                        "vwap_price": leg.vwap_price,
-                        "slippage": leg.slippage,
-                    }
-                )
+                deferred_trade_events.append(TradeExecutedEvent(
+                    trade_id=paper_trade.id,
+                    opportunity_id=opp.id,
+                    market_id=leg.market_id,
+                    outcome=leg.outcome,
+                    side=leg.side,
+                    size=leg.size,
+                    vwap_price=leg.vwap_price,
+                    slippage=leg.slippage,
+                ))
 
             if trades_executed > 0:
                 transition(opp, OppStatus.SIMULATED)
@@ -295,7 +294,7 @@ class SimulatorPipeline:
             await session.commit()
 
             for event in deferred_trade_events:
-                await publish(self.redis, CHANNEL_TRADE_EXECUTED, event)
+                await publish_event(self.redis, CHANNEL_TRADE_EXECUTED, event)
 
             if live_coordinator and trades_executed > 0:
                 try:
@@ -341,9 +340,15 @@ class SimulatorPipeline:
                 )
                 return None
 
-        net_profit = opp.optimal_trades.get("estimated_profit", 0)
-        if net_profit <= 0:
+        try:
+            optimal = OptimalTrades.model_validate(opp.optimal_trades)
+        except Exception:
+            logger.warning("invalid_optimal_trades", opportunity_id=opp.id)
             return None
+
+        if optimal.estimated_profit <= 0:
+            return None
+        net_profit = optimal.estimated_profit
 
         # Half-Kelly with a conservative cap — the edge estimates from
         # the optimizer are noisy, so capping at 0.25 keeps per-trade
@@ -361,8 +366,8 @@ class SimulatorPipeline:
         validated_legs: list[ValidatedLeg] = []
         reserved_cash = Decimal("0")
 
-        for trade in opp.optimal_trades["trades"]:
-            market = market_a if trade["market"] == "A" else market_b
+        for trade in optimal.trades:
+            market = market_a if trade.market == "A" else market_b
             if not market:
                 return None
 
@@ -377,17 +382,17 @@ class SimulatorPipeline:
                 )
                 return None
 
-            midpoint = trade.get("market_price", 0.5)
-            fill = compute_vwap(snapshot.order_book, trade["side"], base_size, midpoint)
-            trade_venue = trade.get("venue", getattr(market, "venue", "polymarket"))
-            fee_bps = trade.get("fee_rate_bps", getattr(market, "fee_rate_bps", None))
+            midpoint = trade.market_price or 0.5
+            fill = compute_vwap(snapshot.order_book, trade.side, base_size, midpoint)
+            trade_venue = trade.venue or getattr(market, "venue", "polymarket")
+            fee_bps = trade.fee_rate_bps if trade.fee_rate_bps is not None else getattr(market, "fee_rate_bps", None)
             fees = (
-                venue_fee(trade_venue, fill["vwap_price"], trade["side"],
+                venue_fee(trade_venue, fill["vwap_price"], trade.side,
                           fee_rate_bps=fee_bps)
                 * fill["filled_size"]
             )
 
-            if trade["side"] == "BUY":
+            if trade.side == "BUY":
                 cost = (
                     Decimal(str(fill["filled_size"]))
                     * Decimal(str(fill["vwap_price"]))
@@ -405,20 +410,19 @@ class SimulatorPipeline:
                     return None
                 reserved_cash += cost
 
-            fair_price = trade.get("fair_price", 0.0)
-            if fair_price > 0:
-                if trade["side"] == "BUY":
-                    post_vwap_edge = fair_price - fill["vwap_price"]
+            if trade.fair_price > 0:
+                if trade.side == "BUY":
+                    post_vwap_edge = trade.fair_price - fill["vwap_price"]
                 else:
-                    post_vwap_edge = fill["vwap_price"] - fair_price
-                per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade["side"],
+                    post_vwap_edge = fill["vwap_price"] - trade.fair_price
+                per_share_fee = venue_fee(trade_venue, fill["vwap_price"], trade.side,
                                          fee_rate_bps=fee_bps)
                 if post_vwap_edge - per_share_fee <= 0:
                     logger.info(
                         "edge_killed_by_slippage",
                         opportunity_id=opp.id,
                         market_id=market.id,
-                        fair_price=fair_price,
+                        fair_price=trade.fair_price,
                         vwap_price=fill["vwap_price"],
                         post_vwap_edge=round(post_vwap_edge, 6),
                         fee=round(per_share_fee, 6),
@@ -430,8 +434,8 @@ class SimulatorPipeline:
                     self.portfolio,
                     market.id,
                     fill["filled_size"],
-                    trade_side=trade["side"],
-                    outcome=trade["outcome"],
+                    trade_side=trade.side,
+                    outcome=trade.outcome,
                     current_prices=current_prices,
                 )
                 if not allowed:
@@ -446,14 +450,14 @@ class SimulatorPipeline:
             validated_legs.append(
                 ValidatedLeg(
                     market_id=market.id,
-                    outcome=trade["outcome"],
-                    side=trade["side"],
+                    outcome=trade.outcome,
+                    side=trade.side,
                     size=fill["filled_size"],
                     entry_price=midpoint,
                     vwap_price=fill["vwap_price"],
                     slippage=fill["slippage"],
                     fees=fees,
-                    fair_price=fair_price,
+                    fair_price=trade.fair_price,
                     trade_venue=trade_venue,
                 )
             )
@@ -689,7 +693,11 @@ class SimulatorPipeline:
             )
             await session.commit()
 
-        await publish(self.redis, CHANNEL_PORTFOLIO_UPDATED, snap)
+        await publish_event(
+            self.redis,
+            CHANNEL_PORTFOLIO_UPDATED,
+            PortfolioUpdatedEvent.model_validate(snap),
+        )
 
     async def _revert_stale_pending(self) -> None:
         """Revert pending opportunities older than 5 minutes to optimized."""

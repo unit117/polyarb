@@ -9,10 +9,13 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from pydantic import ValidationError
+
 from shared.config import settings
-from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish
+from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish_event
 from shared.lifecycle import OppStatus, bulk_transition_values, transition
 from shared.models import ArbitrageOpportunity, Market, MarketPair, PriceSnapshot
+from shared.schemas import ConstraintMatrix, OptimizationCompleteEvent
 from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
 
@@ -61,29 +64,29 @@ class OptimizerPipeline:
                 logger.warning("pair_missing_constraints", pair_id=opp.pair_id)
                 return {"status": "no_constraints"}
 
-            constraint = pair.constraint_matrix
-            dep_type = constraint.get("type", "")
-            outcomes_a = constraint.get("outcomes_a", [])
-            outcomes_b = constraint.get("outcomes_b", [])
-            feasibility = constraint.get("matrix", [])
-
-            if not outcomes_a or not outcomes_b or not feasibility:
+            try:
+                constraint = ConstraintMatrix.model_validate(pair.constraint_matrix)
+            except ValidationError:
                 logger.warning("invalid_constraint_matrix", pair_id=pair.id)
+                return {"status": "invalid_constraints"}
+
+            if not constraint.outcomes_a or not constraint.outcomes_b or not constraint.matrix:
+                logger.warning("empty_constraint_matrix", pair_id=pair.id)
                 return {"status": "invalid_constraints"}
 
             # Skip conditional pairs whose matrix is all-ones (unconstrained),
             # or when skip_conditional is forced — UNLESS the pair was classified
             # via resolution vectors and has a non-trivial matrix (at least one
             # infeasible cell), in which case evaluate it regardless.
-            if dep_type == "conditional":
+            if constraint.type == "conditional":
                 is_unconstrained = all(
-                    feasibility[i][j] == 1
-                    for i in range(len(feasibility))
-                    for j in range(len(feasibility[0]))
-                ) if feasibility else True
-                source = constraint.get("classification_source", "")
+                    constraint.matrix[i][j] == 1
+                    for i in range(len(constraint.matrix))
+                    for j in range(len(constraint.matrix[0]))
+                ) if constraint.matrix else True
                 vector_with_constraints = (
-                    source == "llm_vector" and not is_unconstrained
+                    constraint.classification_source == "llm_vector"
+                    and not is_unconstrained
                 )
                 if is_unconstrained or (
                     self.skip_conditional and not vector_with_constraints
@@ -108,21 +111,21 @@ class OptimizerPipeline:
                 return {"status": "no_prices"}
 
             # Build price vectors aligned with outcomes
-            p_a = np.array([prices_a.get(o, 0.5) for o in outcomes_a], dtype=np.float64)
-            p_b = np.array([prices_b.get(o, 0.5) for o in outcomes_b], dtype=np.float64)
+            p_a = np.array([prices_a.get(o, 0.5) for o in constraint.outcomes_a], dtype=np.float64)
+            p_b = np.array([prices_b.get(o, 0.5) for o in constraint.outcomes_b], dtype=np.float64)
 
             # Run Frank-Wolfe
             logger.info(
                 "starting_optimization",
                 opportunity_id=opportunity_id,
                 pair_id=pair.id,
-                n_outcomes=f"{len(outcomes_a)}x{len(outcomes_b)}",
+                n_outcomes=f"{len(constraint.outcomes_a)}x{len(constraint.outcomes_b)}",
             )
 
             result = optimize(
                 prices_a=p_a,
                 prices_b=p_b,
-                feasibility_matrix=feasibility,
+                feasibility_matrix=constraint.matrix,
                 max_iterations=self.max_iterations,
                 gap_tolerance=self.gap_tolerance,
                 ip_timeout_ms=self.ip_timeout_ms,
@@ -137,11 +140,11 @@ class OptimizerPipeline:
             fr_b = getattr(market_b, "fee_rate_bps", None) if market_b else None
 
             # Compute trades
-            theoretical_profit = float(constraint.get("profit_bound", 0.0))
+            theoretical_profit = constraint.profit_bound
             trade_info = compute_trades(
                 result,
-                outcomes_a,
-                outcomes_b,
+                constraint.outcomes_a,
+                constraint.outcomes_b,
                 theoretical_profit=theoretical_profit,
                 min_edge=self.min_edge,
                 venue_a=v_a,
@@ -153,26 +156,26 @@ class OptimizerPipeline:
             # Update opportunity
             opp.fw_iterations = result.iterations
             opp.bregman_gap = result.final_gap
-            opp.estimated_profit = Decimal(str(trade_info["estimated_profit"]))
-            opp.optimal_trades = trade_info
+            opp.estimated_profit = Decimal(str(trade_info.estimated_profit))
+            opp.optimal_trades = trade_info.model_dump()
             transition(opp, OppStatus.OPTIMIZED if result.converged else OppStatus.UNCONVERGED)
 
             await session.commit()
 
             # Publish result
-            await publish(
+            await publish_event(
                 self.redis,
                 CHANNEL_OPTIMIZATION_COMPLETE,
-                {
-                    "opportunity_id": opp.id,
-                    "pair_id": pair.id,
-                    "status": opp.status,
-                    "iterations": result.iterations,
-                    "bregman_gap": result.final_gap,
-                    "estimated_profit": trade_info["estimated_profit"],
-                    "n_trades": len(trade_info["trades"]),
-                    "converged": result.converged,
-                },
+                OptimizationCompleteEvent(
+                    opportunity_id=opp.id,
+                    pair_id=pair.id,
+                    status=opp.status,
+                    iterations=result.iterations,
+                    bregman_gap=result.final_gap,
+                    estimated_profit=trade_info.estimated_profit,
+                    n_trades=len(trade_info.trades),
+                    converged=result.converged,
+                ),
             )
 
             logger.info(
@@ -181,15 +184,15 @@ class OptimizerPipeline:
                 status=opp.status,
                 iterations=result.iterations,
                 gap=result.final_gap,
-                estimated_profit=trade_info["estimated_profit"],
+                estimated_profit=trade_info.estimated_profit,
             )
 
             return {
                 "status": opp.status,
                 "iterations": result.iterations,
                 "gap": result.final_gap,
-                "estimated_profit": trade_info["estimated_profit"],
-                "trades": len(trade_info["trades"]),
+                "estimated_profit": trade_info.estimated_profit,
+                "trades": len(trade_info.trades),
             }
 
     async def process_pending(self) -> dict:

@@ -1,9 +1,13 @@
 import json
 from collections.abc import AsyncGenerator
+from typing import TypeVar
 
 import redis.asyncio as aioredis
+from pydantic import BaseModel
 
 from shared.config import settings
+
+T = TypeVar("T", bound=BaseModel)
 
 # Channel payload schemas (all payloads are JSON dicts):
 #
@@ -42,6 +46,11 @@ async def publish(r: aioredis.Redis, channel: str, payload: dict) -> None:
     await r.publish(channel, json.dumps(payload))
 
 
+async def publish_event(r: aioredis.Redis, channel: str, event: BaseModel) -> None:
+    """Typed publish — serializes a Pydantic model to the channel."""
+    await r.publish(channel, event.model_dump_json())
+
+
 async def subscribe(
     r: aioredis.Redis, channel: str
 ) -> AsyncGenerator[dict, None]:
@@ -54,3 +63,11 @@ async def subscribe(
     finally:
         await pubsub.unsubscribe(channel)
         await pubsub.aclose()
+
+
+async def subscribe_typed(
+    r: aioredis.Redis, channel: str, model: type[T]
+) -> AsyncGenerator[T, None]:
+    """Typed subscribe — validates each message into a Pydantic model."""
+    async for raw in subscribe(r, channel):
+        yield model.model_validate(raw)

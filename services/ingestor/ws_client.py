@@ -21,8 +21,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from shared.events import (
     CHANNEL_MARKET_RESOLVED,
     CHANNEL_SNAPSHOT_CREATED,
-    publish,
+    publish_event,
 )
+from shared.schemas import MarketResolvedEvent, SnapshotCreatedEvent
 from shared.models import Market, PriceSnapshot
 
 log = structlog.get_logger()
@@ -349,19 +350,19 @@ class ClobWebSocket:
                                     mkt.resolved_at = datetime.now(timezone.utc)
                                     mkt.active = False
                                     await session.commit()
-                                    await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
-                                        "market_id": market_id,
-                                        "resolved_outcome": outcome,
-                                        "source": "ws_price_inference",
-                                        "price": price,
-                                    })
+                                    await publish_event(self._redis, CHANNEL_MARKET_RESOLVED, MarketResolvedEvent(
+                                        market_id=market_id,
+                                        resolved_outcome=outcome,
+                                        source="ws_price_inference",
+                                        price=price,
+                                    ))
 
                 if fresh_ids:
-                    await publish(self._redis, CHANNEL_SNAPSHOT_CREATED, {
-                        "count": len(fresh_ids),
-                        "source": "websocket",
-                        "market_ids": fresh_ids,
-                    })
+                    await publish_event(self._redis, CHANNEL_SNAPSHOT_CREATED, SnapshotCreatedEvent(
+                        count=len(fresh_ids),
+                        source="websocket",
+                        market_ids=fresh_ids,
+                    ))
                 log.info(
                     "ws_snapshots_flushed",
                     count=len(rows),

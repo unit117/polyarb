@@ -175,12 +175,12 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
                 implication_direction=imp_direction,
             )
 
-        profit = fresh.get("profit_bound", 0.0)
+        profit = fresh.profit_bound
         if profit <= 0:
             continue
 
         # Update stored constraint matrix so optimizer reads fresh feasibility
-        pair.constraint_matrix = fresh
+        pair.constraint_matrix = fresh.model_dump()
 
         opp = ArbitrageOpportunity(
             pair_id=pair.id,
@@ -242,7 +242,7 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
             implication_direction=imp_direction,
         )
 
-    feasibility = fresh.get("matrix", [])
+    feasibility = fresh.matrix
     if not feasibility:
         return {"status": "invalid_constraints"}
 
@@ -269,14 +269,14 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
 
     opp.fw_iterations = result.iterations
     opp.bregman_gap = result.final_gap
-    opp.estimated_profit = Decimal(str(trade_info["estimated_profit"]))
-    opp.optimal_trades = trade_info
+    opp.estimated_profit = Decimal(str(trade_info.estimated_profit))
+    opp.optimal_trades = trade_info.model_dump()
     transition(opp, OppStatus.OPTIMIZED if result.converged else OppStatus.UNCONVERGED)
 
     return {
         "status": opp.status,
-        "estimated_profit": trade_info["estimated_profit"],
-        "trades": len(trade_info["trades"]),
+        "estimated_profit": trade_info.estimated_profit,
+        "trades": len(trade_info.trades),
     }
 
 
@@ -296,8 +296,10 @@ async def simulate_opportunity(
     if not opp or opp.status not in ("optimized", "unconverged"):
         return {"status": "skipped"}
 
-    if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
+    if not opp.optimal_trades or not opp.optimal_trades.get("trades", []):
         return {"status": "no_trades"}
+    from shared.schemas import OptimalTrades as _OT
+    optimal = _OT.model_validate(opp.optimal_trades)
 
     pair = await session.get(MarketPair, opp.pair_id)
     if not pair:
@@ -323,7 +325,7 @@ async def simulate_opportunity(
     trades_executed = 0
 
     # Half-Kelly sizing — same formula as live pipeline
-    net_profit = opp.optimal_trades.get("estimated_profit", 0)
+    net_profit = optimal.estimated_profit
     if net_profit <= 0:
         transition(opp, OppStatus.SIMULATED)
         return {"status": "simulated", "trades_executed": 0}
@@ -342,18 +344,18 @@ async def simulate_opportunity(
 
     # Pass 1: compute fills for all legs to determine proportional scaling
     leg_fills = []
-    for trade in opp.optimal_trades["trades"]:
-        market = market_a if trade["market"] == "A" else market_b
+    for trade in optimal.trades:
+        market = market_a if trade.market == "A" else market_b
         if not market:
             leg_fills.append(None)
             continue
 
         snapshot = await get_snapshot_at(session, market.id, as_of)
         order_book = snapshot.order_book if snapshot else None
-        midpoint = trade.get("market_price", 0.5)
+        midpoint = trade.market_price or 0.5
 
         size = base_size
-        fill = compute_vwap(order_book, trade["side"], size, midpoint)
+        fill = compute_vwap(order_book, trade.side, size, midpoint)
         leg_fills.append({"fill": fill, "requested_size": size, "market": market, "midpoint": midpoint})
 
     # Cross-leg proportional scaling: match the smallest fill ratio
@@ -363,7 +365,7 @@ async def simulate_opportunity(
             fill_ratios.append(lf["fill"]["filled_size"] / lf["requested_size"])
     min_ratio = min(fill_ratios) if fill_ratios else 1.0
 
-    for i, trade in enumerate(opp.optimal_trades["trades"]):
+    for i, trade in enumerate(optimal.trades):
         lf = leg_fills[i]
         if not lf:
             continue
@@ -379,21 +381,21 @@ async def simulate_opportunity(
                 fill = dict(fill)  # copy to avoid mutating
                 fill["filled_size"] = round(scaled_size, 6)
 
-        fees = polymarket_fee(fill["vwap_price"], trade["side"]) * fill["filled_size"]
+        fees = polymarket_fee(fill["vwap_price"], trade.side) * fill["filled_size"]
 
         # Track rebalancing exit PnL before executing (match live pipeline)
-        key = f"{market.id}:{trade['outcome']}"
+        key = f"{market.id}:{trade.outcome}"
         existing_position = portfolio.positions.get(key, Decimal("0"))
         is_exit = (
-            (trade["side"] == "SELL" and existing_position > 0)
-            or (trade["side"] == "BUY" and existing_position < 0)
+            (trade.side == "SELL" and existing_position > 0)
+            or (trade.side == "BUY" and existing_position < 0)
         )
         pre_trade_cost = portfolio.cost_basis.get(key, Decimal("0"))
 
         result = portfolio.execute_trade(
             market_id=market.id,
-            outcome=trade["outcome"],
-            side=trade["side"],
+            outcome=trade.outcome,
+            side=trade.side,
             size=fill["filled_size"],
             vwap_price=fill["vwap_price"],
             fees=fees,
@@ -425,8 +427,8 @@ async def simulate_opportunity(
         paper_trade = PaperTrade(
             opportunity_id=opp.id,
             market_id=market.id,
-            outcome=trade["outcome"],
-            side=trade["side"],
+            outcome=trade.outcome,
+            side=trade.side,
             size=Decimal(str(fill["filled_size"])),
             entry_price=Decimal(str(midpoint)),
             vwap_price=Decimal(str(fill["vwap_price"])),

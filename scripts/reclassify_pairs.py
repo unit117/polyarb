@@ -35,6 +35,7 @@ sys.path.insert(0, ".")
 from shared.config import settings
 from shared.db import SessionFactory, init_db
 from shared.models import Market, MarketPair
+from shared.schemas import ConstraintMatrix
 from services.detector.classifier import classify_pair
 
 log = structlog.get_logger()
@@ -199,15 +200,15 @@ async def reclassify_all(
                 constraint_matrix = None
                 verified = False
             else:
-                constraint_matrix = {
-                    "type": new_type,
-                    "outcomes_a": outcomes_a,
-                    "outcomes_b": outcomes_b,
-                    "correlation": new_correlation,
-                    "implication_direction": new_direction,
-                    "matrix": [[1] * len(outcomes_b) for _ in range(len(outcomes_a))],
-                    "profit_bound": 0.0,  # placeholder — backtest recomputes
-                }
+                constraint_matrix = ConstraintMatrix(
+                    type=new_type,
+                    outcomes_a=outcomes_a,
+                    outcomes_b=outcomes_b,
+                    correlation=new_correlation,
+                    implication_direction=new_direction,
+                    matrix=[[1] * len(outcomes_b) for _ in range(len(outcomes_a))],
+                    profit_bound=0.0,  # placeholder — backtest recomputes
+                ).model_dump()
                 # Keep verified=True so the backtest can load these pairs.
                 # The backtest re-verifies with real prices each day
                 # (backtest.py L126-137) — that's the real gate.

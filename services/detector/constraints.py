@@ -2,11 +2,13 @@ from __future__ import annotations
 
 """Constraint matrix generation for the optimizer.
 
-Given a dependency type and two markets, produces a JSONB-serializable
-constraint matrix that Phase 3's Frank-Wolfe optimizer will consume.
+Given a dependency type and two markets, produces a typed ConstraintMatrix
+that Phase 3's Frank-Wolfe optimizer will consume.
 """
 
 import structlog
+
+from shared.schemas import ConstraintMatrix
 
 logger = structlog.get_logger()
 
@@ -44,17 +46,8 @@ def build_constraint_matrix(
     implication_direction: str | None = None,
     fee_rate_bps_a: int | None = None,
     fee_rate_bps_b: int | None = None,
-) -> dict:
-    """Build a constraint matrix for a market pair.
-
-    Returns a dict with:
-    - type: the dependency type
-    - outcomes_a, outcomes_b: outcome labels
-    - matrix: a len(outcomes_a) x len(outcomes_b) binary feasibility matrix
-      where 1 = feasible joint outcome, 0 = infeasible
-    - profit_bound: theoretical profit if prices violate constraints
-    - correlation: "positive" or "negative" for conditional pairs
-    """
+) -> ConstraintMatrix:
+    """Build a constraint matrix for a market pair."""
     # Normalise binary outcome order so positive is at index 0.
     # Prices are dict-keyed by name — only the list order changes.
     outcomes_a = _positive_first(outcomes_a)
@@ -91,15 +84,15 @@ def build_constraint_matrix(
         fee_rate_bps_a=fee_rate_bps_a, fee_rate_bps_b=fee_rate_bps_b,
     )
 
-    result = {
-        "type": dependency_type,
-        "outcomes_a": outcomes_a,
-        "outcomes_b": outcomes_b,
-        "matrix": matrix,
-        "profit_bound": profit_bound,
-        "correlation": correlation,
-        "implication_direction": implication_direction,
-    }
+    result = ConstraintMatrix(
+        type=dependency_type,
+        outcomes_a=outcomes_a,
+        outcomes_b=outcomes_b,
+        matrix=matrix,
+        profit_bound=profit_bound,
+        correlation=correlation,
+        implication_direction=implication_direction,
+    )
 
     logger.info(
         "constraint_matrix_built",
@@ -255,14 +248,8 @@ def build_constraint_matrix_from_vectors(
     venue_b: str = "polymarket",
     fee_rate_bps_a: int | None = None,
     fee_rate_bps_b: int | None = None,
-) -> dict:
-    """Build constraint matrix directly from resolution vectors.
-
-    Populates the feasibility matrix from the LLM's valid_outcomes list
-    instead of from a dependency type label, preserving full information.
-    Still computes profit bound using type-specific formulas (retained until
-    a proved matrix-based bound handles both buy and sell sides).
-    """
+) -> ConstraintMatrix:
+    """Build constraint matrix directly from resolution vectors."""
     n_a = len(outcomes_a)
     n_b = len(outcomes_b)
 
@@ -286,16 +273,16 @@ def build_constraint_matrix_from_vectors(
         fee_rate_bps_a=fee_rate_bps_a, fee_rate_bps_b=fee_rate_bps_b,
     )
 
-    result = {
-        "type": dependency_type,
-        "outcomes_a": outcomes_a,
-        "outcomes_b": outcomes_b,
-        "matrix": matrix,
-        "profit_bound": profit_bound,
-        "correlation": correlation,
-        "implication_direction": implication_direction,
-        "classification_source": "llm_vector",
-    }
+    result = ConstraintMatrix(
+        type=dependency_type,
+        outcomes_a=outcomes_a,
+        outcomes_b=outcomes_b,
+        matrix=matrix,
+        profit_bound=profit_bound,
+        correlation=correlation,
+        implication_direction=implication_direction,
+        classification_source="llm_vector",
+    )
 
     logger.info(
         "constraint_matrix_from_vectors",

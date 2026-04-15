@@ -191,7 +191,7 @@ async def main() -> None:
                     correlation=correlation,
                     implication_direction=imp_direction,
                 )
-            pair.constraint_matrix = fresh_constraint
+            pair.constraint_matrix = fresh_constraint.model_dump()
             stats["rebuilt"] += 1
 
             # Re-verify

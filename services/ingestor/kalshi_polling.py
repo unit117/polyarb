@@ -14,8 +14,9 @@ from shared.events import (
     CHANNEL_MARKET_UPDATED,
     CHANNEL_MARKET_RESOLVED,
     CHANNEL_SNAPSHOT_CREATED,
-    publish,
+    publish_event,
 )
+from shared.schemas import MarketResolvedEvent, MarketUpdatedEvent, SnapshotCreatedEvent
 from shared.models import Market, PriceSnapshot
 from services.ingestor.embedder import Embedder
 from services.ingestor.kalshi_client import KalshiClient
@@ -142,10 +143,10 @@ class KalshiPoller:
             markets = list(result.scalars().all())
 
         log.info("kalshi_sync_done", active=len(markets))
-        await publish(
+        await publish_event(
             self._redis,
             CHANNEL_MARKET_UPDATED,
-            {"action": "sync", "count": len(markets), "venue": "kalshi"},
+            MarketUpdatedEvent(action="sync", count=len(markets)),
         )
         return markets
 
@@ -206,14 +207,14 @@ class KalshiPoller:
 
         log.info("kalshi_snapshots_done", count=len(snapshots_to_insert))
         if snapshots_to_insert:
-            await publish(
+            await publish_event(
                 self._redis,
                 CHANNEL_SNAPSHOT_CREATED,
-                {
-                    "count": len(snapshots_to_insert),
-                    "source": "kalshi_polling",
-                    "market_ids": [s["market_id"] for s in snapshots_to_insert],
-                },
+                SnapshotCreatedEvent(
+                    count=len(snapshots_to_insert),
+                    source="kalshi_polling",
+                    market_ids=[s["market_id"] for s in snapshots_to_insert],
+                ),
             )
 
     async def check_resolved_markets(self) -> None:
@@ -279,11 +280,11 @@ class KalshiPoller:
 
         # Publish events after commit
         for market in to_resolve:
-            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
-                "market_id": market.id,
-                "resolved_outcome": market.resolved_outcome,
-                "source": "kalshi_api",
-            })
+            await publish_event(self._redis, CHANNEL_MARKET_RESOLVED, MarketResolvedEvent(
+                market_id=market.id,
+                resolved_outcome=market.resolved_outcome,
+                source="kalshi_api",
+            ))
 
     async def poll_once(self) -> list[Market]:
         log.info("kalshi_poll_cycle_start")

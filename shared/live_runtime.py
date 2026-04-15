@@ -10,8 +10,9 @@ from shared.events import (
     CHANNEL_LIVE_STATUS,
     REDIS_LIVE_KILL_SWITCH_KEY,
     REDIS_LIVE_STATUS_KEY,
-    publish,
+    publish_event,
 )
+from shared.schemas import LiveStatusEvent
 
 
 def _utc_now_iso() -> str:
@@ -40,7 +41,7 @@ async def set_live_runtime_status(
     status = dict(payload)
     status["updated_at"] = _utc_now_iso()
     await redis.set(REDIS_LIVE_STATUS_KEY, json.dumps(status))
-    await publish(redis, CHANNEL_LIVE_STATUS, status)
+    await publish_event(redis, CHANNEL_LIVE_STATUS, LiveStatusEvent.model_validate(status))
     return status
 
 

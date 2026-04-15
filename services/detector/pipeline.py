@@ -15,7 +15,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish
+from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish_event
+from shared.schemas import ArbitrageFoundEvent, PairDetectedEvent
 from shared.lifecycle import IN_FLIGHT, OppStatus, transition
 from shared.models import (
     ArbitrageOpportunity,
@@ -311,7 +312,7 @@ class DetectionPipeline:
                     market_b_id=market_b.id,
                     dependency_type=classification["dependency_type"],
                     confidence=classification["confidence"],
-                    constraint_matrix=constraint,
+                    constraint_matrix=constraint.model_dump(),
                     resolution_vectors=classification.get("valid_outcomes"),
                     implication_direction=classification.get("implication_direction"),
                     classification_source=classification.get("classification_source"),
@@ -323,17 +324,17 @@ class DetectionPipeline:
 
                 deferred_events.append((
                     CHANNEL_PAIR_DETECTED,
-                    {
-                        "pair_id": pair.id,
-                        "market_a_id": market_a.id,
-                        "market_b_id": market_b.id,
-                        "dependency_type": classification["dependency_type"],
-                        "confidence": classification["confidence"],
-                    },
+                    PairDetectedEvent(
+                        pair_id=pair.id,
+                        market_a_id=market_a.id,
+                        market_b_id=market_b.id,
+                        dependency_type=classification["dependency_type"],
+                        confidence=classification["confidence"],
+                    ),
                 ))
 
                 # If there's a theoretical profit on a verified pair, record an opportunity
-                profit = constraint.get("profit_bound", 0.0)
+                profit = constraint.profit_bound
                 if profit > 0 and verification["verified"]:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
@@ -348,12 +349,12 @@ class DetectionPipeline:
 
                     deferred_events.append((
                         CHANNEL_ARBITRAGE_FOUND,
-                        {
-                            "opportunity_id": opp.id,
-                            "pair_id": pair.id,
-                            "type": "rebalancing",
-                            "theoretical_profit": float(profit),
-                        },
+                        ArbitrageFoundEvent(
+                            opportunity_id=opp.id,
+                            pair_id=pair.id,
+                            type="rebalancing",
+                            theoretical_profit=float(profit),
+                        ),
                     ))
 
             await self._flush_classification_cache(session, cache_rows)
@@ -361,7 +362,7 @@ class DetectionPipeline:
 
         # Publish events after commit so downstream consumers can read the rows
         for channel, payload in deferred_events:
-            await publish(self.redis, channel, payload)
+            await publish_event(self.redis, channel, payload)
 
         # Cross-venue detection (Kalshi ↔ Polymarket) if enabled
         if settings.kalshi_enabled:
@@ -510,7 +511,7 @@ class DetectionPipeline:
                     market_b_id=market_b.id,
                     dependency_type=classification["dependency_type"],
                     confidence=classification["confidence"],
-                    constraint_matrix=constraint,
+                    constraint_matrix=constraint.model_dump(),
                     resolution_vectors=classification.get("valid_outcomes"),
                     implication_direction=classification.get("implication_direction"),
                     classification_source=classification.get("classification_source"),
@@ -522,16 +523,16 @@ class DetectionPipeline:
 
                 deferred_events.append((
                     CHANNEL_PAIR_DETECTED,
-                    {
-                        "pair_id": pair.id,
-                        "market_a_id": market_a.id,
-                        "market_b_id": market_b.id,
-                        "dependency_type": classification["dependency_type"],
-                        "confidence": classification["confidence"],
-                    },
+                    PairDetectedEvent(
+                        pair_id=pair.id,
+                        market_a_id=market_a.id,
+                        market_b_id=market_b.id,
+                        dependency_type=classification["dependency_type"],
+                        confidence=classification["confidence"],
+                    ),
                 ))
 
-                profit = constraint.get("profit_bound", 0.0)
+                profit = constraint.profit_bound
                 if profit > 0 and verification["verified"]:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
@@ -546,19 +547,19 @@ class DetectionPipeline:
 
                     deferred_events.append((
                         CHANNEL_ARBITRAGE_FOUND,
-                        {
-                            "opportunity_id": opp.id,
-                            "pair_id": pair.id,
-                            "type": "rebalancing",
-                            "theoretical_profit": float(profit),
-                        },
+                        ArbitrageFoundEvent(
+                            opportunity_id=opp.id,
+                            pair_id=pair.id,
+                            type="rebalancing",
+                            theoretical_profit=float(profit),
+                        ),
                     ))
 
             await self._flush_classification_cache(session, cache_rows)
             await session.commit()
 
         for channel, payload in deferred_events:
-            await publish(self.redis, channel, payload)
+            await publish_event(self.redis, channel, payload)
 
         if stats["pairs_created"] > 0:
             logger.info("cross_venue_detection_complete", **stats)
@@ -610,7 +611,7 @@ class DetectionPipeline:
                 )
 
                 # Update stored constraint with fresh profit data
-                pair.constraint_matrix = fresh_constraint
+                pair.constraint_matrix = fresh_constraint.model_dump()
 
                 # Re-verify pair with fresh prices (BT-018)
                 market_a_dict = _market_to_dict(market_a_obj)
@@ -622,15 +623,15 @@ class DetectionPipeline:
                     prices_a=prices_a,
                     prices_b=prices_b,
                     confidence=pair.confidence,
-                    correlation=fresh_constraint.get("correlation"),
-                    implication_direction=fresh_constraint.get("implication_direction"),
+                    correlation=fresh_constraint.correlation,
+                    implication_direction=fresh_constraint.implication_direction,
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
                     logger.info("pair_unverified_on_rescan", pair_id=pair.id, reasons=re_verification["reasons"])
                     continue
 
-                profit = fresh_constraint.get("profit_bound", 0.0)
+                profit = fresh_constraint.profit_bound
 
                 if profit <= 0:
                     continue
@@ -653,18 +654,18 @@ class DetectionPipeline:
                     continue
                 stats["opportunities"] += 1
 
-                deferred_events.append({
-                    "opportunity_id": opp.id,
-                    "pair_id": pair.id,
-                    "type": "rebalancing",
-                    "theoretical_profit": float(profit),
-                })
+                deferred_events.append(ArbitrageFoundEvent(
+                    opportunity_id=opp.id,
+                    pair_id=pair.id,
+                    type="rebalancing",
+                    theoretical_profit=float(profit),
+                ))
 
             await session.commit()
 
         # Publish after commit so optimizer can read the rows
         for payload in deferred_events:
-            await publish(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
+            await publish_event(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
         if stats["opportunities"] > 0:
             logger.info("rescan_complete", **stats)
@@ -738,7 +739,7 @@ class DetectionPipeline:
                     venue_a=getattr(market_a_obj, "venue", "polymarket"),
                     venue_b=getattr(market_b_obj, "venue", "polymarket"),
                 )
-                pair.constraint_matrix = fresh_constraint
+                pair.constraint_matrix = fresh_constraint.model_dump()
 
                 # Re-verify pair with fresh prices (BT-018)
                 market_a_dict = _market_to_dict(market_a_obj)
@@ -750,15 +751,15 @@ class DetectionPipeline:
                     prices_a=prices_a,
                     prices_b=prices_b,
                     confidence=pair.confidence,
-                    correlation=fresh_constraint.get("correlation"),
-                    implication_direction=fresh_constraint.get("implication_direction"),
+                    correlation=fresh_constraint.correlation,
+                    implication_direction=fresh_constraint.implication_direction,
                 )
                 if not re_verification["verified"]:
                     pair.verified = False
                     logger.info("pair_unverified_on_rescan", pair_id=pair.id, reasons=re_verification["reasons"])
                     continue
 
-                profit = fresh_constraint.get("profit_bound", 0.0)
+                profit = fresh_constraint.profit_bound
 
                 existing_opp = in_flight_opps.get(pair.id)
                 if existing_opp:
@@ -826,18 +827,18 @@ class DetectionPipeline:
                         continue
                     stats["opportunities"] += 1
 
-                    deferred_events.append({
-                        "opportunity_id": opp.id,
-                        "pair_id": pair.id,
-                        "type": "rebalancing",
-                        "theoretical_profit": float(profit),
-                    })
+                    deferred_events.append(ArbitrageFoundEvent(
+                        opportunity_id=opp.id,
+                        pair_id=pair.id,
+                        type="rebalancing",
+                        theoretical_profit=float(profit),
+                    ))
 
             await session.commit()
 
         # Publish after commit so optimizer/simulator can read the rows
         for payload in deferred_events:
-            await publish(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
+            await publish_event(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
         if stats["opportunities"] > 0 or stats["refreshed"] > 0:
             logger.info("snapshot_rescan_complete", **stats)

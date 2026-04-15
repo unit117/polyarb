@@ -11,7 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.circuit_breaker import CircuitBreaker
-from shared.events import CHANNEL_PORTFOLIO_UPDATED, publish
+from shared.events import CHANNEL_PORTFOLIO_UPDATED, publish_event
+from shared.schemas import PortfolioUpdatedEvent
 from shared.lifecycle import OrderStatus, TradeStatus
 from shared.live_runtime import (
     is_live_kill_switch_enabled,
@@ -327,10 +328,10 @@ class LiveTradingCoordinator:
             )
             await session.commit()
 
-        await publish(
+        await publish_event(
             self.redis,
             CHANNEL_PORTFOLIO_UPDATED,
-            {**snap, "source": "live"},
+            PortfolioUpdatedEvent.model_validate(snap),
         )
 
     async def _record_fill(

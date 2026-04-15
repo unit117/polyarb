@@ -13,7 +13,9 @@ from shared.events import (
     CHANNEL_MARKET_RESOLVED,
     CHANNEL_SNAPSHOT_CREATED,
     publish,
+    publish_event,
 )
+from shared.schemas import MarketResolvedEvent, MarketUpdatedEvent, SnapshotCreatedEvent
 from shared.models import Market, MarketPair, PriceSnapshot
 from services.ingestor.clob_client import ClobClient
 from services.ingestor.embedder import Embedder
@@ -197,10 +199,10 @@ class MarketPoller:
             active_count=len(markets),
             stale_marked_inactive=stale_count,
         )
-        await publish(
+        await publish_event(
             self._redis,
             CHANNEL_MARKET_UPDATED,
-            {"action": "sync", "count": len(markets)},
+            MarketUpdatedEvent(action="sync", count=len(markets)),
         )
         return markets
 
@@ -381,22 +383,22 @@ class MarketPoller:
                             mkt.resolved_at = datetime.now(timezone.utc)
                             mkt.active = False
                             await session.commit()
-                            await publish(self._redis, CHANNEL_MARKET_RESOLVED, {
-                                "market_id": market_id,
-                                "resolved_outcome": outcome,
-                                "source": "price_inference",
-                                "price": price,
-                            })
+                            await publish_event(self._redis, CHANNEL_MARKET_RESOLVED, MarketResolvedEvent(
+                                market_id=market_id,
+                                resolved_outcome=outcome,
+                                source="price_inference",
+                                price=price,
+                            ))
 
         log.info("snapshots_done", count=len(snapshots_to_insert))
-        await publish(
+        await publish_event(
             self._redis,
             CHANNEL_SNAPSHOT_CREATED,
-            {
-                "count": len(snapshots_to_insert),
-                "source": "polling",
-                "market_ids": [s["market_id"] for s in snapshots_to_insert],
-            },
+            SnapshotCreatedEvent(
+                count=len(snapshots_to_insert),
+                source="polling",
+                market_ids=[s["market_id"] for s in snapshots_to_insert],
+            ),
         )
 
     async def check_resolved_markets(self) -> None:
@@ -450,18 +452,18 @@ class MarketPoller:
                         resolved_count += 1
                         del unresolved[polymarket_id]
 
-                        page_events.append({
-                            "market_id": market.id,
-                            "resolved_outcome": winning_outcome,
-                            "source": "gamma_api",
-                        })
+                        page_events.append(MarketResolvedEvent(
+                            market_id=market.id,
+                            resolved_outcome=winning_outcome,
+                            source="gamma_api",
+                        ))
 
                     await session.commit()
 
                 # Publish events immediately after commit — avoids unbounded
                 # accumulation across 2000+ pages of closed markets.
                 for event in page_events:
-                    await publish(self._redis, CHANNEL_MARKET_RESOLVED, event)
+                    await publish_event(self._redis, CHANNEL_MARKET_RESOLVED, event)
 
                 # All tracked markets resolved — no need to keep paginating
                 if not unresolved:
