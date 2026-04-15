@@ -40,3 +40,17 @@ alembic/versions/__pycache__/
 PLAN-*.md
 E1_Backtest_Findings_Summary.md
 plan_rd_*.md
+
+# Claude Code
+.claude/
+
+# Coverage
+.coverage
+
+# Local data
+pmxt_db/
+
+# Research source files
+research/*.tar.gz
+research/dudik-2016-tex/
+research/polymarket-2025-tex/
