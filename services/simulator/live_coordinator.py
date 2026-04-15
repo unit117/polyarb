@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.circuit_breaker import CircuitBreaker
 from shared.events import CHANNEL_PORTFOLIO_UPDATED, publish
+from shared.lifecycle import OrderStatus, TradeStatus
 from shared.live_runtime import (
     is_live_kill_switch_enabled,
     set_live_runtime_status,
@@ -113,7 +114,7 @@ class LiveTradingCoordinator:
                             continue
 
                     venue_order_id = None
-                    status = "dry_run" if self.dry_run else "submitted"
+                    status = OrderStatus.DRY_RUN if self.dry_run else OrderStatus.SUBMITTED
                     error = None
 
                     if not self.dry_run:
@@ -123,12 +124,12 @@ class LiveTradingCoordinator:
                             size=leg.size,
                             price=leg.vwap_price,
                         )
-                        status = submit_result.get("status", "rejected")
-                        if status == "submitted":
+                        status = submit_result.get("status", OrderStatus.REJECTED)
+                        if status == OrderStatus.SUBMITTED:
                             venue_order_id = extract_venue_order_id(
                                 submit_result.get("order")
                             )
-                        elif status != "submitted":
+                        elif status != OrderStatus.SUBMITTED:
                             error = submit_result.get("reason")
                             errors.append(error or "submission_rejected")
 
@@ -246,7 +247,7 @@ class LiveTradingCoordinator:
                             side="SETTLE",
                             requested_size=Decimal(str(abs(close_result["shares"]))),
                             requested_price=Decimal(str(settlement_price)),
-                            status="settled",
+                            status=OrderStatus.SETTLED,
                             dry_run=False,
                         )
                         session.add(live_order)
@@ -280,7 +281,7 @@ class LiveTradingCoordinator:
                                 vwap_price=Decimal(str(settlement_price)),
                                 slippage=Decimal("0"),
                                 fees=Decimal("0"),
-                                status="settled",
+                                status=TradeStatus.SETTLED,
                                 source="live",
                                 venue=getattr(market, "venue", "polymarket"),
                             )
@@ -403,7 +404,7 @@ class LiveTradingCoordinator:
                 vwap_price=Decimal(str(fill.fill_price)),
                 slippage=Decimal(str(abs(fill.fill_price - float(live_order.requested_price)))),
                 fees=actual_fees,
-                status="filled",
+                status=TradeStatus.FILLED,
                 source="live",
                 venue="polymarket",
             )

@@ -31,6 +31,7 @@ sys.path.insert(0, ".")
 
 from shared.config import settings, polymarket_fee
 from shared.db import SessionFactory, init_db
+from shared.lifecycle import OppStatus, TradeStatus, transition
 from shared.models import (
     ArbitrageOpportunity,
     Market,
@@ -185,7 +186,7 @@ async def detect_opportunities(session, pairs: list[MarketPair], as_of: datetime
             pair_id=pair.id,
             type="rebalancing",
             theoretical_profit=Decimal(str(profit)),
-            status="detected",
+            status=OppStatus.DETECTED,
             timestamp=as_of,
             dependency_type=pair.dependency_type,
         )
@@ -270,7 +271,7 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
     opp.bregman_gap = result.final_gap
     opp.estimated_profit = Decimal(str(trade_info["estimated_profit"]))
     opp.optimal_trades = trade_info
-    opp.status = "optimized" if result.converged else "unconverged"
+    transition(opp, OppStatus.OPTIMIZED if result.converged else OppStatus.UNCONVERGED)
 
     return {
         "status": opp.status,
@@ -316,7 +317,7 @@ async def simulate_opportunity(
                 resolved_at=str(mkt.resolved_at),
                 as_of=str(as_of),
             )
-            opp.status = "simulated"
+            transition(opp, OppStatus.SIMULATED)
             return {"status": "resolved_market_blocked", "trades_executed": 0}
 
     trades_executed = 0
@@ -324,7 +325,7 @@ async def simulate_opportunity(
     # Half-Kelly sizing — same formula as live pipeline
     net_profit = opp.optimal_trades.get("estimated_profit", 0)
     if net_profit <= 0:
-        opp.status = "simulated"
+        transition(opp, OppStatus.SIMULATED)
         return {"status": "simulated", "trades_executed": 0}
     kelly_fraction = min(net_profit * 0.5, 1.0)
 
@@ -432,12 +433,12 @@ async def simulate_opportunity(
             slippage=Decimal(str(fill["slippage"])),
             fees=Decimal(str(fees)),
             executed_at=as_of,
-            status="filled",
+            status=TradeStatus.FILLED,
         )
         session.add(paper_trade)
         trades_executed += 1
 
-    opp.status = "simulated"
+    transition(opp, OppStatus.SIMULATED)
     return {"status": "simulated", "trades_executed": trades_executed}
 
 
@@ -522,7 +523,7 @@ async def settle_resolved_positions(
                 slippage=Decimal("0"),
                 fees=Decimal("0"),
                 executed_at=as_of,
-                status="settled",
+                status=TradeStatus.SETTLED,
             )
             session.add(paper_trade)
 

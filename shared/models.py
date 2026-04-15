@@ -20,17 +20,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from shared.lifecycle import OppStatus, OrderStatus, TradeStatus
+
 TIMESTAMPTZ = DateTime(timezone=True)
-LIVE_ORDER_STATUSES = (
-    "dry_run",
-    "submitted",
-    "filled",
-    "partially_filled",
-    "cancelled",
-    "rejected",
-    "expired",
-    "settled",
-)
+LIVE_ORDER_STATUSES = tuple(OrderStatus)
 
 
 class Base(DeclarativeBase):
@@ -177,7 +170,7 @@ class ArbitrageOpportunity(Base):
     optimal_trades: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     fw_iterations: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     bregman_gap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="detected")
+    status: Mapped[str] = mapped_column(String, default=OppStatus.DETECTED)
     pending_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
     expired_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
     dependency_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -207,7 +200,7 @@ class PaperTrade(Base):
     executed_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, server_default=func.now()
     )
-    status: Mapped[str] = mapped_column(String, default="filled")
+    status: Mapped[str] = mapped_column(String, default=TradeStatus.FILLED)
     source: Mapped[str] = mapped_column(String, server_default="paper")
     venue: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, server_default="polymarket"
@@ -253,7 +246,7 @@ class LiveOrder(Base):
     side: Mapped[str] = mapped_column(String)
     requested_size: Mapped[Decimal] = mapped_column(Numeric)
     requested_price: Mapped[Decimal] = mapped_column(Numeric)
-    status: Mapped[str] = mapped_column(String, default="dry_run")
+    status: Mapped[str] = mapped_column(String, default=OrderStatus.DRY_RUN)
     dry_run: Mapped[bool] = mapped_column(Boolean, server_default="false")
     venue_order_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(

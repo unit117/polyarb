@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.config import settings
 from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish
+from shared.lifecycle import OppStatus, bulk_transition_values, transition
 from shared.models import ArbitrageOpportunity, Market, MarketPair, PriceSnapshot
 from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
@@ -51,7 +52,7 @@ class OptimizerPipeline:
                 logger.warning("opportunity_not_found", id=opportunity_id)
                 return {"status": "not_found"}
 
-            if opp.status != "detected":
+            if opp.status != OppStatus.DETECTED:
                 logger.info("opportunity_already_processed", id=opportunity_id, status=opp.status)
                 return {"status": "skipped", "reason": opp.status}
 
@@ -87,7 +88,7 @@ class OptimizerPipeline:
                 if is_unconstrained or (
                     self.skip_conditional and not vector_with_constraints
                 ):
-                    opp.status = "skipped"
+                    transition(opp, OppStatus.SKIPPED)
                     await session.commit()
                     logger.info(
                         "skipping_conditional_pair",
@@ -154,7 +155,7 @@ class OptimizerPipeline:
             opp.bregman_gap = result.final_gap
             opp.estimated_profit = Decimal(str(trade_info["estimated_profit"]))
             opp.optimal_trades = trade_info
-            opp.status = "optimized" if result.converged else "unconverged"
+            transition(opp, OppStatus.OPTIMIZED if result.converged else OppStatus.UNCONVERGED)
 
             await session.commit()
 
@@ -206,10 +207,10 @@ class OptimizerPipeline:
             expired = await session.execute(
                 update(ArbitrageOpportunity)
                 .where(
-                    ArbitrageOpportunity.status == "detected",
+                    ArbitrageOpportunity.status == OppStatus.DETECTED,
                     ArbitrageOpportunity.timestamp < cutoff,
                 )
-                .values(status="expired")
+                .values(**bulk_transition_values(OppStatus.DETECTED, OppStatus.EXPIRED))
                 .returning(ArbitrageOpportunity.id)
             )
             expired_ids = [row[0] for row in expired.fetchall()]
@@ -220,7 +221,7 @@ class OptimizerPipeline:
         async with self.session_factory() as session:
             result = await session.execute(
                 select(ArbitrageOpportunity.id)
-                .where(ArbitrageOpportunity.status == "detected")
+                .where(ArbitrageOpportunity.status == OppStatus.DETECTED)
                 .order_by(ArbitrageOpportunity.timestamp.desc())
                 .limit(50)
             )

@@ -11,22 +11,27 @@ You are a paper trading evaluation agent for the PolyArb arbitrage system runnin
 
 ## Connection
 
+Source NAS credentials first, then use sshpass for password auth:
+```
+source /Users/unit117/Dev/polyarb/.env.nas
+```
+
 All commands run via SSH:
 ```
-ssh $NAS_USER@$NAS_HOST "cd /volume1/docker/polyarb && <command>"
+sshpass -p "$NAS_PASS" ssh $NAS_USER@$NAS_HOST "cd /volume1/docker/polyarb && <command>"
 ```
 
 Database queries use:
 ```
-ssh $NAS_USER@$NAS_HOST "cd /volume1/docker/polyarb && docker compose exec -T postgres psql -U polyarb -d polyarb -c \"<SQL>\""
+sshpass -p "$NAS_PASS" ssh $NAS_USER@$NAS_HOST "cd /volume1/docker/polyarb && docker compose exec -T postgres psql -U polyarb -d polyarb -c \"<SQL>\""
 ```
 
 Service logs use:
 ```
-ssh $NAS_USER@$NAS_HOST "cd /volume1/docker/polyarb && docker compose logs --tail=50 <SERVICE>"
+sshpass -p "$NAS_PASS" ssh $NAS_USER@$NAS_HOST "cd /volume1/docker/polyarb && docker compose logs --tail=50 <SERVICE>"
 ```
 
-Set SSH timeout to 15000ms for queries, 30000ms for log tails.
+**Important:** Always source `.env.nas` as the very first Bash call before any SSH commands. Set SSH timeout to 15000ms for queries, 30000ms for log tails.
 
 ## Evaluation Checklist
 

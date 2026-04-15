@@ -19,6 +19,7 @@ from shared.events import (
     CHANNEL_TRADE_EXECUTED,
     publish,
 )
+from shared.lifecycle import OppStatus, TradeStatus, bulk_transition_values, transition
 from shared.models import (
     ArbitrageOpportunity,
     Market,
@@ -109,12 +110,11 @@ class SimulatorPipeline:
             if not opp:
                 return {"status": "not_found"}
 
-            if opp.status not in ("optimized", "unconverged"):
+            if opp.status not in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED):
                 return {"status": "skipped", "reason": opp.status}
 
             if not opp.optimal_trades or not opp.optimal_trades.get("trades"):
-                opp.status = "expired"
-                opp.expired_at = datetime.now(timezone.utc)
+                transition(opp, OppStatus.EXPIRED)
                 self._retry_counts.pop(opp.id, None)
                 await session.commit()
                 logger.info(
@@ -123,8 +123,7 @@ class SimulatorPipeline:
                 )
                 return {"status": "expired", "reason": "no_trades"}
 
-            opp.status = "pending"
-            opp.pending_at = datetime.now(timezone.utc)
+            transition(opp, OppStatus.PENDING)
             await session.commit()
 
         try:
@@ -140,8 +139,8 @@ class SimulatorPipeline:
             try:
                 async with self.session_factory() as session:
                     opp = await session.get(ArbitrageOpportunity, opportunity_id)
-                    if opp and opp.status == "pending":
-                        opp.status = "optimized"
+                    if opp and opp.status == OppStatus.PENDING:
+                        transition(opp, OppStatus.OPTIMIZED)
                         await session.commit()
             except Exception:
                 logger.exception(
@@ -157,12 +156,12 @@ class SimulatorPipeline:
     ) -> dict:
         async with self.session_factory() as session:
             opp = await session.get(ArbitrageOpportunity, opportunity_id)
-            if not opp or opp.status != "pending":
+            if not opp or opp.status != OppStatus.PENDING:
                 return {"status": "skipped", "reason": "status_changed"}
 
             pair = await session.get(MarketPair, opp.pair_id)
             if not pair:
-                opp.status = "optimized"
+                transition(opp, OppStatus.OPTIMIZED)
                 await session.commit()
                 return {"status": "no_pair"}
 
@@ -182,8 +181,7 @@ class SimulatorPipeline:
                     for m in (market_a, market_b)
                 )
                 if either_resolved:
-                    opp.status = "expired"
-                    opp.expired_at = datetime.now(timezone.utc)
+                    transition(opp, OppStatus.EXPIRED)
                     self._retry_counts.pop(opp.id, None)
                 else:
                     # Track retry count — expire after max_retries to avoid
@@ -191,8 +189,7 @@ class SimulatorPipeline:
                     retries = self._retry_counts.get(opp.id, 0) + 1
                     self._retry_counts[opp.id] = retries
                     if retries >= self._max_retries:
-                        opp.status = "expired"
-                        opp.expired_at = datetime.now(timezone.utc)
+                        transition(opp, OppStatus.EXPIRED)
                         self._retry_counts.pop(opp.id, None)
                         logger.warning(
                             "expired_max_retries",
@@ -200,7 +197,7 @@ class SimulatorPipeline:
                             retries=retries,
                         )
                     else:
-                        opp.status = "optimized"
+                        transition(opp, OppStatus.OPTIMIZED)
                 await session.commit()
                 logger.info(
                     "simulation_complete",
@@ -269,7 +266,7 @@ class SimulatorPipeline:
                     vwap_price=Decimal(str(leg.vwap_price)),
                     slippage=Decimal(str(leg.slippage)),
                     fees=Decimal(str(leg.fees)),
-                    status="filled",
+                    status=TradeStatus.FILLED,
                     source=self.source,
                     venue=leg.trade_venue,
                 )
@@ -291,10 +288,10 @@ class SimulatorPipeline:
                 )
 
             if trades_executed > 0:
-                opp.status = "simulated"
+                transition(opp, OppStatus.SIMULATED)
                 self._retry_counts.pop(opp.id, None)
             else:
-                opp.status = "optimized"
+                transition(opp, OppStatus.OPTIMIZED)
             await session.commit()
 
             for event in deferred_trade_events:
@@ -529,7 +526,7 @@ class SimulatorPipeline:
                             vwap_price=Decimal(str(settlement_price)),
                             slippage=Decimal("0"),
                             fees=Decimal("0"),
-                            status="settled",
+                            status=TradeStatus.SETTLED,
                             source=self.source,
                         )
                     )
@@ -585,7 +582,7 @@ class SimulatorPipeline:
                         vwap_price=Decimal(str(price)),
                         slippage=Decimal("0"),
                         fees=Decimal("0"),
-                        status="purged",
+                        status=TradeStatus.PURGED,
                         source=self.source,
                     )
                 )
@@ -701,11 +698,11 @@ class SimulatorPipeline:
             result = await session.execute(
                 update(ArbitrageOpportunity)
                 .where(
-                    ArbitrageOpportunity.status == "pending",
+                    ArbitrageOpportunity.status == OppStatus.PENDING,
                     ArbitrageOpportunity.pending_at.isnot(None),
                     ArbitrageOpportunity.pending_at < cutoff,
                 )
-                .values(status="optimized")
+                .values(**bulk_transition_values(OppStatus.PENDING, OppStatus.OPTIMIZED))
                 .returning(ArbitrageOpportunity.id)
             )
             reverted = result.fetchall()
@@ -737,10 +734,10 @@ class SimulatorPipeline:
                 expired = await session.execute(
                     update(ArbitrageOpportunity)
                     .where(
-                        ArbitrageOpportunity.status.in_(("optimized", "unconverged")),
+                        ArbitrageOpportunity.status.in_((OppStatus.OPTIMIZED, OppStatus.UNCONVERGED)),
                         ArbitrageOpportunity.timestamp < cutoff,
                     )
-                    .values(status="expired")
+                    .values(**bulk_transition_values(OppStatus.OPTIMIZED, OppStatus.EXPIRED))
                     .returning(ArbitrageOpportunity.id)
                 )
                 expired_ids = [row[0] for row in expired.fetchall()]
@@ -753,7 +750,7 @@ class SimulatorPipeline:
         async with self.session_factory() as session:
             result = await session.execute(
                 select(ArbitrageOpportunity.id)
-                .where(ArbitrageOpportunity.status.in_(("optimized", "unconverged")))
+                .where(ArbitrageOpportunity.status.in_((OppStatus.OPTIMIZED, OppStatus.UNCONVERGED)))
                 .order_by(ArbitrageOpportunity.timestamp.desc())
                 .limit(50)
             )

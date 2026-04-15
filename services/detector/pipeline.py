@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.events import CHANNEL_PAIR_DETECTED, CHANNEL_ARBITRAGE_FOUND, publish
+from shared.lifecycle import IN_FLIGHT, OppStatus, transition
 from shared.models import (
     ArbitrageOpportunity,
     Market,
@@ -338,7 +339,7 @@ class DetectionPipeline:
                         pair_id=pair.id,
                         type="rebalancing",
                         theoretical_profit=Decimal(str(profit)),
-                        status="detected",
+                        status=OppStatus.DETECTED,
                         dependency_type=pair.dependency_type,
                     )
                     session.add(opp)
@@ -536,7 +537,7 @@ class DetectionPipeline:
                         pair_id=pair.id,
                         type="rebalancing",
                         theoretical_profit=Decimal(str(profit)),
-                        status="detected",
+                        status=OppStatus.DETECTED,
                         dependency_type=pair.dependency_type,
                     )
                     session.add(opp)
@@ -638,7 +639,7 @@ class DetectionPipeline:
                     pair_id=pair.id,
                     type="rebalancing",
                     theoretical_profit=Decimal(str(profit)),
-                    status="detected",
+                    status=OppStatus.DETECTED,
                     dependency_type=pair.dependency_type,
                 )
                 session.add(opp)
@@ -708,9 +709,7 @@ class DetectionPipeline:
                     select(ArbitrageOpportunity)
                     .where(
                         ArbitrageOpportunity.pair_id.in_(pair_ids),
-                        ArbitrageOpportunity.status.in_(
-                            ["detected", "pending", "optimized", "unconverged"]
-                        ),
+                        ArbitrageOpportunity.status.in_(list(IN_FLIGHT)),
                     )
                 )
                 in_flight_opps = {
@@ -764,16 +763,15 @@ class DetectionPipeline:
                 existing_opp = in_flight_opps.get(pair.id)
                 if existing_opp:
                     # Don't touch pending opps — simulator is mid-execution
-                    if existing_opp.status == "pending":
+                    if existing_opp.status == OppStatus.PENDING:
                         continue
 
                     # Mark expired when profit disappears (duration tracking)
                     if profit <= 0 and not existing_opp.expired_at:
-                        existing_opp.expired_at = datetime.now(timezone.utc)
                         existing_opp.theoretical_profit = Decimal("0")
                         existing_opp.estimated_profit = Decimal("0")
                         existing_opp.optimal_trades = None
-                        existing_opp.status = "expired"
+                        transition(existing_opp, OppStatus.EXPIRED)
                         stats["expired"] = stats.get("expired", 0) + 1
                         logger.info(
                             "opportunity_expired",
@@ -792,8 +790,8 @@ class DetectionPipeline:
                     # Reset optimized/unconverged back to detected so the
                     # optimizer re-plans with fresh prices instead of stale
                     # trades that may execute against moved markets.
-                    if existing_opp.status in ("optimized", "unconverged"):
-                        existing_opp.status = "detected"
+                    if existing_opp.status in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED):
+                        transition(existing_opp, OppStatus.DETECTED)
                         existing_opp.optimal_trades = None
                         existing_opp.fw_iterations = None
                         existing_opp.bregman_gap = None
@@ -810,7 +808,7 @@ class DetectionPipeline:
                         pair_id=pair.id,
                         type="rebalancing",
                         theoretical_profit=Decimal(str(profit)),
-                        status="detected",
+                        status=OppStatus.DETECTED,
                         dependency_type=pair.dependency_type,
                     )
                     session.add(opp)
