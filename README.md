@@ -16,7 +16,7 @@ Seven Docker containers orchestrated via `docker-compose.yml`. All Python servic
 | Service | Description |
 |---------|-------------|
 | **Ingestor** | Polls Polymarket (Gamma + CLOB) and Kalshi APIs, stores markets and price snapshots, generates embeddings via OpenAI |
-| **Detector** | Finds correlated market pairs using pgvector cosine similarity, classifies relationship types (implication, mutual exclusion, partition), builds constraint matrices |
+| **Detector** | Finds correlated market pairs using pgvector cosine similarity, classifies relationship types (implication, mutual exclusion, partition), builds constraint matrices, and runs multi-step verification (event_id match, question dedup, direction consistency) before any pair enters the pipeline |
 | **Optimizer** | Runs Frank-Wolfe constrained optimization to find provable arbitrage opportunities with positive expected edge |
 | **Simulator** | Paper-trades opportunities with VWAP slippage modeling, Kelly sizing, circuit breakers, and portfolio tracking |
 | **Dashboard** | FastAPI backend + React frontend with real-time WebSocket streaming of portfolio, trades, and opportunities |
@@ -243,7 +243,7 @@ See `reports/classifier_model_comparison_*.md` for full comparison.
 
 ## Key Concepts
 
-**Market pairs** — Two Polymarket (or Kalshi) markets whose outcomes are logically related. Detected via embedding similarity, then classified by an LLM into relationship types: `implication`, `mutual_exclusion`, or `partition`.
+**Market pairs** — Two Polymarket (or Kalshi) markets whose outcomes are logically related. Detected via embedding similarity, classified by an LLM into relationship types (`implication`, `mutual_exclusion`, `partition`), then verified through a 3-check gate (same event_id, no identical question text, consistent implication direction) before entering the pipeline. Verification is a first-class stage — unverified pairs never reach the optimizer.
 
 **Constraint matrices** — Encode which outcome combinations are feasible. The optimizer uses these to find portfolios where expected value exceeds cost regardless of which outcomes occur.
 
@@ -257,6 +257,21 @@ See `reports/classifier_model_comparison_*.md` for full comparison.
 
 **Resolved-market filtering** — The detector automatically excludes pairs where either market has already resolved, preventing phantom arbitrage signals from fixed post-resolution prices.
 
+**Constraint rebuild & purge tooling** — `scripts/` includes tools to rebuild constraint matrices from current market data and purge stale trades from the portfolio. After the E1 backtest revealed 27 correctness bugs, these tools were used to reset the book to a clean state and re-derive constraints with tightened verification.
+
+## Correctness History
+
+The system has been through extensive correctness hardening. The E1 backtest (489 days of historical data) uncovered 27 bugs across 5 categories — invalid pair classification, resolved-market reopening, phantom PnL from stale pricing, accounting errors in cost basis reconstruction, and simulator race conditions. All 27 have been fixed and verified.
+
+Major fixes include:
+- **Pair verification gate** — mutual_exclusion pairs now require same event_id and no identical question text, catching the largest source of false arbitrage
+- **Resolved-market blocking** — both detector and simulator reject markets that have already resolved, eliminating phantom BUY→SETTLE profit loops
+- **Portfolio restore** — cost_basis is rebuilt from full trade history on restart, not carried forward as stale JSONB
+- **Concurrent opportunity lock** — asyncio.Lock on simulator prevents race conditions when multiple opportunities arrive simultaneously
+- **Total-spread edge gating** — optimizer applies min_edge to combined spread across all legs, not per-leg, unlocking valid implication pairs
+
+The remaining engineering debt is **structural, not correctional** — the core detection, optimization, and trading logic is sound. What remains is explicit contracts and decomposition:
+
 ## AI Readability
 
 The codebase is **generally AI-friendly** — clean service boundaries, no circular imports, consistent patterns. Each service follows the same entry point pattern (`main.py` → `init_db()` → `asyncio.gather(loops)`). Communication via Redis pub/sub means an AI can reason about each service in isolation.
@@ -267,26 +282,16 @@ Strengths:
 - Alembic migrations are linear (no branches) and self-documenting
 - Config is centralized in one pydantic-settings class
 
-Areas that slow AI comprehension:
-- **JSONB columns** — `optimal_trades`, `constraint_matrix`, `outcomes`, `token_ids` have implicit schemas that only become clear by reading the code that writes them
-- **Status state machines** — opportunity status flow (detected → pending → optimized → filled/expired/skipped) is implicit, not declared anywhere
-- **Magic numbers** — scattered constants like Half-Kelly `0.5` multiplier, `0.005` fallback slippage, `MAX_EDGE = 0.20` cap lack inline explanation
+Remaining debt (contracts & decomposition, not correctness):
+- **JSONB columns** — `optimal_trades`, `constraint_matrix`, `outcomes`, `token_ids` have implicit schemas that only become clear by reading the code that writes them. Should have pydantic models or at least docstrings declaring their shape.
+- **Status state machines** — opportunity status flow (detected → pending → optimized → filled/expired/skipped) is implicit in code, not declared as an explicit enum graph. `shared/lifecycle.py` has the transitions but no visual documentation.
+- **Magic numbers** — scattered constants like Half-Kelly `0.5` multiplier, `0.005` fallback slippage, `MAX_EDGE = 0.20` cap lack inline explanation. Most should be config keys.
 
 ## Code Complexity & Refactoring Opportunities
 
-### File size overview
+The remaining refactoring targets are decomposition and deduplication — not bug-prone code.
 
-| File | Lines | Verdict |
-|------|-------|---------|
-| `services/detector/pipeline.py` | 965 | Deduplicate detection logic |
-| `services/detector/classifier.py` | 868 | Fine — mostly rule-based classifiers |
-| `services/dashboard/api/routes.py` | 840 | Split into route modules |
-| `services/simulator/pipeline.py` | 776 | Extract validation from execution |
-| `services/ingestor/polling.py` | 540 | Borderline — could extract snapshot logic |
-| `services/detector/constraints.py` | 407 | Borderline |
-| Everything else | <270 | Clean |
-
-### Top refactoring targets
+### Top targets
 
 **1. `simulator/pipeline.py` — `_execute_pending()` is 268 lines**
 
