@@ -65,6 +65,13 @@ def compute_trades(
     # best-edge leg.  In binary markets BUY Yes and SELL No are mirrors
     # of the same mispricing — executing both pays double fees for the
     # same edge.
+    #
+    # Individual legs are kept if they have ANY non-trivial edge (> 0.001).
+    # The min_edge threshold is applied to the total spread across all legs
+    # after this loop — this allows implication pairs where the total spread
+    # clears min_edge but each leg is small.
+    _NOISE_FLOOR = 0.001  # ignore sub-0.1% rounding noise per leg
+
     for market_label, outcomes, q_vec, p_vec, venue, fee_bps in [
         ("A", outcomes_a, q_a, p_a, venue_a, fee_rate_bps_a),
         ("B", outcomes_b, q_b, p_b, venue_b, fee_rate_bps_b),
@@ -72,7 +79,7 @@ def compute_trades(
         candidates: list[TradeLeg] = []
         for i, outcome in enumerate(outcomes):
             edge = float(q_vec[i] - p_vec[i])
-            if abs(edge) > min_edge:
+            if abs(edge) > _NOISE_FLOOR:
                 candidates.append(TradeLeg(
                     market=market_label,
                     outcome=outcome,
@@ -92,6 +99,20 @@ def compute_trades(
             else:
                 # Multi-outcome markets: keep all legs to preserve hedge structure
                 trades.extend(candidates)
+
+    # Total-spread gate: the combined edge across all legs must clear min_edge.
+    # Previously this was checked per-leg, which rejected valid implication
+    # pairs where the spread was real but split across two small legs.
+    total_leg_edge = sum(t.edge for t in trades)
+    if total_leg_edge < min_edge:
+        if trades:
+            logger.info(
+                "total_spread_below_min_edge",
+                total_edge=round(total_leg_edge, 6),
+                min_edge=min_edge,
+                legs=len(trades),
+            )
+        return _empty_result(theoretical_profit, p_a, q_a, p_b, q_b)
 
     # Sanity cap: edges above settings.max_edge_sanity are almost certainly misclassified
     # pairs, not real arbitrage.  Drop the entire opportunity.

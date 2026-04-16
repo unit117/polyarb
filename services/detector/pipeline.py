@@ -575,12 +575,18 @@ class DetectionPipeline:
         deferred_events: list[dict] = []
 
         async with self._rescan_lock, self.session_factory() as session:
+            resolved_market_ids = select(Market.id).where(
+                Market.resolved_outcome.isnot(None)
+            ).scalar_subquery()
+
             result = await session.execute(
                 select(MarketPair)
                 .where(
                     ~MarketPair.id.in_(
                         select(ArbitrageOpportunity.pair_id).distinct()
-                    )
+                    ),
+                    MarketPair.market_a_id.notin_(resolved_market_ids),
+                    MarketPair.market_b_id.notin_(resolved_market_ids),
                 )
             )
             pairs = result.scalars().all()
@@ -652,12 +658,20 @@ class DetectionPipeline:
         deferred_events: list[dict] = []
 
         async with self._rescan_lock, self.session_factory() as session:
+            # Exclude pairs where either market has already resolved —
+            # resolved markets have fixed prices that create phantom violations.
+            resolved_market_ids = select(Market.id).where(
+                Market.resolved_outcome.isnot(None)
+            ).scalar_subquery()
+
             result = await session.execute(
                 select(MarketPair)
                 .where(
                     MarketPair.verified == True,  # noqa: E712
                     (MarketPair.market_a_id.in_(market_ids))
                     | (MarketPair.market_b_id.in_(market_ids)),
+                    MarketPair.market_a_id.notin_(resolved_market_ids),
+                    MarketPair.market_b_id.notin_(resolved_market_ids),
                 )
             )
             pairs = result.scalars().all()
