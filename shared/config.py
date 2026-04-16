@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -57,6 +59,18 @@ class Settings(BaseSettings):
     optimizer_min_edge: float = 0.03
     optimizer_skip_conditional: bool = True
     optimizer_max_snapshot_age_seconds: int = 900  # Optimizer tolerates older prices (15 min)
+
+    # Position sizing
+    kelly_multiplier: float = 0.5  # Half-Kelly
+    kelly_fraction_cap: float = 0.25  # Max Kelly fraction (backtest overrides to 1.0)
+
+    # Slippage estimation
+    base_slippage_rate: float = 0.005  # 0.5% VWAP midpoint fallback + optimizer proxy
+    max_slippage_cap: float = 0.05  # 5% ceiling
+
+    # Edge / profit thresholds
+    max_edge_sanity: float = 0.20  # Reject edges above this as misclassification
+    min_net_profit: float = 0.005  # Minimum net profit after fees+slippage
 
     # Simulator settings
     initial_capital: float = 10000.0
@@ -121,6 +135,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Drawdown scaling constants — shared between live and backtest.
+# Mathematically coupled: scaling kicks in at DRAWDOWN_THRESHOLD,
+# ramps linearly over DRAWDOWN_WINDOW, floors at DRAWDOWN_MIN_SCALE.
+DRAWDOWN_THRESHOLD = 0.05  # Start scaling down Kelly at 5% drawdown
+DRAWDOWN_WINDOW = 0.10  # Scale linearly over the next 10%
+DRAWDOWN_MIN_SCALE = 0.5  # Floor: never scale below 50%
 
 
 def polymarket_fee(price: float, side: str = "BUY", fee_rate_bps: int | None = None) -> float:

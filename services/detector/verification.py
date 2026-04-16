@@ -10,9 +10,17 @@ import structlog
 
 logger = structlog.get_logger()
 
+# ── Verification thresholds ────────────────────────────────────────
 # Tolerance for price-based checks — prices must violate constraints
 # by at most this much to still be considered consistent
 PRICE_TOLERANCE = 0.20
+MIN_CONFIDENCE = 0.70
+PARTITION_SUM_TOLERANCE = 0.25
+IMPLICATION_PRICE_TOLERANCE = 0.15
+ME_SUM_CAP = 1.10
+CROSS_PLATFORM_PRICE_FLOOR = 0.05
+CROSS_PLATFORM_PRICE_CEIL = 0.95
+CROSS_PLATFORM_DIVERGENCE = 0.25
 
 
 def verify_pair(
@@ -35,10 +43,10 @@ def verify_pair(
 
     # ── Check 1: Minimum classifier confidence ──────────────────────
     checks_total += 1
-    if confidence >= 0.70:
+    if confidence >= MIN_CONFIDENCE:
         checks_passed += 1
     else:
-        reasons.append(f"low_confidence: {confidence:.2f} < 0.70")
+        reasons.append(f"low_confidence: {confidence:.2f} < {MIN_CONFIDENCE}")
 
     # ── Check 2: Structural checks per dependency type ──────────────
     checks_total += 1
@@ -201,7 +209,7 @@ def _check_price_consistency(
         total = _f(prices_a.get(outcomes_a[0], 0)) + _f(
             prices_b.get(outcomes_b[0], 0)
         )
-        if abs(total - 1.0) > 0.25:
+        if abs(total - 1.0) > PARTITION_SUM_TOLERANCE:
             reasons.append(
                 f"partition: primary price sum {total:.2f} too far from 1.0"
             )
@@ -217,11 +225,11 @@ def _check_price_consistency(
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         if implication_direction == "b_implies_a":
-            if p_b > p_a + 0.15:
+            if p_b > p_a + IMPLICATION_PRICE_TOLERANCE:
                 reasons.append(f"implication: P(B)={p_b:.2f} >> P(A)={p_a:.2f}, violates B→A")
                 return False
         else:
-            if p_a > p_b + 0.15:
+            if p_a > p_b + IMPLICATION_PRICE_TOLERANCE:
                 reasons.append(f"implication: P(A)={p_a:.2f} >> P(B)={p_b:.2f}, violates A→B")
                 return False
         return True
@@ -233,8 +241,8 @@ def _check_price_consistency(
         # (which are likely independent) now correctly fail.
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if p_a + p_b > 1.10:
-            reasons.append(f"mutual_exclusion: P(A)+P(B)={p_a+p_b:.2f} > 1.10")
+        if p_a + p_b > ME_SUM_CAP:
+            reasons.append(f"mutual_exclusion: P(A)+P(B)={p_a+p_b:.2f} > {ME_SUM_CAP}")
             return False
         return True
 
@@ -251,13 +259,13 @@ def _check_price_consistency(
         # Both prices must be in a reasonable range (not at extremes)
         p_a = _f(prices_a.get(outcomes_a[0], 0)) if outcomes_a else 0.0
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
-        if not (0.05 < p_a < 0.95) or not (0.05 < p_b < 0.95):
+        if not (CROSS_PLATFORM_PRICE_FLOOR < p_a < CROSS_PLATFORM_PRICE_CEIL) or not (CROSS_PLATFORM_PRICE_FLOOR < p_b < CROSS_PLATFORM_PRICE_CEIL):
             reasons.append(
                 f"cross_platform: prices at extreme ({p_a:.2f}, {p_b:.2f})"
             )
             return False
         # Cross-platform prices should be roughly similar — same event on different venues
-        if abs(p_a - p_b) > 0.25:
+        if abs(p_a - p_b) > CROSS_PLATFORM_DIVERGENCE:
             reasons.append(
                 f"cross_platform: price divergence too large ({p_a:.2f} vs {p_b:.2f}, diff={abs(p_a-p_b):.2f})"
             )

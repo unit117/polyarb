@@ -8,8 +8,9 @@ import structlog
 from sqlalchemy import select
 
 from shared.circuit_breaker import CircuitBreaker
-from shared.config import settings, venue_fee
+from shared.config import settings, venue_fee, DRAWDOWN_THRESHOLD, DRAWDOWN_WINDOW, DRAWDOWN_MIN_SCALE
 from shared.models import PriceSnapshot
+from shared.pricing import get_latest_snapshot
 from shared.schemas import OptimalTrades
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
@@ -82,12 +83,12 @@ async def build_validated_bundle(
     net_profit = optimal.estimated_profit
 
     # Half-Kelly with a conservative cap
-    kelly_fraction = min(net_profit * 0.5, 0.25)
+    kelly_fraction = min(net_profit * settings.kelly_multiplier, settings.kelly_fraction_cap)
 
     total_value = portfolio.total_value(current_prices)
     drawdown = 1.0 - (total_value / float(portfolio.initial_capital))
-    if drawdown > 0.05:
-        drawdown_scale = max(0.5, 1.0 - (drawdown - 0.05) / 0.10)
+    if drawdown > DRAWDOWN_THRESHOLD:
+        drawdown_scale = max(DRAWDOWN_MIN_SCALE, 1.0 - (drawdown - DRAWDOWN_THRESHOLD) / DRAWDOWN_WINDOW)
         kelly_fraction *= drawdown_scale
 
     base_size = kelly_fraction * max_position_size
@@ -204,16 +205,3 @@ async def build_validated_bundle(
     )
 
 
-async def get_latest_snapshot(session, market_id: int, max_age_seconds: int = 0):
-    """Fetch the most recent price snapshot for a market."""
-    query = (
-        select(PriceSnapshot)
-        .where(PriceSnapshot.market_id == market_id)
-        .order_by(PriceSnapshot.timestamp.desc())
-        .limit(1)
-    )
-    if max_age_seconds > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
-        query = query.where(PriceSnapshot.timestamp >= cutoff)
-    result = await session.execute(query)
-    return result.scalar_one_or_none()

@@ -20,7 +20,8 @@ from sqlalchemy import select
 from shared.config import settings
 from shared.db import SessionFactory, init_db
 from shared.logging import setup_logging
-from shared.models import Market, MarketPair, PriceSnapshot
+from shared.models import Market, MarketPair
+from shared.pricing import get_latest_snapshot
 from services.detector.classifier import classify_rule_based, classify_llm
 from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
 from services.detector.verification import verify_pair
@@ -33,15 +34,9 @@ def _is_all_ones(matrix: list[list[int]]) -> bool:
     return all(cell == 1 for row in matrix for cell in row)
 
 
-async def _get_latest_prices(session, market_id: int) -> dict | None:
-    result = await session.execute(
-        select(PriceSnapshot)
-        .where(PriceSnapshot.market_id == market_id)
-        .order_by(PriceSnapshot.timestamp.desc())
-        .limit(1)
-    )
-    snapshot = result.scalar_one_or_none()
-    return snapshot.prices if snapshot else None
+async def _get_prices(session, market_id: int) -> dict | None:
+    snap = await get_latest_snapshot(session, market_id)
+    return snap.prices if snap else None
 
 
 async def main() -> None:
@@ -155,8 +150,8 @@ async def main() -> None:
                         reasoning=llm_result.get("reasoning", "")[:120],
                     )
 
-            prices_a = await _get_latest_prices(session, pair.market_a_id)
-            prices_b = await _get_latest_prices(session, pair.market_b_id)
+            prices_a = await _get_prices(session, pair.market_a_id)
+            prices_b = await _get_prices(session, pair.market_b_id)
 
             correlation = (
                 rule_result.get("correlation")

@@ -33,8 +33,8 @@ from services.simulator.validation import (
     ValidatedExecutionBundle,
     ValidatedLeg,
     build_validated_bundle,
-    get_latest_snapshot,
 )
+from shared.pricing import get_latest_snapshot
 from services.simulator.settlement import (
     settle_resolved_markets as _settle_resolved,
     purge_contaminated_positions as _purge_positions,

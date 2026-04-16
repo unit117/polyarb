@@ -14,7 +14,8 @@ from pydantic import ValidationError
 from shared.config import settings
 from shared.events import CHANNEL_OPTIMIZATION_COMPLETE, publish_event
 from shared.lifecycle import OppStatus, bulk_transition_values, transition
-from shared.models import ArbitrageOpportunity, Market, MarketPair, PriceSnapshot
+from shared.models import ArbitrageOpportunity, Market, MarketPair
+from shared.pricing import get_latest_snapshot
 from shared.schemas import ConstraintMatrix, OptimizationCompleteEvent
 from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
@@ -103,8 +104,10 @@ class OptimizerPipeline:
             # Fetch latest prices — optimizer uses a looser staleness threshold
             # than the simulator since it's computing fair values, not executing.
             max_age = settings.optimizer_max_snapshot_age_seconds
-            prices_a = await _get_latest_prices(session, pair.market_a_id, max_age)
-            prices_b = await _get_latest_prices(session, pair.market_b_id, max_age)
+            snap_a = await get_latest_snapshot(session, pair.market_a_id, max_age)
+            snap_b = await get_latest_snapshot(session, pair.market_b_id, max_age)
+            prices_a = snap_a.prices if snap_a else None
+            prices_b = snap_b.prices if snap_b else None
 
             if prices_a is None or prices_b is None:
                 logger.warning("missing_prices", pair_id=pair.id)
@@ -263,18 +266,3 @@ class OptimizerPipeline:
         return stats
 
 
-async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
-    from datetime import datetime, timedelta, timezone
-
-    query = (
-        select(PriceSnapshot)
-        .where(PriceSnapshot.market_id == market_id)
-        .order_by(PriceSnapshot.timestamp.desc())
-        .limit(1)
-    )
-    if max_age_seconds > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
-        query = query.where(PriceSnapshot.timestamp >= cutoff)
-    result = await session.execute(query)
-    snapshot = result.scalar_one_or_none()
-    return snapshot.prices if snapshot else None

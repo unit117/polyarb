@@ -27,6 +27,7 @@ from shared.models import (
     PriceSnapshot,
 )
 from shared.config import settings
+from shared.pricing import get_latest_snapshot
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
 from services.detector.constraints import build_constraint_matrix, build_constraint_matrix_from_vectors
@@ -438,8 +439,8 @@ class DetectionPipeline:
                         )
                         continue
 
-                prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
-                prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
+                prices_a = await _get_prices(session, market_a.id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_prices(session, market_b.id, settings.max_snapshot_age_seconds)
 
                 if not prices_a and not prices_b:
                     logger.info(
@@ -544,8 +545,8 @@ class DetectionPipeline:
                 if classification["dependency_type"] == "none":
                     continue
 
-                prices_a = await _get_latest_prices(session, market_a.id, settings.max_snapshot_age_seconds)
-                prices_b = await _get_latest_prices(session, market_b.id, settings.max_snapshot_age_seconds)
+                prices_a = await _get_prices(session, market_a.id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_prices(session, market_b.id, settings.max_snapshot_age_seconds)
 
                 cr = await self._process_classified_candidate(
                     session, market_a, market_b, classification, prices_a, prices_b,
@@ -588,8 +589,8 @@ class DetectionPipeline:
                 if not pair.verified:
                     continue
 
-                prices_a = await _get_latest_prices(session, pair.market_a_id, settings.max_snapshot_age_seconds)
-                prices_b = await _get_latest_prices(session, pair.market_b_id, settings.max_snapshot_age_seconds)
+                prices_a = await _get_prices(session, pair.market_a_id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_prices(session, pair.market_b_id, settings.max_snapshot_age_seconds)
                 if not prices_a or not prices_b:
                     continue
 
@@ -682,8 +683,8 @@ class DetectionPipeline:
                 if not pair.constraint_matrix:
                     continue
 
-                prices_a = await _get_latest_prices(session, pair.market_a_id, settings.max_snapshot_age_seconds)
-                prices_b = await _get_latest_prices(session, pair.market_b_id, settings.max_snapshot_age_seconds)
+                prices_a = await _get_prices(session, pair.market_a_id, settings.max_snapshot_age_seconds)
+                prices_b = await _get_prices(session, pair.market_b_id, settings.max_snapshot_age_seconds)
                 if not prices_a or not prices_b:
                     continue
 
@@ -891,17 +892,7 @@ def _passes_uncertainty_filter(
     return True
 
 
-async def _get_latest_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
-    """Fetch the most recent price snapshot for a market."""
-    query = (
-        select(PriceSnapshot)
-        .where(PriceSnapshot.market_id == market_id)
-        .order_by(PriceSnapshot.timestamp.desc())
-        .limit(1)
-    )
-    if max_age_seconds > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
-        query = query.where(PriceSnapshot.timestamp >= cutoff)
-    result = await session.execute(query)
-    snapshot = result.scalar_one_or_none()
-    return snapshot.prices if snapshot else None
+async def _get_prices(session, market_id: int, max_age_seconds: int = 0) -> dict | None:
+    """Fetch prices dict from the most recent snapshot for a market."""
+    snap = await get_latest_snapshot(session, market_id, max_age_seconds)
+    return snap.prices if snap else None

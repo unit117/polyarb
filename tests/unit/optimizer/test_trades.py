@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 from services.optimizer.frank_wolfe import FWResult
-from services.optimizer.trades import compute_trades, MAX_EDGE
+from shared.config import settings
+from services.optimizer.trades import compute_trades
 
 
 def _make_fw_result(q, p, n_a=2, n_b=2):
@@ -94,7 +95,7 @@ class TestComputeTrades:
         assert b_count <= 1
 
     def test_sanity_cap_drops_all_trades(self):
-        # Edge > MAX_EDGE should return empty trades
+        # Edge > settings.max_edge_sanity should return empty trades
         result = compute_trades(
             _make_fw_result(
                 q=[0.80, 0.20, 0.50, 0.50],
@@ -104,7 +105,7 @@ class TestComputeTrades:
             outcomes_b=["Yes", "No"],
             min_edge=0.03,
         )
-        # Edge = 0.30 > MAX_EDGE (0.20)
+        # Edge = 0.30 > max_edge_sanity (0.20)
         assert result["trades"] == []
         assert result["estimated_profit"] == 0.0
 

@@ -4,19 +4,19 @@ Compares the optimal distribution q* (from Frank-Wolfe) with current market
 prices p to determine which outcomes are mispriced and what trades would
 capture the arbitrage.
 """
+from __future__ import annotations
 
 import structlog
 import numpy as np
 
-from shared.config import venue_fee
+from shared.config import settings, venue_fee
 from shared.schemas import MarketPriceComparison, OptimalTrades, TradeLeg
 from services.optimizer.frank_wolfe import FWResult
 
 logger = structlog.get_logger()
 
-# Edges above this are almost certainly misclassified pairs, not real arb.
-# A 20¢ edge on a liquid Polymarket binary is implausible.
-MAX_EDGE = 0.20
+# Edges above max_edge_sanity are almost certainly misclassified pairs, not
+# real arb.  A 20¢ edge on a liquid Polymarket binary is implausible.
 
 
 def _price_comparison(p_vec, q_vec) -> MarketPriceComparison:
@@ -93,10 +93,10 @@ def compute_trades(
                 # Multi-outcome markets: keep all legs to preserve hedge structure
                 trades.extend(candidates)
 
-    # Sanity cap: edges above MAX_EDGE are almost certainly misclassified
+    # Sanity cap: edges above settings.max_edge_sanity are almost certainly misclassified
     # pairs, not real arbitrage.  Drop the entire opportunity.
     for t in trades:
-        if t.edge > MAX_EDGE:
+        if t.edge > settings.max_edge_sanity:
             logger.warning(
                 "edge_sanity_cap_triggered",
                 market=t.market,
@@ -119,7 +119,7 @@ def compute_trades(
     # Estimated slippage cost: conservative 0.5% per leg (matches VWAP
     # midpoint fallback).  Without order book data at optimization time
     # this is the best proxy for execution cost.
-    est_slippage = sum(t.market_price * 0.005 for t in trades)
+    est_slippage = sum(t.market_price * settings.base_slippage_rate for t in trades)
 
     # Note: this is a per-unit edge proxy (not size-aware dollar PnL).
     # Downstream consumers (Kelly sizing, dashboard) should be aware of this.
@@ -127,7 +127,7 @@ def compute_trades(
 
     # BT-008: Reject opportunities where net edge after fees+slippage is
     # too small to overcome execution friction. Minimum 0.5% net edge.
-    if estimated_profit < 0.005:
+    if estimated_profit < settings.min_net_profit:
         logger.info(
             "trade_below_min_profit",
             estimated_profit=round(estimated_profit, 6),

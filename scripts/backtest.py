@@ -29,7 +29,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 sys.path.insert(0, ".")
 
-from shared.config import settings, polymarket_fee
+from shared.config import settings, polymarket_fee, DRAWDOWN_THRESHOLD, DRAWDOWN_WINDOW, DRAWDOWN_MIN_SCALE
+
+# Backtest uses full Kelly range (no conservative live cap)
+settings.kelly_fraction_cap = 1.0
 from shared.db import SessionFactory, init_db
 from shared.lifecycle import OppStatus, TradeStatus, transition
 from shared.models import (
@@ -329,15 +332,15 @@ async def simulate_opportunity(
     if net_profit <= 0:
         transition(opp, OppStatus.SIMULATED)
         return {"status": "simulated", "trades_executed": 0}
-    kelly_fraction = min(net_profit * 0.5, 1.0)
+    kelly_fraction = min(net_profit * settings.kelly_multiplier, settings.kelly_fraction_cap)
 
     # Drawdown scaling — same as live pipeline
     total_value = float(portfolio.cash) + sum(
         float(s) * 0.5 for s in portfolio.positions.values()  # rough mark
     )
     drawdown = 1.0 - (total_value / float(portfolio.initial_capital))
-    if drawdown > 0.05:
-        drawdown_scale = max(0.5, 1.0 - (drawdown - 0.05) / 0.10)
+    if drawdown > DRAWDOWN_THRESHOLD:
+        drawdown_scale = max(DRAWDOWN_MIN_SCALE, 1.0 - (drawdown - DRAWDOWN_THRESHOLD) / DRAWDOWN_WINDOW)
         kelly_fraction *= drawdown_scale
 
     base_size = kelly_fraction * max_position_size
