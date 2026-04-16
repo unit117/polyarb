@@ -48,7 +48,7 @@ The dashboard will be available at `http://localhost:8081`.
 
 ### Configuration
 
-All settings are managed via environment variables in `.env` (see `.env.example` for all 76 settings). Key groups:
+All settings are managed via environment variables in `.env` (see `.env.example` for all settings). Key groups:
 
 | Group | Examples |
 |-------|----------|
@@ -193,6 +193,8 @@ docker compose --profile backtest up -d dashboard-backtest
 
 E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. After 27 bug fixes: +1.72% return with Sonnet 4 classifier. See `E1_Backtest_Findings_Summary.md` for details.
 
+Live paper trading has been running since March 20, 2026. Post-purge clean window (Apr 8–16) showed +4.4% over 8 days on a $9,031 base.
+
 ## Ports
 
 | Service | Host | Container |
@@ -250,6 +252,10 @@ See `reports/classifier_model_comparison_*.md` for full comparison.
 **VWAP slippage** — The simulator models realistic execution using volume-weighted average pricing from order book data rather than naive mid-price fills.
 
 **Circuit breakers** — Automatic safety limits: max daily loss, max drawdown percentage, max position per market, and cooldown periods after consecutive errors.
+
+**Total-spread gating** — The optimizer applies its minimum edge threshold to the combined spread across all legs of an opportunity, not per-leg. This allows implication pairs where each leg has a small edge but the total spread is profitable after fees and slippage.
+
+**Resolved-market filtering** — The detector automatically excludes pairs where either market has already resolved, preventing phantom arbitrage signals from fixed post-resolution prices.
 
 ## AI Readability
 
@@ -309,7 +315,7 @@ Mixes portfolio stats, opportunity/trade/pair queries, time-series metrics, corr
 
 ### What's already clean
 
-- **Optimizer module** — `frank_wolfe.py` (171 lines), `bregman.py` (64 lines), `ip_oracle.py` (100 lines), `trades.py` (236 lines) — well-decomposed, single-responsibility
+- **Optimizer module** — `frank_wolfe.py` (171 lines), `bregman.py` (64 lines), `ip_oracle.py` (100 lines), `trades.py` (~250 lines) — well-decomposed, single-responsibility
 - **Shared module** — `models.py`, `db.py`, `events.py`, `config.py`, `circuit_breaker.py` — all under 310 lines, clear contracts
 - **No circular imports** — services communicate via Redis, not cross-imports
 - **Type hints** — mostly present on public functions, a few missing return types on internal helpers
