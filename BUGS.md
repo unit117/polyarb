@@ -1,20 +1,12 @@
 # Bugs To Fix
 
-## 1. HIGH — `NOT IN` parameter ceiling in `sync_markets()`
+## 1. ~~HIGH — `NOT IN` parameter ceiling in `sync_markets()`~~ FIXED
 
-**File:** `services/ingestor/polling.py:162-170`
+**Fixed in:** `services/ingestor/polling.py:175-188` — chunking with `STALE_CHUNK = 10_000`. Same fix applied to `kalshi_polling.py` and `ws_client.py`.
 
-`~Market.polymarket_id.in_(seen_ids)` with ~37k IDs generates a `NOT IN ($1, ..., $37000)` clause. asyncpg's parameter limit is 32767 (`INT16_MAX`). Will crash once market count exceeds that.
+## 2. ~~HIGH — No backfill of `pending_at` in migration 008~~ FIXED
 
-**Fix:** Revert to the old pattern (blanket `SET active=False`, then re-activate in batches), or use a temp table / `ANY(array)` cast.
-
-## 2. HIGH — No backfill of `pending_at` in migration 008
-
-**File:** `alembic/versions/008_pending_at_timestamp.py`
-
-The stale-pending sweeper (`services/simulator/pipeline.py:588`) requires `pending_at IS NOT NULL`. Pre-existing `pending` rows from before migration 008 have `pending_at = NULL` and are permanently invisible to the sweeper, blocking their pair.
-
-**Fix:** Add to the migration: `UPDATE arbitrage_opportunities SET pending_at = timestamp WHERE status = 'pending' AND pending_at IS NULL`.
+**Fixed in:** `alembic/versions/013_backfill_pending_at.py` — backfills `pending_at = timestamp` for all pre-existing pending rows.
 
 ## 3. MEDIUM — Trailing debounce can starve dashboard refresh
 

@@ -383,3 +383,110 @@ class TestEventSchemaRoundTrip:
         assert recovered.enabled is False
         assert recovered.dry_run is True
         assert recovered.last_heartbeat is None
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  6. Backward-compatible event parsing (contract tests)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestEventBackwardCompatibility:
+    """Old payloads missing optional fields must still parse.
+
+    When a new optional field is added to an event schema, existing
+    consumers and persisted payloads must continue to deserialize.
+    These tests pin the minimal required fields for each event type.
+    """
+
+    def test_market_resolved_without_price(self):
+        payload = {"market_id": 1, "resolved_outcome": "Yes", "source": "api"}
+        event = MarketResolvedEvent.model_validate(payload)
+        assert event.price is None
+
+    def test_live_status_empty_payload(self):
+        payload = {}
+        event = LiveStatusEvent.model_validate(payload)
+        assert event.enabled is False
+        assert event.dry_run is True
+        assert event.active is False
+        assert event.kill_switch is False
+        assert event.adapter_ready is False
+        assert event.last_heartbeat is None
+        assert event.updated_at is None
+
+    def test_portfolio_updated_without_new_counters(self):
+        """PortfolioUpdatedEvent added positions_in_profit and total_positions
+        later — old payloads missing them must still parse."""
+        payload = {
+            "cash": 9500.0, "positions": {}, "cost_basis": {},
+            "total_value": 9500.0, "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0, "total_trades": 10,
+            "settled_trades": 2, "winning_trades": 1,
+        }
+        event = PortfolioUpdatedEvent.model_validate(payload)
+        assert event.positions_in_profit == 0
+        assert event.total_positions == 0
+
+    def test_trade_leg_without_optional_fields(self):
+        """TradeLeg added venue and fee_rate_bps later — old payloads
+        missing them must still parse with defaults."""
+        payload = {
+            "market": "A", "outcome": "Yes", "outcome_index": 0,
+            "side": "BUY", "edge": 0.05, "market_price": 0.55,
+            "fair_price": 0.60,
+        }
+        leg = TradeLeg.model_validate(payload)
+        assert leg.venue == "polymarket"
+        assert leg.fee_rate_bps is None
+
+    def test_constraint_matrix_without_optional_fields(self):
+        """ConstraintMatrix added classification_source later — old
+        payloads missing optional fields must still parse."""
+        payload = {
+            "type": "mutual_exclusion",
+            "outcomes_a": ["Yes", "No"], "outcomes_b": ["Yes", "No"],
+            "matrix": [[1, 0], [0, 1]], "profit_bound": 0.05,
+        }
+        cm = ConstraintMatrix.model_validate(payload)
+        assert cm.correlation is None
+        assert cm.implication_direction is None
+        assert cm.classification_source is None
+
+    def test_optimal_trades_minimal_payload(self):
+        """OptimalTrades with empty trades and all required fields."""
+        payload = {
+            "trades": [],
+            "estimated_profit": 0.0,
+            "theoretical_profit": 0.0,
+            "market_a_prices": {"current": [0.5, 0.5], "optimal": [0.5, 0.5]},
+            "market_b_prices": {"current": [0.5, 0.5], "optimal": [0.5, 0.5]},
+        }
+        ot = OptimalTrades.model_validate(payload)
+        assert ot.trades == []
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  7. Extra fields in payloads are tolerated (forward compatibility)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestEventForwardCompatibility:
+    """Payloads with unknown extra fields must not crash consumers.
+
+    When a producer adds a new field, old consumers running an older
+    schema version must ignore it gracefully.
+    """
+
+    @pytest.mark.parametrize("event_cls,payload", [
+        (MarketUpdatedEvent, {"action": "sync", "count": 5, "new_field": True}),
+        (PairDetectedEvent, {"pair_id": 1, "market_a_id": 10, "market_b_id": 20,
+                             "dependency_type": "partition", "confidence": 0.9,
+                             "extra_data": [1, 2, 3]}),
+        (TradeExecutedEvent, {"trade_id": 1, "opportunity_id": 1, "market_id": 10,
+                              "outcome": "Yes", "side": "BUY", "size": 25.0,
+                              "vwap_price": 0.55, "slippage": 0.003,
+                              "unknown_metric": 42}),
+    ], ids=["MarketUpdatedEvent", "PairDetectedEvent", "TradeExecutedEvent"])
+    def test_extra_fields_ignored(self, event_cls, payload):
+        event = event_cls.model_validate(payload)
+        assert not hasattr(event, "new_field")
+        assert not hasattr(event, "extra_data")
+        assert not hasattr(event, "unknown_metric")
