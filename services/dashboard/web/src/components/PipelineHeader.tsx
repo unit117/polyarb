@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import type { Stats, FunnelData, TapeEvent } from "../hooks/useDashboardData.ts";
+import type { Stats, FunnelData, TapeEvent, Opportunity, Pair } from "../hooks/useDashboardData.ts";
 import s from "./PipelineHeader.module.css";
 
 type DotStatus = "live" | "ok" | "idle" | "warn" | "alert";
@@ -8,6 +8,8 @@ interface Props {
   stats: Stats | null;
   funnel: FunnelData | null;
   events: TapeEvent[];
+  opportunities: Opportunity[];
+  pairs: Pair[];
   onCellClick?: (tab: string) => void;
 }
 
@@ -34,7 +36,14 @@ interface CellData {
  * are derived from the Redis event buffer. A 1s ticker keeps "age" fields moving so a
  * stalled stage visibly decays to amber/red instead of silently flatlining.
  */
-const PipelineHeader = React.memo(function PipelineHeader({ stats, funnel, events, onCellClick }: Props) {
+const PipelineHeader = React.memo(function PipelineHeader({
+  stats,
+  funnel,
+  events,
+  opportunities,
+  pairs,
+  onCellClick,
+}: Props) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -55,16 +64,43 @@ const PipelineHeader = React.memo(function PipelineHeader({ stats, funnel, event
 
   // ── Detect ──
   const pairEvents = events.filter((e) => e.kind === "pair");
-  const lastPairAge = pairEvents[0] ? now - pairEvents[0].ts : null;
-  const pairsLastHour = pairEvents.filter((e) => now - e.ts < 3_600_000).length;
+  const recentPairTimes = pairs
+    .map((p) => Date.parse(p.detected_at))
+    .filter((ts) => Number.isFinite(ts));
+  const lastPairAge = pairEvents[0]
+    ? now - pairEvents[0].ts
+    : recentPairTimes.length
+      ? now - Math.max(...recentPairTimes)
+      : null;
+  const pairsLastHour = pairEvents.length
+    ? pairEvents.filter((e) => now - e.ts < 3_600_000).length
+    : recentPairTimes.filter((ts) => now - ts < 3_600_000).length;
 
   // ── Optimize ── (rolling over the most recent optimizer outputs)
   const optEvents = events.filter((e) => e.kind === "optimize").slice(0, 50);
+  const optRows = optEvents.length
+    ? optEvents.map((e) => ({
+      converged: e.data.converged === true,
+      iterations: num(e.data.iterations),
+      gap: num(e.data.bregman_gap),
+    }))
+    : opportunities
+      .filter((o) => o.fw_iterations != null || o.bregman_gap != null)
+      .slice(0, 50)
+      .map((o) => ({
+        converged: o.status !== "unconverged",
+        iterations: o.fw_iterations,
+        gap: o.bregman_gap,
+      }));
   const convergedPct = optEvents.length
-    ? (optEvents.filter((e) => e.data.converged === true).length / optEvents.length) * 100
+    ? (optRows.filter((e) => e.converged).length / optRows.length) * 100
+    : f?.detected
+      ? (f.optimized / f.detected) * 100
+      : optRows.length
+        ? (optRows.filter((e) => e.converged).length / optRows.length) * 100
     : null;
-  const medIters = median(optEvents.map((e) => num(e.data.iterations)).filter(isNum));
-  const medGap = median(optEvents.map((e) => num(e.data.bregman_gap)).filter(isNum));
+  const medIters = median(optRows.map((e) => e.iterations).filter(isNum));
+  const medGap = median(optRows.map((e) => e.gap).filter(isNum));
 
   // ── Simulate ──
   const cbEvent = events.find((e) => e.kind === "circuit");

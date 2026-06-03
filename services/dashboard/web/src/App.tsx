@@ -76,6 +76,8 @@ export default function App() {
         stats={stats}
         funnel={funnel}
         events={events}
+        opportunities={opportunities}
+        pairs={pairs}
         onCellClick={(t) => setTab(t as Tab)}
       />
 

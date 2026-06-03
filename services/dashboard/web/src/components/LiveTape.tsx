@@ -69,7 +69,7 @@ const LiveTape = React.memo(function LiveTape({ events, connected }: Props) {
       >
         {rows.length === 0 ? (
           <div className={s.empty}>
-            {connected ? "Waiting for pipeline events…" : "Disconnected — reconnecting…"}
+            {connected ? "No live pipeline events since this page opened" : "Disconnected — reconnecting…"}
           </div>
         ) : (
           rows.map((e) => <Row key={e.id} event={e} />)
