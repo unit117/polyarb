@@ -131,6 +131,9 @@ async def get_pairs(limit: int = 200, offset: int = 0):
             "dependency_type": pair.dependency_type,
             "confidence": pair.confidence,
             "verified": pair.verified,
+            "classification_source": pair.classification_source,
+            "implication_direction": pair.implication_direction,
+            "correlation": (pair.constraint_matrix or {}).get("correlation"),
             "detected_at": pair.detected_at.isoformat() if pair.detected_at else None,
             "market_a": {
                 "id": pair.market_a.id,

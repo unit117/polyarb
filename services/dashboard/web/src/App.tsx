@@ -3,6 +3,7 @@ import PipelineHeader from "./components/PipelineHeader.tsx";
 import LiveTape from "./components/LiveTape.tsx";
 import OpportunitiesTable from "./components/OpportunitiesTable.tsx";
 import TradesTable from "./components/TradesTable.tsx";
+import PositionsTable from "./components/PositionsTable.tsx";
 import PairsTable from "./components/PairsTable.tsx";
 import OpportunityDetail from "./components/OpportunityDetail.tsx";
 
@@ -12,7 +13,7 @@ import { useDashboardData } from "./hooks/useDashboardData.ts";
 import type { TradingMode } from "./hooks/useDashboardData.ts";
 import s from "./App.module.css";
 
-type Tab = "opportunities" | "trades" | "pairs" | "metrics";
+type Tab = "opportunities" | "trades" | "positions" | "pairs" | "metrics";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("opportunities");
@@ -24,6 +25,7 @@ export default function App() {
     opportunities,
     trades,
     pairs,
+    positions,
     funnel,
     events,
     connected,
@@ -83,7 +85,7 @@ export default function App() {
           </Suspense>
 
           <nav className={s.tabs}>
-            {(["opportunities", "trades", "pairs", "metrics"] as Tab[]).map((t) => (
+            {(["opportunities", "trades", "positions", "pairs", "metrics"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -111,6 +113,9 @@ export default function App() {
                 onLoadMore={loadMoreTrades}
                 loading={loadingMore.trades}
               />
+            )}
+            {tab === "positions" && (
+              <PositionsTable positions={positions} />
             )}
             {tab === "pairs" && (
               <PairsTable

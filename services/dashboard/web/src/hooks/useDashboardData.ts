@@ -116,10 +116,25 @@ export interface Pair {
   dependency_type: string;
   confidence: number;
   verified: boolean;
+  classification_source?: string | null;
+  implication_direction?: string | null;
+  correlation?: string | null;
   detected_at: string;
   market_a: { id: number; question: string; venue?: string } | null;
   market_b: { id: number; question: string; venue?: string } | null;
   opportunity_count: number;
+}
+
+export interface Position {
+  key: string;
+  market_id: number;
+  outcome: string;
+  shares: number; // signed: positive = long, negative = short
+  cost_basis: number | null; // total dollar cost basis (magnitude)
+  market_question: string | null;
+  venue: string | null;
+  resolved_outcome: string | null;
+  resolved: boolean;
 }
 
 export interface PaginationInfo {
@@ -174,6 +189,7 @@ export interface DashboardData {
   opportunities: Opportunity[];
   trades: Trade[];
   pairs: Pair[];
+  positions: Position[];
   funnel: FunnelData | null;
   events: TapeEvent[];
   connected: boolean;
@@ -190,7 +206,7 @@ export interface DashboardData {
 
 const PAGE_SIZE = 50;
 const EVENT_CAP = 400; // ring-buffer size for the live tape
-type FetchKey = "stats" | "history" | "baseline" | "opportunities" | "trades" | "pairs" | "funnel";
+type FetchKey = "stats" | "history" | "baseline" | "opportunities" | "trades" | "pairs" | "funnel" | "positions";
 
 const DEFAULT_REFRESH_KEYS: FetchKey[] = ["stats"];
 
@@ -198,9 +214,9 @@ const CHANNEL_REFRESH_KEYS: Record<string, FetchKey[]> = {
   [REDIS_CHANNELS.ARBITRAGE_FOUND]: ["opportunities", "stats", "funnel"],
   [REDIS_CHANNELS.OPTIMIZATION_COMPLETE]: ["opportunities", "stats", "funnel"],
   [REDIS_CHANNELS.TRADE_EXECUTED]: ["opportunities", "trades", "stats", "history", "funnel"],
-  [REDIS_CHANNELS.PORTFOLIO_UPDATED]: ["stats", "history", "baseline"],
+  [REDIS_CHANNELS.PORTFOLIO_UPDATED]: ["stats", "history", "baseline", "positions"],
   [REDIS_CHANNELS.PAIR_DETECTED]: ["pairs", "stats"],
-  [REDIS_CHANNELS.MARKET_RESOLVED]: ["trades", "stats", "history"],
+  [REDIS_CHANNELS.MARKET_RESOLVED]: ["trades", "stats", "history", "positions"],
 };
 
 // Per-channel display metadata for the live tape + pipeline header.
@@ -235,6 +251,7 @@ export function useDashboardData(): DashboardData {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [pairs, setPairs] = useState<Pair[]>([]);
+  const [positions, setPositions] = useState<Position[]>([]);
   const [funnel, setFunnel] = useState<FunnelData | null>(null);
   const [events, setEvents] = useState<TapeEvent[]>([]);
   const [connected, setConnected] = useState(false);
@@ -259,6 +276,7 @@ export function useDashboardData(): DashboardData {
     setBaseline({ status: "pending", total_value: null, timestamp: null });
     baselineResolvedRef.current = false;
     setTrades([]);
+    setPositions([]);
     setTradesPag({ total: 0, offset: 0, limit: PAGE_SIZE, hasMore: false });
     loadedCountRef.current.trades = PAGE_SIZE;
   }, []);
@@ -333,6 +351,13 @@ export function useDashboardData(): DashboardData {
     apiFetch<FunnelData>(`/metrics/funnel?hours=24`).then(setFunnel).catch(console.error);
   }, []);
 
+  // Open positions for the current source (paper/live).
+  const fetchPositions = useCallback(() => {
+    apiFetch<{ positions: Position[] }>(`/positions?${sourceParam}`)
+      .then((r) => setPositions(r.positions))
+      .catch(console.error);
+  }, [sourceParam]);
+
   const loadMoreOpportunities = useCallback(() => {
     const nextOffset = opportunities.length;
     setLoadingMore((prev) => ({ ...prev, opportunities: true }));
@@ -399,13 +424,14 @@ export function useDashboardData(): DashboardData {
     fetchTrades();
     fetchPairs();
     fetchFunnel();
-  }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel]);
+    fetchPositions();
+  }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel, fetchPositions]);
 
   // Keep fetch refs current so WebSocket handler always uses latest mode
-  const fetchRefsRef = useRef({ fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel });
+  const fetchRefsRef = useRef({ fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel, fetchPositions });
   useEffect(() => {
-    fetchRefsRef.current = { fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel };
-  }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel]);
+    fetchRefsRef.current = { fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel, fetchPositions };
+  }, [fetchStats, fetchHistory, fetchBaseline, fetchOpportunities, fetchTrades, fetchPairs, fetchFunnel, fetchPositions]);
 
   // Debounced WS fetch — coalesce rapid events into one batch (150ms window)
   const pendingFetches = useRef(new Set<FetchKey>());
@@ -424,6 +450,7 @@ export function useDashboardData(): DashboardData {
       if (pending.has("trades")) f.fetchTrades();
       if (pending.has("pairs")) f.fetchPairs();
       if (pending.has("funnel")) f.fetchFunnel();
+      if (pending.has("positions")) f.fetchPositions();
       pending.clear();
     }, 150);
   }, []);
@@ -502,6 +529,7 @@ export function useDashboardData(): DashboardData {
     opportunities,
     trades,
     pairs,
+    positions,
     funnel,
     events,
     connected,
