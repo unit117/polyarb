@@ -25,7 +25,16 @@ async def get_opportunities(limit: int = 200, offset: int = 0, status: str | Non
             select(ArbitrageOpportunity)
             .options(
                 joinedload(ArbitrageOpportunity.pair)
-                .load_only(MarketPair.id, MarketPair.dependency_type, MarketPair.confidence)
+                .load_only(
+                    MarketPair.id,
+                    MarketPair.dependency_type,
+                    MarketPair.confidence,
+                    MarketPair.verified,
+                    MarketPair.implication_direction,
+                    MarketPair.classification_source,
+                    MarketPair.constraint_matrix,
+                    MarketPair.resolution_vectors,
+                )
                 .joinedload(MarketPair.market_a).load_only(Market.id, Market.question, Market.venue),
                 joinedload(ArbitrageOpportunity.pair)
                 .joinedload(MarketPair.market_b).load_only(Market.id, Market.question, Market.venue),
@@ -63,10 +72,16 @@ async def get_opportunities(limit: int = 200, offset: int = 0, status: str | Non
             "estimated_profit": float(opp.estimated_profit) if opp.estimated_profit else 0,
             "fw_iterations": opp.fw_iterations,
             "bregman_gap": opp.bregman_gap,
+            "optimal_trades": opp.optimal_trades,
             "pair": {
                 "id": pair.id,
                 "dependency_type": pair.dependency_type,
                 "confidence": pair.confidence,
+                "verified": pair.verified,
+                "implication_direction": pair.implication_direction,
+                "classification_source": pair.classification_source,
+                "constraint_matrix": pair.constraint_matrix,
+                "resolution_vectors": pair.resolution_vectors,
                 "market_a": pair.market_a.question[:80] if pair.market_a else None,
                 "market_a_venue": getattr(pair.market_a, "venue", "polymarket") if pair.market_a else None,
                 "market_b": pair.market_b.question[:80] if pair.market_b else None,
@@ -116,6 +131,9 @@ async def get_pairs(limit: int = 200, offset: int = 0):
             "dependency_type": pair.dependency_type,
             "confidence": pair.confidence,
             "verified": pair.verified,
+            "classification_source": pair.classification_source,
+            "implication_direction": pair.implication_direction,
+            "correlation": (pair.constraint_matrix or {}).get("correlation"),
             "detected_at": pair.detected_at.isoformat() if pair.detected_at else None,
             "market_a": {
                 "id": pair.market_a.id,

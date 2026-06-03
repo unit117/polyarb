@@ -167,6 +167,26 @@
   color: #4da6ff;
 }
 
+.crossVenue {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(0, 150, 255, 0.15);
+  color: #4da6ff;
+  vertical-align: middle;
+}
+
+.crossToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
 .profitYellow {
   color: var(--color-yellow);
 }

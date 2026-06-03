@@ -1,10 +1,14 @@
 """Tests for shared/events.py publish/subscribe helpers."""
 
 import json
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import shared.circuit_breaker as circuit_breaker_contracts
+import shared.events as event_contracts
 from shared.events import (
     get_redis,
     publish,
@@ -43,6 +47,26 @@ class TestPublish:
         args = r.publish.call_args[0]
         assert args[0] == "my:channel"
         assert json.loads(args[1]) == {"key": "val"}
+
+
+class TestDashboardChannelContract:
+    def test_dashboard_channel_constants_match_backend_events(self):
+        """The dashboard WS handler must match raw Redis channel names."""
+        repo_root = Path(__file__).resolve().parents[3]
+        ts_channels = (
+            repo_root / "services/dashboard/web/src/redisChannels.ts"
+        ).read_text()
+
+        frontend_values = set(re.findall(r'"(polyarb:[^"]+)"', ts_channels))
+        backend_values = set()
+        for module in (event_contracts, circuit_breaker_contracts):
+            backend_values.update(
+                value
+                for name, value in vars(module).items()
+                if name.startswith("CHANNEL_") and isinstance(value, str)
+            )
+
+        assert frontend_values == backend_values
 
 
 class TestSubscribe:

@@ -110,6 +110,22 @@ const PairsTable = React.memo(function PairsTable({ pairs, pagination, onLoadMor
                 >
                   {formatDepType(p.dependency_type)}
                 </span>
+                {isCrossVenuePair(p) && (
+                  <span className={s.crossVenue} title="Cross-venue pair">⇄</span>
+                )}
+                {(p.classification_source || p.implication_direction || p.correlation) && (
+                  <div className={s.relSub}>
+                    {p.implication_direction && (
+                      <span title="implication direction">{p.implication_direction}</span>
+                    )}
+                    {p.correlation && <span title="price correlation">{p.correlation}</span>}
+                    {p.classification_source && (
+                      <span className={s.relSrc} title="classified by">
+                        {p.classification_source}
+                      </span>
+                    )}
+                  </div>
+                )}
               </td>
               <td className={s.confidenceCell}>
                 <ConfidenceMeter value={p.confidence} />
@@ -196,4 +212,11 @@ function formatDepType(dt: string): string {
   return dt
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Cross-venue pair: the two markets live on different venues.
+function isCrossVenuePair(p: Pair): boolean {
+  const a = p.market_a?.venue;
+  const b = p.market_b?.venue;
+  return !!a && !!b && a !== b;
 }

@@ -1,7 +1,10 @@
 import { Suspense, lazy, useMemo, useState } from "react";
-import StatsBar from "./components/StatsBar.tsx";
+import PipelineHeader from "./components/PipelineHeader.tsx";
+import LiveTape from "./components/LiveTape.tsx";
+import SafetyStrip from "./components/SafetyStrip.tsx";
 import OpportunitiesTable from "./components/OpportunitiesTable.tsx";
 import TradesTable from "./components/TradesTable.tsx";
+import PositionsTable from "./components/PositionsTable.tsx";
 import PairsTable from "./components/PairsTable.tsx";
 import OpportunityDetail from "./components/OpportunityDetail.tsx";
 
@@ -11,7 +14,7 @@ import { useDashboardData } from "./hooks/useDashboardData.ts";
 import type { TradingMode } from "./hooks/useDashboardData.ts";
 import s from "./App.module.css";
 
-type Tab = "opportunities" | "trades" | "pairs" | "metrics";
+type Tab = "opportunities" | "trades" | "positions" | "pairs" | "metrics";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("opportunities");
@@ -23,6 +26,10 @@ export default function App() {
     opportunities,
     trades,
     pairs,
+    positions,
+    funnel,
+    events,
+    connected,
     opportunitiesPagination,
     tradesPagination,
     pairsPagination,
@@ -65,55 +72,76 @@ export default function App() {
         />
       </header>
 
-      <StatsBar stats={stats} onStatClick={(t) => setTab(t as Tab)} />
-      <Suspense fallback={<div style={{ height: 280, background: "var(--color-bg-panel)", borderRadius: 8, marginBottom: 20 }} />}>
-        <PnlChart history={history} baseline={baseline.total_value} />
-      </Suspense>
+      <PipelineHeader
+        stats={stats}
+        funnel={funnel}
+        events={events}
+        opportunities={opportunities}
+        pairs={pairs}
+        onCellClick={(t) => setTab(t as Tab)}
+      />
 
-      <nav className={s.tabs}>
-        {(["opportunities", "trades", "pairs", "metrics"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`${s.tab} ${tab === t ? s.tabActive : ""}`}
-          >
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </nav>
+      {mode === "live" && <SafetyStrip />}
 
-      <main className={s.main}>
-        {tab === "opportunities" && (
-          <OpportunitiesTable
-            opportunities={opportunities}
-            pagination={opportunitiesPagination}
-            onLoadMore={loadMoreOpportunities}
-            loading={loadingMore.opportunities}
-            onSelect={(o) => setSelectedOppId(o.id)}
-          />
-        )}
-        {tab === "trades" && (
-          <TradesTable
-            trades={trades}
-            pagination={tradesPagination}
-            onLoadMore={loadMoreTrades}
-            loading={loadingMore.trades}
-          />
-        )}
-        {tab === "pairs" && (
-          <PairsTable
-            pairs={pairs}
-            pagination={pairsPagination}
-            onLoadMore={loadMorePairs}
-            loading={loadingMore.pairs}
-          />
-        )}
-        {tab === "metrics" && (
-          <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "var(--color-text-dim)" }}>Loading metrics...</div>}>
-            <MetricsPanel />
+      <div className={s.layout}>
+        <div className={s.mainCol}>
+          <Suspense fallback={<div style={{ height: 280, background: "var(--color-bg-panel)", borderRadius: 8, marginBottom: 20 }} />}>
+            <PnlChart history={history} baseline={baseline.total_value} />
           </Suspense>
-        )}
-      </main>
+
+          <nav className={s.tabs}>
+            {(["opportunities", "trades", "positions", "pairs", "metrics"] as Tab[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`${s.tab} ${tab === t ? s.tabActive : ""}`}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </nav>
+
+          <main className={s.main}>
+            {tab === "opportunities" && (
+              <OpportunitiesTable
+                opportunities={opportunities}
+                pagination={opportunitiesPagination}
+                onLoadMore={loadMoreOpportunities}
+                loading={loadingMore.opportunities}
+                onSelect={(o) => setSelectedOppId(o.id)}
+              />
+            )}
+            {tab === "trades" && (
+              <TradesTable
+                trades={trades}
+                pagination={tradesPagination}
+                onLoadMore={loadMoreTrades}
+                loading={loadingMore.trades}
+              />
+            )}
+            {tab === "positions" && (
+              <PositionsTable positions={positions} />
+            )}
+            {tab === "pairs" && (
+              <PairsTable
+                pairs={pairs}
+                pagination={pairsPagination}
+                onLoadMore={loadMorePairs}
+                loading={loadingMore.pairs}
+              />
+            )}
+            {tab === "metrics" && (
+              <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "var(--color-text-dim)" }}>Loading metrics...</div>}>
+                <MetricsPanel />
+              </Suspense>
+            )}
+          </main>
+        </div>
+
+        <aside className={s.rail}>
+          <LiveTape events={events} connected={connected} />
+        </aside>
+      </div>
 
       {selectedOpp && (
         <OpportunityDetail

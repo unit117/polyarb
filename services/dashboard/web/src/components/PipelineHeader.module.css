@@ -1,0 +1,136 @@
+.header {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-5);
+}
+
+.cell {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-light);
+}
+
+.cellHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.stage {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-text-dim);
+}
+
+.dot_live {
+  background: var(--color-green);
+  box-shadow: 0 0 6px var(--color-green);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.dot_ok {
+  background: var(--color-green);
+}
+
+.dot_warn {
+  background: var(--color-yellow);
+}
+
+.dot_alert {
+  background: var(--color-red);
+  box-shadow: 0 0 6px var(--color-red);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dot_idle {
+  background: var(--color-text-dim);
+}
+
+.primary {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: var(--color-text);
+}
+
+.primaryLabel {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-2);
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.lineLabel {
+  color: var(--color-text-muted);
+}
+
+.lineValue {
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.arrow {
+  align-self: center;
+  color: var(--color-text-dim);
+  font-size: var(--text-lg);
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .header {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cell {
+    flex: 0 0 142px;
+  }
+
+  .arrow {
+    display: none;
+  }
+}
