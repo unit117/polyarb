@@ -8,5 +8,5 @@ export const REDIS_CHANNELS = {
   PORTFOLIO_UPDATED: "polyarb:portfolio_updated",
   MARKET_RESOLVED: "polyarb:market_resolved",
   LIVE_STATUS: "polyarb:live_status",
-  CB_TRIPPED: "polyarb:cb_tripped",
+  CB_TRIPPED: "polyarb:circuit_breaker_tripped",
 } as const;
