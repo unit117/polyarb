@@ -43,6 +43,7 @@ class ClobWebSocket:
         buffer_seconds: float = 2.0,
         resolution_threshold: float = 0.98,
         max_snapshot_markets: int = 100,
+        max_ws_subscriptions: int = 3000,
     ):
         self._redis = redis
         self._session_factory = session_factory
@@ -53,6 +54,7 @@ class ClobWebSocket:
         self._buffer_seconds = buffer_seconds
         self._resolution_threshold = resolution_threshold
         self._max_snapshot_markets = max_snapshot_markets
+        self._max_ws_subscriptions = max_ws_subscriptions
 
         self._ws = None
         self._subscribed_tokens: set[str] = set()
@@ -90,55 +92,56 @@ class ClobWebSocket:
         log.info("ws_token_map_built", tokens=len(self._token_map))
 
     async def _get_eligible_token_ids(self) -> list[str]:
-        """Get token IDs for top markets by liquidity + paired markets."""
+        """Token IDs to stream, capped at max_ws_subscriptions.
+
+        Prioritises active markets that are part of a pair (what we actually
+        trade), then fills the remaining budget with the most liquid active
+        markets. Inactive/resolved markets and the long tail of low-liquidity
+        markets are left to the polling path — subscribing to all ~78k paired
+        tokens overwhelms the single WS connection and causes reconnect churn.
+        """
         from shared.models import MarketPair
 
         async with self._session_factory() as session:
-            # Top N by liquidity
-            result = await session.execute(
-                select(Market.id, Market.token_ids, Market.liquidity)
-                .where(Market.active == True)  # noqa: E712
-                .where(Market.token_ids != None)  # noqa: E711
-                .order_by(Market.liquidity.desc().nullslast())
-                .limit(self._max_snapshot_markets)
-            )
-            eligible_ids = set()
-            market_tokens: dict[int, list[str]] = {}
-            for row in result.fetchall():
-                eligible_ids.add(row.id)
-                market_tokens[row.id] = [str(t) for t in row.token_ids] if row.token_ids else []
-
-            # Add paired markets
+            # Market ids that appear in any pair (pairs aren't filtered by
+            # activity, so we intersect with the active set below).
             pair_result = await session.execute(
                 select(MarketPair.market_a_id, MarketPair.market_b_id)
             )
-            paired_ids = set()
+            paired_ids: set[int] = set()
             for row in pair_result.fetchall():
                 paired_ids.add(row.market_a_id)
                 paired_ids.add(row.market_b_id)
 
-            # Fetch tokens for paired markets not already in top N
-            # Chunk to avoid exceeding PostgreSQL's bound-parameter limit
-            missing = paired_ids - eligible_ids
-            if missing:
-                CHUNK = 5000
-                missing_list = list(missing)
-                for i in range(0, len(missing_list), CHUNK):
-                    chunk = missing_list[i : i + CHUNK]
-                    missing_result = await session.execute(
-                        select(Market.id, Market.token_ids)
-                        .where(Market.id.in_(chunk))
-                        .where(Market.token_ids != None)  # noqa: E711
-                    )
-                    for row in missing_result.fetchall():
-                        market_tokens[row.id] = [str(t) for t in row.token_ids] if row.token_ids else []
-                eligible_ids |= missing
+            # All active markets with tokens, most liquid first.
+            result = await session.execute(
+                select(Market.id, Market.token_ids)
+                .where(Market.active == True)  # noqa: E712
+                .where(Market.token_ids != None)  # noqa: E711
+                .order_by(Market.liquidity.desc().nullslast())
+            )
+            paired_rows: list[list[str]] = []
+            other_rows: list[list[str]] = []
+            for row in result.fetchall():
+                toks = [str(t) for t in row.token_ids] if row.token_ids else []
+                if not toks:
+                    continue
+                (paired_rows if row.id in paired_ids else other_rows).append(toks)
 
-        token_ids = []
-        for mid in eligible_ids:
-            token_ids.extend(market_tokens.get(mid, []))
+        # Active-paired markets first (by liquidity), then other liquid
+        # markets, accumulating tokens until the subscription budget is full.
+        token_ids: list[str] = []
+        for toks in paired_rows + other_rows:
+            if len(token_ids) + len(toks) > self._max_ws_subscriptions:
+                break
+            token_ids.extend(toks)
 
-        log.info("ws_eligible_tokens", markets=len(eligible_ids), tokens=len(token_ids))
+        log.info(
+            "ws_eligible_tokens",
+            tokens=len(token_ids),
+            cap=self._max_ws_subscriptions,
+            active_paired_markets=len(paired_rows),
+        )
         return token_ids
 
     async def update_subscriptions(self, eligible_token_ids: set[str]) -> None:

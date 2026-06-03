@@ -166,27 +166,39 @@ class MarketPoller:
             # Chunk seen_ids to stay under asyncpg's 32767 parameter limit.
             # Strategy: fetch all active polymarket IDs, compute stale set in
             # Python, then batch-update those.
-            active_result = await session.execute(
-                select(Market.id, Market.polymarket_id).where(
-                    Market.venue == "polymarket",
-                    Market.active == True,  # noqa: E712
-                )
-            )
-            stale_market_ids = [
-                row.id for row in active_result.all()
-                if row.polymarket_id not in seen_ids
-            ]
+            #
+            # Skip this sweep when pagination hit Gamma's offset cap: in that
+            # case `seen_ids` is only the top markets by liquidity, not the full
+            # active set, so "not seen" no longer implies "no longer active".
+            # Marking those inactive would wrongly drop still-active low-liquidity
+            # markets (and exclude any held positions from resolution checks).
+            # Resolved markets are still flipped inactive by check_resolved_markets.
             stale_count = 0
-            STALE_CHUNK = 10_000
-            for i in range(0, len(stale_market_ids), STALE_CHUNK):
-                chunk = stale_market_ids[i : i + STALE_CHUNK]
-                r = await session.execute(
-                    update(Market)
-                    .where(Market.id.in_(chunk))
-                    .values(active=False)
+            if self._gamma.last_pagination_capped:
+                log.info("sync_markets_stale_sweep_skipped", reason="pagination_capped")
+            else:
+                active_result = await session.execute(
+                    select(Market.id, Market.polymarket_id).where(
+                        Market.venue == "polymarket",
+                        Market.active == True,  # noqa: E712
+                    )
                 )
-                stale_count += r.rowcount or 0
+                stale_market_ids = [
+                    row.id for row in active_result.all()
+                    if row.polymarket_id not in seen_ids
+                ]
+                STALE_CHUNK = 10_000
+                for i in range(0, len(stale_market_ids), STALE_CHUNK):
+                    chunk = stale_market_ids[i : i + STALE_CHUNK]
+                    r = await session.execute(
+                        update(Market)
+                        .where(Market.id.in_(chunk))
+                        .values(active=False)
+                    )
+                    stale_count += r.rowcount or 0
 
+            # Always commit — flushes the per-page market upserts regardless of
+            # whether the stale sweep ran.
             await session.commit()
 
             result = await session.execute(
@@ -426,8 +438,11 @@ class MarketPoller:
             resolved_count = 0
             pages = 0
 
+            # Order by closedTime desc so the most-recently-resolved markets
+            # fall within Gamma's offset cap — liquidity order would push
+            # freshly-resolved (now-illiquid) markets out of reach.
             async for page in self._gamma.iter_market_pages(
-                active=False, closed=True
+                active=False, closed=True, order="closedTime"
             ):
                 pages += 1
                 page_events: list[dict] = []
@@ -483,18 +498,10 @@ class MarketPoller:
         if self._ws_client is not None:
             try:
                 await self._ws_client._build_token_map()
-                eligible = set(self.get_eligible_token_ids(markets))
-                # Also add paired market tokens
-                async with self._session_factory() as session:
-                    result = await session.execute(
-                        select(MarketPair.market_a_id, MarketPair.market_b_id)
-                    )
-                    markets_by_id = {m.id: m for m in markets if m.token_ids}
-                    for row in result.fetchall():
-                        for mid in (row.market_a_id, row.market_b_id):
-                            m = markets_by_id.get(mid)
-                            if m and m.token_ids:
-                                eligible.update(str(t) for t in m.token_ids)
+                # Use the WS client's capped eligible set so this periodic
+                # re-sync can't re-expand subscriptions past the budget and
+                # re-trigger the reconnect churn the cap is meant to prevent.
+                eligible = set(await self._ws_client._get_eligible_token_ids())
                 await self._ws_client.update_subscriptions(eligible)
             except Exception:
                 log.exception("ws_subscription_update_error")

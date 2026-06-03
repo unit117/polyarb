@@ -28,6 +28,11 @@ class GammaClient:
         self._min_interval = 1.0 / rate_limit_rps
         self._last_request_time = 0.0
         self._max_retries = 5
+        # True if the most recent pagination stopped early at Gamma's offset
+        # cap (~10000) rather than exhausting the result set. Callers use this
+        # to avoid concluding that unfetched markets no longer exist.
+        # Sequential use only (poll loop awaits each pagination fully).
+        self.last_pagination_capped = False
 
     async def _rate_limit(self) -> None:
         async with self._lock:
@@ -69,19 +74,49 @@ class GammaClient:
                 await asyncio.sleep(backoff)
         return []
 
+    def _market_params(
+        self,
+        limit: int,
+        offset: int,
+        active: bool,
+        closed: bool,
+        order: str | None,
+        ascending: bool,
+    ) -> dict:
+        params = {
+            "limit": limit,
+            "offset": offset,
+            "active": str(active).lower(),
+            "closed": str(closed).lower(),
+        }
+        if order:
+            # Order by liquidity desc by default so the most tradeable markets
+            # fall within Gamma's offset cap (it 422s past offset 10000).
+            params["order"] = order
+            params["ascending"] = str(ascending).lower()
+        return params
+
     async def list_markets(
-        self, limit: int = 100, active: bool = True, closed: bool = False
+        self,
+        limit: int = 100,
+        active: bool = True,
+        closed: bool = False,
+        order: str | None = "liquidityNum",
+        ascending: bool = False,
     ) -> list[dict]:
         all_markets = []
         offset = 0
+        self.last_pagination_capped = False
         while True:
-            params = {
-                "limit": limit,
-                "offset": offset,
-                "active": str(active).lower(),
-                "closed": str(closed).lower(),
-            }
-            batch = await self._request("GET", "/markets", params=params)
+            params = self._market_params(limit, offset, active, closed, order, ascending)
+            try:
+                batch = await self._request("GET", "/markets", params=params)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 422:
+                    self.last_pagination_capped = True
+                    log.warning("gamma_pagination_cap", offset=offset, total_so_far=len(all_markets))
+                    break
+                raise
             if not isinstance(batch, list):
                 break
             all_markets.extend(batch)
@@ -92,18 +127,29 @@ class GammaClient:
         return all_markets
 
     async def iter_market_pages(
-        self, limit: int = 100, active: bool = True, closed: bool = False
+        self,
+        limit: int = 100,
+        active: bool = True,
+        closed: bool = False,
+        order: str | None = "liquidityNum",
+        ascending: bool = False,
     ) -> AsyncIterator[list[dict]]:
         """Yield pages of markets without accumulating all in memory."""
         offset = 0
+        self.last_pagination_capped = False
         while True:
-            params = {
-                "limit": limit,
-                "offset": offset,
-                "active": str(active).lower(),
-                "closed": str(closed).lower(),
-            }
-            batch = await self._request("GET", "/markets", params=params)
+            params = self._market_params(limit, offset, active, closed, order, ascending)
+            try:
+                batch = await self._request("GET", "/markets", params=params)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 422:
+                    # Gamma caps pagination near offset 10000; treat the 422 as
+                    # end-of-data instead of letting it abort the poll cycle
+                    # (which previously stalled all price-snapshot writes).
+                    self.last_pagination_capped = True
+                    log.warning("gamma_pagination_cap", offset=offset)
+                    break
+                raise
             if not isinstance(batch, list) or not batch:
                 break
             yield batch
