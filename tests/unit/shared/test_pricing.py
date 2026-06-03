@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from shared.pricing import get_latest_snapshot
+from shared.pricing import get_latest_snapshot, is_price_frozen
 
 
 def _make_snapshot(prices=None, market_id=1, ts=None):
@@ -61,3 +61,72 @@ class TestGetLatestSnapshot:
 
         await get_latest_snapshot(session, market_id=1, max_age_seconds=0)
         session.execute.assert_called_once()
+
+
+def _frozen_session(rows):
+    """Build a mock session whose execute(...).all() yields (midpoints, prices) rows."""
+    result_mock = MagicMock()
+    result_mock.all.return_value = rows
+    session = AsyncMock()
+    session.execute.return_value = result_mock
+    return session
+
+
+class TestIsPriceFrozen:
+    @pytest.mark.asyncio
+    async def test_identical_midpoints_are_frozen(self):
+        rows = [({"Yes": 0.44, "No": 0.56}, None)] * 10
+        session = _frozen_session(rows)
+        assert await is_price_frozen(
+            session, 1, "Yes", window_seconds=3600, min_observations=4
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_moving_midpoints_not_frozen(self):
+        rows = [
+            ({"Yes": 0.44, "No": 0.56}, None),
+            ({"Yes": 0.45, "No": 0.55}, None),
+            ({"Yes": 0.44, "No": 0.56}, None),
+            ({"Yes": 0.46, "No": 0.54}, None),
+            ({"Yes": 0.44, "No": 0.56}, None),
+        ]
+        session = _frozen_session(rows)
+        assert await is_price_frozen(
+            session, 1, "Yes", window_seconds=3600, min_observations=4
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_too_few_observations_not_frozen(self):
+        """Benefit of the doubt: not enough history to declare frozen."""
+        rows = [({"Yes": 0.44, "No": 0.56}, None)] * 3
+        session = _frozen_session(rows)
+        assert await is_price_frozen(
+            session, 1, "Yes", window_seconds=3600, min_observations=4
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_prices_when_no_midpoints(self):
+        rows = [(None, {"Yes": 0.44, "No": 0.56})] * 6
+        session = _frozen_session(rows)
+        assert await is_price_frozen(
+            session, 1, "Yes", window_seconds=3600, min_observations=4
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_string_prices_are_float_cast(self):
+        """Polymarket stores prices as strings — frozen detection must still work."""
+        rows = [({"Yes": "0.44", "No": "0.56"}, None)] * 6
+        session = _frozen_session(rows)
+        assert await is_price_frozen(
+            session, 1, "Yes", window_seconds=3600, min_observations=4
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_missing_outcome_not_counted(self):
+        """Rows lacking the traded outcome don't count toward observations."""
+        rows = [({"No": 0.56}, None)] * 10
+        session = _frozen_session(rows)
+        # No observations for "Yes" → cannot judge → not frozen
+        assert await is_price_frozen(
+            session, 1, "Yes", window_seconds=3600, min_observations=4
+        ) is False

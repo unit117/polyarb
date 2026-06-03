@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     uncertainty_price_floor: float = 0.05
     uncertainty_price_ceil: float = 0.95
 
+    # Dormant-pair filter — stop re-creating opportunities for pairs that keep
+    # optimizing to zero executable profit (theoretical edge but no real edge),
+    # which otherwise recycle ~1/min. A pair goes dormant when its last
+    # dormant_pair_min_evaluations optimized opps within the window were all
+    # zero-profit; it re-probes automatically once the window empties.
+    dormant_pair_enabled: bool = True
+    dormant_pair_min_evaluations: int = 5
+    dormant_pair_window_seconds: int = 1800
+
     # Optimizer settings
     fw_max_iterations: int = 200
     fw_gap_tolerance: float = 0.001
@@ -79,6 +88,14 @@ class Settings(BaseSettings):
     simulator_interval_seconds: int = 60
     max_snapshot_age_seconds: int = 600  # Reject price snapshots older than this (10 min)
     max_opportunity_retries: int = 10  # Expire opportunity after this many blocked attempts
+    # Frozen-price guard: reject trades whose quoted midpoint has not moved
+    # across recent snapshots. A frozen price means an illiquid/stale market
+    # whose "edge" is not actually tradeable; without this, the same opportunity
+    # recurs every cycle and the simulator re-enters, silently accumulating a
+    # directional position on dead data.
+    reject_frozen_prices: bool = True
+    price_staleness_window_seconds: int = 3600  # look-back window for price movement
+    price_staleness_min_observations: int = 4  # snapshots needed in window to judge frozen
     simulator_reset_epoch: Optional[datetime] = None  # Filter dashboard to only show data after this timestamp
 
     # Settlement settings

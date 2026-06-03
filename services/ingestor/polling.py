@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -148,7 +148,16 @@ class MarketPoller:
                             "description": stmt.excluded.description,
                             "outcomes": stmt.excluded.outcomes,
                             "token_ids": stmt.excluded.token_ids,
-                            "active": stmt.excluded.active,
+                            # Never re-activate a market we've already recorded as
+                            # resolved. Gamma keeps reporting resolved markets as
+                            # active="true" until it archives them, so blindly
+                            # taking excluded.active would flip our resolved rows
+                            # back to active — leaving them in the WS token map and
+                            # firing endless reconnect-pending warnings.
+                            "active": case(
+                                (Market.resolved_outcome.isnot(None), False),
+                                else_=stmt.excluded.active,
+                            ),
                             "end_date": stmt.excluded.end_date,
                             "volume": stmt.excluded.volume,
                             "liquidity": stmt.excluded.liquidity,

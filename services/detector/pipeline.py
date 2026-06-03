@@ -641,6 +641,37 @@ class DetectionPipeline:
             logger.info("rescan_complete", **stats)
         return stats
 
+    async def _is_pair_dormant(self, session, pair_id: int) -> bool:
+        """True if a pair keeps optimizing to zero executable profit.
+
+        Some pairs show a theoretical edge every snapshot but the optimizer
+        finds zero executable profit (e.g. a frozen/illiquid quote), so they
+        recycle DETECTED→OPTIMIZED→EXPIRED ~once a minute forever. When the
+        pair's last `dormant_pair_min_evaluations` optimizer-evaluated opps
+        within the window were ALL zero estimated_profit, treat it as dormant
+        and stop re-creating opportunities for it. It re-probes on its own once
+        the window empties (no fresh opps → fewer than the minimum in window).
+        """
+        if not settings.dormant_pair_enabled:
+            return False
+        window_start = datetime.now(timezone.utc) - timedelta(
+            seconds=settings.dormant_pair_window_seconds
+        )
+        result = await session.execute(
+            select(ArbitrageOpportunity.estimated_profit)
+            .where(
+                ArbitrageOpportunity.pair_id == pair_id,
+                ArbitrageOpportunity.estimated_profit.isnot(None),
+                ArbitrageOpportunity.timestamp >= window_start,
+            )
+            .order_by(ArbitrageOpportunity.timestamp.desc())
+            .limit(settings.dormant_pair_min_evaluations)
+        )
+        profits = [row[0] for row in result.all()]
+        if len(profits) < settings.dormant_pair_min_evaluations:
+            return False
+        return all((p or 0) == 0 for p in profits)
+
     async def rescan_by_market_ids(self, market_ids: set[int]) -> dict:
         """Re-evaluate verified pairs involving specific markets with fresh prices.
 
@@ -708,6 +739,11 @@ class DetectionPipeline:
                 if not verified:
                     continue
 
+                # Dormant pairs keep optimizing to zero executable profit and
+                # would otherwise recycle every snapshot — skip re-detecting and
+                # re-creating their opportunities. Only query when profit > 0.
+                dormant = profit > 0 and await self._is_pair_dormant(session, pair.id)
+
                 existing_opp = in_flight_opps.get(pair.id)
                 if existing_opp:
                     # Don't touch pending opps -- simulator is mid-execution
@@ -735,7 +771,10 @@ class DetectionPipeline:
                     existing_opp.theoretical_profit = Decimal(
                         str(max(profit, 0))
                     )
-                    if existing_opp.status in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED):
+                    if (
+                        existing_opp.status in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED)
+                        and not dormant
+                    ):
                         transition(existing_opp, OppStatus.DETECTED)
                         existing_opp.optimal_trades = None
                         existing_opp.fw_iterations = None
@@ -747,7 +786,7 @@ class DetectionPipeline:
                             "theoretical_profit": float(max(profit, 0)),
                         })
                     stats["refreshed"] += 1
-                elif profit > 0:
+                elif profit > 0 and not dormant:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",
