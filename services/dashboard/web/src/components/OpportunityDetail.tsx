@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
-import type { Opportunity } from "../hooks/useDashboardData.ts";
+import type { Opportunity, ConstraintMatrix, TradeLeg } from "../hooks/useDashboardData.ts";
+import CostWaterfall from "./CostWaterfall.tsx";
 import s from "./OpportunityDetail.module.css";
 
 interface Props {
@@ -27,10 +28,8 @@ const OpportunityDetail = React.memo(function OpportunityDetail({
     return () => document.removeEventListener("keydown", handler);
   }, [handleClose]);
 
-  const profitDelta = o.theoretical_profit - o.estimated_profit;
-  const feesImpact = o.theoretical_profit > 0
-    ? ((profitDelta / o.theoretical_profit) * 100).toFixed(1)
-    : "0";
+  const cm = o.pair?.constraint_matrix ?? null;
+  const ot = o.optimal_trades ?? null;
 
   // Convergence quality (lower gap = better)
   const gapQuality = o.bregman_gap != null
@@ -115,50 +114,53 @@ const OpportunityDetail = React.memo(function OpportunityDetail({
             </div>
           </div>
 
-          {/* Profit Comparison */}
+          {/* Proof: the logical relation + the concrete basket */}
+          {(cm || (ot?.trades && ot.trades.length > 0)) && (
+            <div className={s.section}>
+              <div className={s.sectionTitle}>Proof of Arbitrage</div>
+              <div className={s.relMeta}>
+                <span className={s.relTag}>
+                  {formatDepType(o.pair?.dependency_type ?? cm?.type ?? "")}
+                </span>
+                {o.pair?.verified != null && (
+                  <span className={`${s.relTag} ${o.pair.verified ? s.relVerified : s.relUnverified}`}>
+                    {o.pair.verified ? "verified" : "unverified"}
+                  </span>
+                )}
+                {cm?.correlation && <span className={s.relDim}>corr {cm.correlation}</span>}
+                {o.pair?.implication_direction && (
+                  <span className={s.relDim}>impl {o.pair.implication_direction}</span>
+                )}
+                {o.pair?.classification_source && (
+                  <span className={s.relDim}>src {o.pair.classification_source}</span>
+                )}
+              </div>
+
+              {cm?.matrix && (
+                <div className={s.proofBlock}>
+                  <div className={s.proofCaption}>Feasible joint outcomes (A&darr; &times; B&rarr;)</div>
+                  <ConstraintGrid cm={cm} />
+                </div>
+              )}
+
+              {ot?.trades && ot.trades.length > 0 && (
+                <div className={s.proofBlock}>
+                  <div className={s.proofCaption}>Optimal basket</div>
+                  <div className={s.basket}>
+                    {ot.trades.map((leg, i) => (
+                      <BasketLeg key={i} leg={leg} />
+                    ))}
+                  </div>
+                  <div className={s.proofFootnote}>Locks profit across every feasible outcome</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Cost Waterfall */}
           <div className={s.section}>
-            <div className={s.sectionTitle}>Profit Analysis</div>
-            <div className={s.profitCompare}>
-              <div className={s.profitBox}>
-                <div className={s.profitBoxLabel}>Theoretical</div>
-                <div
-                  className={s.profitBoxValue}
-                  style={{ color: o.theoretical_profit > 0 ? "var(--color-green)" : "var(--color-text-dim)" }}
-                >
-                  {o.theoretical_profit.toFixed(4)}
-                </div>
-              </div>
-              <div className={s.profitBoxArrow}>&rarr;</div>
-              <div className={s.profitBox}>
-                <div className={s.profitBoxLabel}>After Fees</div>
-                <div
-                  className={s.profitBoxValue}
-                  style={{
-                    color: o.estimated_profit > 0.01
-                      ? "var(--color-green)"
-                      : o.estimated_profit > 0
-                        ? "var(--color-yellow)"
-                        : "var(--color-text-dim)",
-                  }}
-                >
-                  {o.estimated_profit.toFixed(4)}
-                </div>
-              </div>
-            </div>
-            <div className={s.kvGrid} style={{ marginTop: 12 }}>
-              <div className={s.kvItem}>
-                <span className={s.kvLabel}>Fee Impact</span>
-                <span className={s.kvValueMono} style={{ color: "var(--color-red)" }}>
-                  -{feesImpact}%
-                </span>
-              </div>
-              <div className={s.kvItem}>
-                <span className={s.kvLabel}>Fees + Slippage</span>
-                <span className={s.kvValueMono}>
-                  {profitDelta.toFixed(4)}
-                </span>
-              </div>
-            </div>
+            <div className={s.sectionTitle}>Cost Waterfall</div>
+            <CostWaterfall theoretical={o.theoretical_profit} estimated={o.estimated_profit} />
           </div>
 
           {/* Optimizer Convergence */}
@@ -214,4 +216,57 @@ function statusBadgeClass(status: string): string {
     case "unconverged": return s.statusUnconverged;
     default:            return "";
   }
+}
+
+// Feasibility grid: rows = Market A outcomes, cols = Market B outcomes.
+// A cell is feasible (✓) when that joint outcome can occur under the relation.
+function ConstraintGrid({ cm }: { cm: ConstraintMatrix }) {
+  return (
+    <table className={s.matrix}>
+      <thead>
+        <tr>
+          <th className={s.matrixCorner}>{"A\\B"}</th>
+          {cm.outcomes_b.map((b, j) => (
+            <th key={j} className={s.matrixHead}>{b}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {cm.outcomes_a.map((a, i) => (
+          <tr key={i}>
+            <th className={s.matrixRowHead}>{a}</th>
+            {cm.outcomes_b.map((_b, j) => {
+              const feasible = cm.matrix?.[i]?.[j] === 1;
+              return (
+                <td key={j} className={`${s.matrixCell} ${feasible ? s.feasible : s.infeasible}`}>
+                  {feasible ? "✓" : "✕"}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// One leg of the optimal basket: side, market+outcome, market vs fair price, edge.
+function BasketLeg({ leg }: { leg: TradeLeg }) {
+  const buy = (leg.side ?? "").toUpperCase() === "BUY";
+  return (
+    <div className={s.leg}>
+      <span className={`${s.legSide} ${buy ? s.legBuy : s.legSell}`}>{leg.side}</span>
+      <span className={s.legMkt}>{leg.market} &middot; {leg.outcome}</span>
+      {leg.venue && leg.venue !== "polymarket" && <span className={s.legVenue}>{leg.venue}</span>}
+      <span className={s.legSpacer} />
+      <span className={s.legPrice}>@{leg.market_price.toFixed(3)}</span>
+      <span className={s.legFair}>fair {leg.fair_price.toFixed(3)}</span>
+      <span
+        className={s.legEdge}
+        style={{ color: leg.edge >= 0 ? "var(--color-green)" : "var(--color-red)" }}
+      >
+        {leg.edge >= 0 ? "+" : "−"}{Math.abs(leg.edge).toFixed(3)}
+      </span>
+    </div>
+  );
 }

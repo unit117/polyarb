@@ -36,6 +36,39 @@ export interface HistoryPoint {
   unrealized_pnl: number;
 }
 
+// One leg of the optimizer's arb basket (see shared/schemas/opportunity.py).
+export interface TradeLeg {
+  market: string; // "A" | "B"
+  outcome: string;
+  outcome_index?: number;
+  side: string; // "BUY" | "SELL"
+  edge: number;
+  market_price: number;
+  fair_price: number;
+  venue?: string;
+  fee_rate_bps?: number | null;
+}
+
+export interface OptimalTrades {
+  trades: TradeLeg[];
+  estimated_profit: number;
+  theoretical_profit: number;
+  market_a_prices?: { current: number[]; optimal: number[] };
+  market_b_prices?: { current: number[]; optimal: number[] };
+}
+
+// The feasibility matrix that defines the logical relation (see shared/schemas/pair.py).
+export interface ConstraintMatrix {
+  type: string;
+  outcomes_a: string[];
+  outcomes_b: string[];
+  matrix: number[][];
+  profit_bound?: number;
+  correlation?: string | null;
+  implication_direction?: string | null;
+  classification_source?: string | null;
+}
+
 export interface Opportunity {
   id: number;
   timestamp: string;
@@ -45,9 +78,16 @@ export interface Opportunity {
   estimated_profit: number;
   fw_iterations: number | null;
   bregman_gap: number | null;
+  optimal_trades?: OptimalTrades | null;
   pair: {
+    id?: number;
     dependency_type: string;
     confidence: number;
+    verified?: boolean;
+    implication_direction?: string | null;
+    classification_source?: string | null;
+    constraint_matrix?: ConstraintMatrix | null;
+    resolution_vectors?: unknown;
     market_a: string;
     market_a_venue?: string;
     market_b: string;
