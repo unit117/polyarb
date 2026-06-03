@@ -140,6 +140,36 @@
   animation: fadeIn var(--transition-slow);
 }
 
+/* Two-column body: main content + persistent live tape rail */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.mainCol {
+  min-width: 0;
+}
+
+.rail {
+  position: sticky;
+  top: var(--space-5);
+  height: calc(100vh - 40px);
+}
+
+/* Collapse the rail under the main content on narrower screens */
+@media (max-width: 1000px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    position: static;
+    height: 380px;
+  }
+}
+
 /* Mobile responsive */
 @media (max-width: 640px) {
   .root {
