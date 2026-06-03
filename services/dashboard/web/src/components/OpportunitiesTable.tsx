@@ -19,20 +19,23 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
   onSelect,
 }: Props) {
   const [showUnprofitable, setShowUnprofitable] = useState(false);
+  const [crossOnly, setCrossOnly] = useState(false);
+  const hasCrossVenue = useMemo(() => opportunities.some(isCrossVenue), [opportunities]);
 
   // Sort only the initial page; after "Load More" appends, preserve order
   // so newly loaded items don't jump around mid-scroll.
   const sorted = useMemo(() => {
-    const filtered = showUnprofitable
+    const base = showUnprofitable
       ? opportunities
       : opportunities.filter((o) => o.estimated_profit > 0 && o.status !== "expired");
+    const filtered = crossOnly ? base.filter(isCrossVenue) : base;
     if (pagination.offset === 0) {
       return [...filtered].sort(
         (a, b) => b.estimated_profit - a.estimated_profit,
       );
     }
     return filtered;
-  }, [opportunities, showUnprofitable, pagination.offset]);
+  }, [opportunities, showUnprofitable, crossOnly, pagination.offset]);
 
   const hiddenCount = opportunities.length - sorted.length;
 
@@ -56,6 +59,18 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
           <button className={s.toggleBtn} onClick={() => setShowUnprofitable(false)}>
             Hide zero-profit
           </button>
+        </div>
+      )}
+      {hasCrossVenue && (
+        <div className={s.filterBar}>
+          <label className={s.crossToggle}>
+            <input
+              type="checkbox"
+              checked={crossOnly}
+              onChange={(e) => setCrossOnly(e.target.checked)}
+            />
+            Cross-venue only
+          </label>
         </div>
       )}
     </>
@@ -119,7 +134,12 @@ const OpportunitiesTable = React.memo(function OpportunitiesTable({
                     {o.status}
                   </span>
                 </td>
-                <td className={s.td}>{o.type}</td>
+                <td className={s.td}>
+                  {o.type}
+                  {isCrossVenue(o) && (
+                    <span className={s.crossVenue} title="Cross-venue arbitrage">⇄</span>
+                  )}
+                </td>
                 <td className={s.tdMarket}>
                   {o.pair?.market_a_venue && o.pair.market_a_venue !== "polymarket" && (
                     <span className={`${s.venueBadge} ${s.venueKalshi}`}>{o.pair.market_a_venue}</span>
@@ -225,4 +245,11 @@ function statusClass(status: string): string {
     case "skipped":     return s.statusSkipped;
     default:            return s.statusDefault;
   }
+}
+
+// Cross-venue arb: the two legs live on different venues (e.g. Polymarket ↔ Kalshi).
+function isCrossVenue(o: Opportunity): boolean {
+  const a = o.pair?.market_a_venue;
+  const b = o.pair?.market_b_venue;
+  return !!a && !!b && a !== b;
 }

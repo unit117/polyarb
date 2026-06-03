@@ -1,0 +1,159 @@
+.strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-orange);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.loading {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.statePill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.active {
+  background: var(--color-green-bg);
+  color: var(--color-green);
+}
+
+.idle {
+  background: var(--color-yellow-bg);
+  color: var(--color-yellow);
+}
+
+.killed {
+  background: var(--color-red-bg);
+  color: var(--color-red);
+}
+
+.disabled {
+  background: rgba(136, 136, 136, 0.12);
+  color: var(--color-text-secondary);
+}
+
+.pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-green);
+  box-shadow: 0 0 6px var(--color-green);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.tag {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.tagWarn {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-yellow-bg);
+  color: var(--color-yellow);
+}
+
+.fresh {
+  color: var(--color-green);
+}
+
+.stale {
+  color: var(--color-orange);
+}
+
+.metrics {
+  display: flex;
+  gap: var(--space-4);
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.metricLabel {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+}
+
+.metricValue {
+  font-size: var(--text-base);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.btn {
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btnKill {
+  background: var(--color-red-bg);
+  color: var(--color-red);
+  border-color: var(--color-red);
+}
+
+.btnKill:hover:not(:disabled) {
+  background: var(--color-red);
+  color: #fff;
+}
+
+.btnEnable {
+  background: var(--color-green-bg);
+  color: var(--color-green);
+  border-color: var(--color-green);
+}
+
+.btnEnable:hover:not(:disabled) {
+  background: var(--color-green);
+  color: #000;
+}

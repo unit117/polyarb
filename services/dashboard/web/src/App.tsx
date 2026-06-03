@@ -1,6 +1,7 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 import PipelineHeader from "./components/PipelineHeader.tsx";
 import LiveTape from "./components/LiveTape.tsx";
+import SafetyStrip from "./components/SafetyStrip.tsx";
 import OpportunitiesTable from "./components/OpportunitiesTable.tsx";
 import TradesTable from "./components/TradesTable.tsx";
 import PositionsTable from "./components/PositionsTable.tsx";
@@ -77,6 +78,8 @@ export default function App() {
         events={events}
         onCellClick={(t) => setTab(t as Tab)}
       />
+
+      {mode === "live" && <SafetyStrip />}
 
       <div className={s.layout}>
         <div className={s.mainCol}>
