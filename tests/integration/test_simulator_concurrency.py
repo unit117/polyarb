@@ -6,18 +6,30 @@ and snapshot_portfolio calls cannot interleave against the shared portfolio.
 
 import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import services.simulator.pipeline as sim_pipeline_module
 from services.simulator.pipeline import SimulatorPipeline
 from services.simulator.portfolio import Portfolio
 
 
 def _mock_session_factory():
-    """Create a mock async session factory."""
+    """Create a mock async session factory.
+
+    flush() assigns IDs to added objects like a real DB flush would — the
+    typed TradeExecutedEvent requires an int trade_id.
+    """
     session = AsyncMock()
-    session.add = MagicMock()
+    added_objects = []
+    session.add = MagicMock(side_effect=added_objects.append)
+
+    async def mock_flush():
+        for i, obj in enumerate(added_objects, start=1):
+            if getattr(obj, "id", None) is None:
+                obj.id = i
+    session.flush = AsyncMock(side_effect=mock_flush)
     factory = AsyncMock()
     factory.__aenter__ = AsyncMock(return_value=session)
     factory.__aexit__ = AsyncMock(return_value=False)
@@ -37,6 +49,7 @@ def _make_opportunity(opp_id=1, status="optimized", pair_id=1, trades=None):
             {
                 "market": "A",
                 "outcome": "Yes",
+                "outcome_index": 0,
                 "side": "BUY",
                 "edge": 0.05,
                 "market_price": 0.55,
@@ -45,6 +58,9 @@ def _make_opportunity(opp_id=1, status="optimized", pair_id=1, trades=None):
             },
         ],
         "estimated_profit": 0.04,
+        "theoretical_profit": 0.05,
+        "market_a_prices": {"current": [0.55, 0.45], "optimal": [0.60, 0.40]},
+        "market_b_prices": {"current": [0.50, 0.50], "optimal": [0.50, 0.50]},
     }
     opp.timestamp = MagicMock()
     opp.pending_at = None
@@ -64,6 +80,8 @@ def _make_market(market_id=1, venue="polymarket", resolved_outcome=None):
     m.id = market_id
     m.venue = venue
     m.resolved_outcome = resolved_outcome
+    m.active = True
+    m.fee_rate_bps = None
     return m
 
 
@@ -125,10 +143,10 @@ class TestExecutionLockSerializes:
         # yield point (sleep) in between so interleaving would be visible.
         original = pipeline._simulate_opportunity_inner
 
-        async def instrumented(opp_id):
+        async def instrumented(opp_id, live_coordinator=None):
             execution_log.append(f"start-{opp_id}")
             await asyncio.sleep(0.05)  # yield point where interleaving could happen
-            result = await original(opp_id)
+            result = await original(opp_id, live_coordinator=live_coordinator)
             execution_log.append(f"end-{opp_id}")
             return result
 
@@ -204,31 +222,33 @@ class TestExecutionLockSerializes:
             max_position_size=100.0,
         )
 
-        # Instrument both paths
+        # Instrument both paths. Settlement now lives in the settlement
+        # module; instrument the imported name the pipeline calls while
+        # holding the execution lock.
         original_sim = pipeline._simulate_opportunity_inner
-        original_settle = pipeline._settle_resolved_markets_inner
+        original_settle = sim_pipeline_module._settle_resolved
 
-        async def instrumented_sim(opp_id):
+        async def instrumented_sim(opp_id, live_coordinator=None):
             execution_log.append("sim-start")
             await asyncio.sleep(0.05)
-            result = await original_sim(opp_id)
+            result = await original_sim(opp_id, live_coordinator=live_coordinator)
             execution_log.append("sim-end")
             return result
 
-        async def instrumented_settle():
+        async def instrumented_settle(*args, **kwargs):
             execution_log.append("settle-start")
-            result = await original_settle()
+            result = await original_settle(*args, **kwargs)
             execution_log.append("settle-end")
             return result
 
         pipeline._simulate_opportunity_inner = instrumented_sim
-        pipeline._settle_resolved_markets_inner = instrumented_settle
 
         # Launch both concurrently — simulate first (grabs lock), settle waits
-        await asyncio.gather(
-            pipeline.simulate_opportunity(1),
-            pipeline.settle_resolved_markets(),
-        )
+        with patch.object(sim_pipeline_module, "_settle_resolved", instrumented_settle):
+            await asyncio.gather(
+                pipeline.simulate_opportunity(1),
+                pipeline.settle_resolved_markets(),
+            )
 
         # Must be serialized: one fully completes before the other starts
         assert len(execution_log) == 4
@@ -276,10 +296,10 @@ class TestExecutionLockSerializes:
         original_sim = pipeline._simulate_opportunity_inner
         original_snap = pipeline._snapshot_portfolio_inner
 
-        async def instrumented_sim(opp_id):
+        async def instrumented_sim(opp_id, live_coordinator=None):
             execution_log.append("sim-start")
             await asyncio.sleep(0.05)
-            result = await original_sim(opp_id)
+            result = await original_sim(opp_id, live_coordinator=live_coordinator)
             execution_log.append("sim-end")
             return result
 
