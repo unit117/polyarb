@@ -96,6 +96,15 @@ class Settings(BaseSettings):
     reject_frozen_prices: bool = True
     price_staleness_window_seconds: int = 3600  # look-back window for price movement
     price_staleness_min_observations: int = 4  # snapshots needed in window to judge frozen
+    # Frozen-pair cooldown: after this many frozen-price rejections within the
+    # rolling window, the pair is cooled — the detector stops re-creating its
+    # opportunities and the ingestor drops it from the opportunity-based
+    # poll-inclusion rule. The frozen guard above only blocks the trade;
+    # without this, nothing upstream learns the pair is dead and the same
+    # opportunity recycles detect→optimize→reject every few seconds for days.
+    frozen_pair_reject_threshold: int = 5
+    frozen_pair_reject_window_seconds: int = 1800
+    frozen_pair_cooldown_seconds: int = 14400  # 4h; a revived market re-enters via WS
     # Valuation staleness bound: positions whose latest snapshot is older than
     # this are marked at cost basis (break-even) instead of the frozen last
     # price. Execution freshness (max_snapshot_age_seconds) is stricter;

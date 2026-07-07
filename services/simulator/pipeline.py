@@ -158,6 +158,7 @@ class SimulatorPipeline:
                 max_position_size=self.max_position_size,
                 circuit_breaker=self.circuit_breaker,
                 current_prices=current_prices,
+                redis=self.redis,
             )
             if not bundle or not bundle.legs:
                 return await self._handle_blocked(session, opp, market_a, market_b)

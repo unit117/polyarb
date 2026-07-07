@@ -27,6 +27,7 @@ from shared.models import (
     PriceSnapshot,
 )
 from shared.config import settings
+from shared.frozen_cooldown import is_pair_cooled
 from shared.pricing import get_latest_snapshot
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
@@ -611,6 +612,13 @@ class DetectionPipeline:
                 if not verified or profit <= 0:
                     continue
 
+                # Pairs the simulator keeps rejecting on frozen quotes are on
+                # cooldown — re-creating their opportunities just restarts the
+                # detect→optimize→reject loop on dead data.
+                if await is_pair_cooled(self.redis, pair.id):
+                    stats["frozen_cooldown_skipped"] = stats.get("frozen_cooldown_skipped", 0) + 1
+                    continue
+
                 opp = ArbitrageOpportunity(
                     pair_id=pair.id,
                     type="rebalancing",
@@ -639,7 +647,7 @@ class DetectionPipeline:
         for payload in deferred_events:
             await publish_event(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
-        if stats["opportunities"] > 0:
+        if stats["opportunities"] > 0 or stats.get("frozen_cooldown_skipped", 0) > 0:
             logger.info("rescan_complete", **stats)
         return stats
 
@@ -769,7 +777,17 @@ class DetectionPipeline:
                 # Dormant pairs keep optimizing to zero executable profit and
                 # would otherwise recycle every snapshot — skip re-detecting and
                 # re-creating their opportunities. Only query when profit > 0.
+                # Frozen-cooled pairs are the sibling case: positive theoretical
+                # profit, but the simulator keeps rejecting them on frozen quotes.
                 dormant = profit > 0 and await self._is_pair_dormant(session, pair.id)
+                frozen_cooled = (
+                    profit > 0
+                    and not dormant
+                    and await is_pair_cooled(self.redis, pair.id)
+                )
+                if frozen_cooled:
+                    stats["frozen_cooldown_skipped"] = stats.get("frozen_cooldown_skipped", 0) + 1
+                paused = dormant or frozen_cooled
 
                 existing_opp = in_flight_opps.get(pair.id)
                 if existing_opp:
@@ -807,7 +825,7 @@ class DetectionPipeline:
                     existing_opp.timestamp = datetime.now(timezone.utc)
                     if (
                         existing_opp.status in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED)
-                        and not dormant
+                        and not paused
                     ):
                         transition(existing_opp, OppStatus.DETECTED)
                         existing_opp.optimal_trades = None
@@ -820,7 +838,7 @@ class DetectionPipeline:
                             theoretical_profit=float(max(profit, 0)),
                         ))
                     stats["refreshed"] += 1
-                elif profit > 0 and not dormant:
+                elif profit > 0 and not paused:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",
@@ -853,6 +871,7 @@ class DetectionPipeline:
             stats["opportunities"] > 0
             or stats["refreshed"] > 0
             or stats.get("expired_unverified", 0) > 0
+            or stats.get("frozen_cooldown_skipped", 0) > 0
         ):
             logger.info("snapshot_rescan_complete", **stats)
         return stats
