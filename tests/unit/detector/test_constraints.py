@@ -13,7 +13,7 @@ class TestImplicationMatrix:
             prices_b={"Yes": 0.6, "No": 0.4},
             implication_direction="a_implies_b",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 1  # A=Yes, B=Yes: feasible
         assert m[0][1] == 0  # A=Yes, B=No: infeasible (A implies B)
         assert m[1][0] == 1  # A=No, B=Yes: feasible
@@ -26,7 +26,7 @@ class TestImplicationMatrix:
             prices_b={"Yes": 0.8, "No": 0.2},
             implication_direction="b_implies_a",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 1  # A=Yes, B=Yes: feasible
         assert m[0][1] == 1  # A=Yes, B=No: feasible
         assert m[1][0] == 0  # A=No, B=Yes: infeasible (B implies A)
@@ -38,10 +38,10 @@ class TestImplicationMatrix:
             prices_a={"Yes": 0.8, "No": 0.2},
             prices_b={"Yes": 0.6, "No": 0.4},
         )
-        m = result["matrix"]
+        m = result.matrix
         # No direction → unconstrained (all ones), no false arb signal
         assert m == [[1, 1], [1, 1]]
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
     def test_profit_bound_a_implies_b_when_pa_gt_pb(self):
         result = build_constraint_matrix(
@@ -50,7 +50,7 @@ class TestImplicationMatrix:
             prices_b={"Yes": 0.6, "No": 0.4},
             implication_direction="a_implies_b",
         )
-        assert result["profit_bound"] == pytest.approx(0.2, abs=0.001)
+        assert result.profit_bound == pytest.approx(0.2, abs=0.001)
 
     def test_profit_bound_b_implies_a_when_pb_gt_pa(self):
         result = build_constraint_matrix(
@@ -60,7 +60,7 @@ class TestImplicationMatrix:
             implication_direction="b_implies_a",
         )
         # B→A: arb when P(B) > P(A), profit = 0.8 - 0.5 = 0.3
-        assert result["profit_bound"] == pytest.approx(0.3, abs=0.001)
+        assert result.profit_bound == pytest.approx(0.3, abs=0.001)
 
     def test_no_profit_when_pa_le_pb(self):
         result = build_constraint_matrix(
@@ -68,14 +68,14 @@ class TestImplicationMatrix:
             prices_a={"Yes": 0.5, "No": 0.5},
             prices_b={"Yes": 0.7, "No": 0.3},
         )
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
     def test_implication_direction_stored_in_result(self):
         result = build_constraint_matrix(
             "implication", ["Yes", "No"], ["Yes", "No"],
             implication_direction="b_implies_a",
         )
-        assert result["implication_direction"] == "b_implies_a"
+        assert result.implication_direction == "b_implies_a"
 
 
 class TestPartitionMatrix:
@@ -85,7 +85,7 @@ class TestPartitionMatrix:
             prices_a={"Yes": 0.3, "No": 0.7},
             prices_b={"Yes": 0.4, "No": 0.6},
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m == [[0, 1], [1, 0]]
 
     def test_multi_outcome_partition(self):
@@ -94,7 +94,7 @@ class TestPartitionMatrix:
             ["Alice", "Bob", "Charlie"],
             ["Alice", "Bob", "Dave"],
         )
-        m = result["matrix"]
+        m = result.matrix
         # Alice & Bob are shared; different shared outcomes can't both be true
         assert m[0][1] == 0  # Alice vs Bob: infeasible
         assert m[1][0] == 0  # Bob vs Alice: infeasible
@@ -108,7 +108,7 @@ class TestPartitionMatrix:
             prices_b={"Yes": 0.4, "No": 0.6},
         )
         # Binary partition: primary sum = 0.3 + 0.4 = 0.7, deviation = 0.3
-        assert result["profit_bound"] == pytest.approx(0.3, abs=0.001)
+        assert result.profit_bound == pytest.approx(0.3, abs=0.001)
 
     def test_multi_outcome_partition_profit_bound_is_disabled(self):
         result = build_constraint_matrix(
@@ -118,7 +118,7 @@ class TestPartitionMatrix:
             prices_a={"Alice": 0.30, "Bob": 0.25, "Charlie": 0.45},
             prices_b={"Alice": 0.31, "Bob": 0.24, "Dave": 0.45},
         )
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
 
 class TestMutualExclusionMatrix:
@@ -128,7 +128,7 @@ class TestMutualExclusionMatrix:
             prices_a={"Yes": 0.6, "No": 0.4},
             prices_b={"Yes": 0.5, "No": 0.5},
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 0  # Both Yes infeasible
         assert m[0][1] == 1
         assert m[1][0] == 1
@@ -141,7 +141,7 @@ class TestMutualExclusionMatrix:
             prices_b={"Yes": 0.5, "No": 0.5},
         )
         # excess = 0.6 + 0.5 - 1.0 = 0.1
-        assert result["profit_bound"] == pytest.approx(0.1, abs=0.001)
+        assert result.profit_bound == pytest.approx(0.1, abs=0.001)
 
 
 class TestConditionalMatrix:
@@ -152,7 +152,7 @@ class TestConditionalMatrix:
             prices_b={"Yes": 0.5, "No": 0.5},
             correlation="negative",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 0  # Both Yes infeasible (like ME)
 
     def test_positive_correlation_divergent_prices(self):
@@ -162,7 +162,7 @@ class TestConditionalMatrix:
             prices_b={"Yes": 0.5, "No": 0.5},
             correlation="positive",
         )
-        m = result["matrix"]
+        m = result.matrix
         # Positive conditional no longer infers logical infeasibility from prices.
         assert m == [[1, 1], [1, 1]]
 
@@ -173,7 +173,7 @@ class TestConditionalMatrix:
             prices_b={"Yes": 0.50, "No": 0.50},
             correlation="positive",
         )
-        m = result["matrix"]
+        m = result.matrix
         # divergence 0.05 < 0.15, no constraint triggered
         assert m == [[1, 1], [1, 1]]
 
@@ -182,7 +182,7 @@ class TestConditionalMatrix:
             "conditional", ["A", "B", "C"], ["X", "Y"],
             correlation="positive",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert all(all(c == 1 for c in row) for row in m)
 
     def test_both_high_prices(self):
@@ -192,7 +192,7 @@ class TestConditionalMatrix:
             prices_b={"Yes": 0.6, "No": 0.4},
             correlation="positive",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m == [[1, 1], [1, 1]]
 
     def test_both_low_prices(self):
@@ -202,7 +202,7 @@ class TestConditionalMatrix:
             prices_b={"Yes": 0.4, "No": 0.6},
             correlation="positive",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m == [[1, 1], [1, 1]]
 
 
@@ -215,14 +215,14 @@ class TestCrossPlatformMatrix:
             venue_a="polymarket",
             venue_b="kalshi",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m == [[1, 0], [0, 1]]
 
     def test_multi_outcome_diagonal(self):
         result = build_constraint_matrix(
             "cross_platform", ["A", "B", "C"], ["A", "B", "C"],
         )
-        m = result["matrix"]
+        m = result.matrix
         for i in range(3):
             for j in range(3):
                 assert m[i][j] == (1 if i == j else 0)
@@ -233,7 +233,7 @@ class TestUnknownType:
         result = build_constraint_matrix(
             "unknown_type", ["Yes", "No"], ["Yes", "No"],
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m == [[1, 1], [1, 1]]
 
 
@@ -242,7 +242,7 @@ class TestNoPrices:
         result = build_constraint_matrix(
             "implication", ["Yes", "No"], ["Yes", "No"],
         )
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
 
 class TestConditionalEdgeCases:
@@ -253,7 +253,7 @@ class TestConditionalEdgeCases:
             correlation="positive",
         )
         # No prices → unconstrained matrix
-        m = result["matrix"]
+        m = result.matrix
         assert all(all(c == 1 for c in row) for row in m)
 
     def test_binary_no_correlation_returns_unconstrained(self):
@@ -264,7 +264,7 @@ class TestConditionalEdgeCases:
             correlation=None,
         )
         # No correlation → unconstrained matrix
-        m = result["matrix"]
+        m = result.matrix
         assert all(all(c == 1 for c in row) for row in m)
 
     def test_non_numeric_price_treated_as_zero(self):
@@ -275,7 +275,7 @@ class TestConditionalEdgeCases:
             correlation="negative",
         )
         # "N/A" → _f returns 0.0, still negative correlation → matrix[0][0] = 0
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 0
 
     def test_positive_correlation_b_much_higher_than_a(self):
@@ -285,7 +285,7 @@ class TestConditionalEdgeCases:
             prices_b={"Yes": 0.6, "No": 0.4},
             correlation="positive",
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m == [[1, 1], [1, 1]]
 
     def test_profit_bound_conditional_no_outcomes(self):
@@ -296,7 +296,7 @@ class TestConditionalEdgeCases:
             correlation="negative",
         )
         # Empty outcomes → profit bound = 0
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
     def test_profit_bound_conditional_no_correlation_returns_zero(self):
         result = build_constraint_matrix(
@@ -306,7 +306,7 @@ class TestConditionalEdgeCases:
             correlation=None,
         )
         # No correlation → profit_bound = 0
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
     def test_profit_bound_non_numeric_price_in_compute(self):
         result = build_constraint_matrix(
@@ -315,7 +315,7 @@ class TestConditionalEdgeCases:
             prices_b={"Yes": 0.5, "No": 0.5},
         )
         # "bad_value" → _f returns 0.0; excess = (0+0.5)-1.0 = -0.5 → 0.0
-        assert result["profit_bound"] == 0.0
+        assert result.profit_bound == 0.0
 
 
 class TestBuildConstraintMatrixFromVectors:
@@ -330,12 +330,12 @@ class TestBuildConstraintMatrixFromVectors:
             prices_a={"Yes": 0.6, "No": 0.4},
             prices_b={"Yes": 0.5, "No": 0.5},
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 0  # Both Yes infeasible
         assert m[0][1] == 1
         assert m[1][0] == 1
         assert m[1][1] == 1
-        assert result["classification_source"] == "llm_vector"
+        assert result.classification_source == "llm_vector"
 
     def test_implication_a_implies_b_from_vectors(self):
         """Missing (Y,N) → matrix[0][1] = 0."""
@@ -349,12 +349,12 @@ class TestBuildConstraintMatrixFromVectors:
             prices_a={"Yes": 0.8, "No": 0.2},
             prices_b={"Yes": 0.6, "No": 0.4},
         )
-        m = result["matrix"]
+        m = result.matrix
         assert m[0][0] == 1
         assert m[0][1] == 0  # A=Yes + B=No infeasible
         assert m[1][0] == 1
         assert m[1][1] == 1
-        assert result["profit_bound"] == pytest.approx(0.2, abs=0.001)
+        assert result.profit_bound == pytest.approx(0.2, abs=0.001)
 
     def test_partition_from_vectors(self):
         """XOR: only (Y,N) and (N,Y) feasible."""
@@ -363,7 +363,7 @@ class TestBuildConstraintMatrixFromVectors:
             vectors, ["Yes", "No"], ["Yes", "No"],
             dependency_type="partition",
         )
-        assert result["matrix"] == [[0, 1], [1, 0]]
+        assert result.matrix == [[0, 1], [1, 0]]
 
     def test_all_four_from_vectors(self):
         """All combos valid → unconstrained."""
@@ -375,13 +375,13 @@ class TestBuildConstraintMatrixFromVectors:
             vectors, ["Yes", "No"], ["Yes", "No"],
             dependency_type="none",
         )
-        assert result["matrix"] == [[1, 1], [1, 1]]
+        assert result.matrix == [[1, 1], [1, 1]]
 
     def test_preserves_type_key(self):
-        """Optimizer reads constraint.get('type') — must be present."""
+        """Optimizer reads constraint.type — must be present."""
         vectors = [{"a": "Yes", "b": "No"}, {"a": "No", "b": "Yes"}]
         result = build_constraint_matrix_from_vectors(
             vectors, ["Yes", "No"], ["Yes", "No"],
             dependency_type="partition",
         )
-        assert result["type"] == "partition"
+        assert result.type == "partition"

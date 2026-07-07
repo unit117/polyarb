@@ -33,7 +33,7 @@ class TestComputeTrades:
             outcomes_b=["Yes", "No"],
             min_edge=0.03,
         )
-        assert len(result["trades"]) >= 1
+        assert len(result.trades) >= 1
 
     def test_no_trades_below_min_edge(self):
         result = compute_trades(
@@ -45,7 +45,7 @@ class TestComputeTrades:
             outcomes_b=["Yes", "No"],
             min_edge=0.03,
         )
-        assert len(result["trades"]) == 0
+        assert len(result.trades) == 0
 
     def test_buy_when_underpriced(self):
         result = compute_trades(
@@ -57,11 +57,11 @@ class TestComputeTrades:
             outcomes_b=["Yes", "No"],
             min_edge=0.03,
         )
-        trades = result["trades"]
-        a_trades = [t for t in trades if t["market"] == "A"]
+        trades = result.trades
+        a_trades = [t for t in trades if t.market == "A"]
         assert len(a_trades) == 1
-        assert a_trades[0]["side"] == "BUY"
-        assert a_trades[0]["outcome"] == "Yes"
+        assert a_trades[0].side == "BUY"
+        assert a_trades[0].outcome == "Yes"
 
     def test_sell_when_overpriced(self):
         result = compute_trades(
@@ -73,10 +73,10 @@ class TestComputeTrades:
             outcomes_b=["Yes", "No"],
             min_edge=0.03,
         )
-        trades = result["trades"]
-        a_trades = [t for t in trades if t["market"] == "A"]
+        trades = result.trades
+        a_trades = [t for t in trades if t.market == "A"]
         assert len(a_trades) == 1
-        assert a_trades[0]["side"] == "SELL"
+        assert a_trades[0].side == "SELL"
 
     def test_one_leg_per_market(self):
         # Both outcomes have large edges, but only best is kept
@@ -89,8 +89,8 @@ class TestComputeTrades:
             outcomes_b=["Yes", "No"],
             min_edge=0.03,
         )
-        a_count = sum(1 for t in result["trades"] if t["market"] == "A")
-        b_count = sum(1 for t in result["trades"] if t["market"] == "B")
+        a_count = sum(1 for t in result.trades if t.market == "A")
+        b_count = sum(1 for t in result.trades if t.market == "B")
         assert a_count <= 1
         assert b_count <= 1
 
@@ -106,8 +106,8 @@ class TestComputeTrades:
             min_edge=0.03,
         )
         # Edge = 0.30 > max_edge_sanity (0.20)
-        assert result["trades"] == []
-        assert result["estimated_profit"] == 0.0
+        assert result.trades == []
+        assert result.estimated_profit == 0.0
 
     def test_estimated_profit_accounts_for_fees(self):
         result = compute_trades(
@@ -120,9 +120,9 @@ class TestComputeTrades:
             min_edge=0.03,
         )
         # Profit should be less than raw edge due to fees
-        if result["trades"]:
-            raw_edge = sum(t["edge"] for t in result["trades"])
-            assert result["estimated_profit"] <= raw_edge
+        if result.trades:
+            raw_edge = sum(t.edge for t in result.trades)
+            assert result.estimated_profit <= raw_edge
 
     def test_price_output_structure(self):
         result = compute_trades(
@@ -133,10 +133,9 @@ class TestComputeTrades:
             outcomes_a=["Yes", "No"],
             outcomes_b=["Yes", "No"],
         )
-        assert "market_a_prices" in result
-        assert "current" in result["market_a_prices"]
-        assert "optimal" in result["market_a_prices"]
-        assert len(result["market_a_prices"]["current"]) == 2
+        assert result.market_a_prices is not None
+        assert len(result.market_a_prices.current) == 2
+        assert len(result.market_a_prices.optimal) == 2
 
     def test_cross_venue_fees(self):
         result = compute_trades(
@@ -151,4 +150,4 @@ class TestComputeTrades:
             min_edge=0.03,
         )
         # Should not error with different venues
-        assert "estimated_profit" in result
+        assert isinstance(result.estimated_profit, float)
