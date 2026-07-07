@@ -110,17 +110,19 @@ def _check_structural(
         if len(outcomes_a) != 2 or len(outcomes_b) != 2:
             reasons.append("mutual_exclusion: non-binary markets")
             return False
-        # Require same event — different events cannot be mutually exclusive
+        # Require the SAME event_id on BOTH markets — different events cannot
+        # be mutually exclusive, and a missing event_id on either side makes
+        # the claim non-verifiable (markets about the same event almost always
+        # share event_ids on Polymarket; absence is a strong hallucination
+        # signal, e.g. the Lana/Blake topology). The old check passed pairs
+        # where exactly one side had an event_id.
         event_a = market_a.get("event_id")
         event_b = market_b.get("event_id")
-        if event_a and event_b and event_a != event_b:
-            reasons.append("mutual_exclusion: different event_ids")
+        if not event_a or not event_b:
+            reasons.append("mutual_exclusion: missing event_id — non-verifiable")
             return False
-        # ME without ANY shared event_id is non-verifiable — markets about the
-        # same event almost always share event_ids on Polymarket.  The absence
-        # is a strong signal of LLM hallucination (e.g. Lana/Blake topology).
-        if not event_a and not event_b:
-            reasons.append("mutual_exclusion: neither market has event_id — non-verifiable")
+        if event_a != event_b:
+            reasons.append("mutual_exclusion: different event_ids")
             return False
         # Identical questions suggest different instances of same recurring event
         q_a = market_a.get("question", "")
@@ -149,7 +151,28 @@ def _check_structural(
         outcomes_a = market_a.get("outcomes", [])
         outcomes_b = market_b.get("outcomes", [])
         if len(outcomes_a) == 2 and len(outcomes_b) == 2:
-            if correlation in ("positive", "negative"):
+            if correlation == "negative":
+                # Negative conditional inherits the mutual-exclusion profit
+                # formula (P(A)+P(B)-1), so it must meet the same evidentiary
+                # bar as ME: same event_id on both sides and non-identical
+                # questions. Without this, a hallucinated "negatively
+                # correlated" pair across unrelated events mints ME-style
+                # profit with none of the post-E1 safeguards.
+                event_a = market_a.get("event_id")
+                event_b = market_b.get("event_id")
+                if not event_a or not event_b:
+                    reasons.append("conditional/negative: missing event_id — non-verifiable")
+                    return False
+                if event_a != event_b:
+                    reasons.append("conditional/negative: different event_ids")
+                    return False
+                q_a = market_a.get("question", "")
+                q_b = market_b.get("question", "")
+                if q_a and q_b and q_a == q_b:
+                    reasons.append("conditional/negative: identical questions suggest different event instances")
+                    return False
+                return True
+            if correlation == "positive":
                 return True
             reasons.append("conditional: missing correlation direction for binary pair")
             return False
@@ -252,6 +275,13 @@ def _check_price_consistency(
         p_b = _f(prices_b.get(outcomes_b[0], 0)) if outcomes_b else 0.0
         if not (0.0 < p_a < 1.0) or not (0.0 < p_b < 1.0):
             reasons.append(f"conditional: prices out of range ({p_a:.2f}, {p_b:.2f})")
+            return False
+        if correlation == "negative" and p_a + p_b > ME_SUM_CAP:
+            # Negative conditional uses the ME profit formula, so the ME
+            # price gate applies: a sum far above 1.0 means the markets are
+            # likely independent, and the "excess" is misclassification, not
+            # arbitrage.
+            reasons.append(f"conditional/negative: P(A)+P(B)={p_a+p_b:.2f} > {ME_SUM_CAP}")
             return False
         return True
 

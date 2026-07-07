@@ -28,6 +28,15 @@ from shared.models import Market, PriceSnapshot
 
 log = structlog.get_logger()
 
+# Drop a market from the reconnect-pending set if it hasn't been fully
+# WS-refreshed within this many seconds. Some markets fall out of the
+# subscription budget (or have a silent illiquid outcome that never sends a
+# price_change) and would otherwise stay pending forever, firing the
+# ws_reconnect_pending_stale warning on every flush. Draining lets their
+# merged snapshot flush via the normal path; the value is at the freshness
+# boundary periodic readers already enforce, so no phantom-arb risk.
+WS_RECONNECT_PENDING_TIMEOUT = 300.0
+
 
 class ClobWebSocket:
     """Manages a WebSocket connection to Polymarket CLOB for real-time prices."""
@@ -71,6 +80,9 @@ class ClobWebSocket:
         # phantom arbs from mixed old-DB / new-WS prices.
         self._reconnect_pending: dict[int, set[str]] = {}
         self._reconnect_pending_since: float = 0.0  # monotonic timestamp
+        # Per-market monotonic timestamp of when it entered _reconnect_pending,
+        # so stuck markets can be drained individually after a timeout.
+        self._reconnect_pending_at: dict[int, float] = {}
 
     async def _build_token_map(self) -> None:
         """Build token_id -> (market_id, outcome_name) lookup from DB."""
@@ -260,6 +272,7 @@ class ClobWebSocket:
                     expected = set(dict(row).keys())
                 if expected:
                     self._reconnect_pending[market_id] = expected
+                    self._reconnect_pending_at.setdefault(market_id, time.monotonic())
 
     async def _flush_snapshots(self) -> None:
         """Periodically flush buffered price updates to DB.
@@ -319,16 +332,42 @@ class ClobWebSocket:
 
             stale_count = len(snapshots) - len(rows)
 
-            # Warn if markets have been stuck in reconnect-pending too long
-            if (
-                self._reconnect_pending
-                and time.monotonic() - self._reconnect_pending_since > 60
-            ):
+            # Drain markets stuck in reconnect-pending past the timeout. These
+            # have a silent illiquid outcome or fell out of the subscription
+            # budget and will never be fully WS-refreshed, so they'd otherwise
+            # warn forever. Dropping them just lifts the snapshot-suppression
+            # block; polling still covers them and any future WS update flushes
+            # normally.
+            now = time.monotonic()
+            drained = [
+                mid
+                for mid, since in self._reconnect_pending_at.items()
+                if now - since > WS_RECONNECT_PENDING_TIMEOUT
+            ]
+            for mid in drained:
+                self._reconnect_pending.pop(mid, None)
+                self._reconnect_pending_at.pop(mid, None)
+            if drained:
+                log.info(
+                    "ws_reconnect_pending_drained",
+                    count=len(drained),
+                    sample=drained[:5],
+                )
+
+            # Warn about markets still stuck (older than 60s, below the drain
+            # timeout) — measured per-market so the age is meaningful.
+            stuck = [
+                mid
+                for mid, since in self._reconnect_pending_at.items()
+                if now - since > 60
+            ]
+            if stuck:
+                oldest = max(now - self._reconnect_pending_at[mid] for mid in stuck)
                 log.warning(
                     "ws_reconnect_pending_stale",
-                    stuck_markets=len(self._reconnect_pending),
-                    seconds=int(time.monotonic() - self._reconnect_pending_since),
-                    sample=list(self._reconnect_pending.keys())[:5],
+                    stuck_markets=len(stuck),
+                    seconds=int(oldest),
+                    sample=stuck[:5],
                 )
 
             try:
@@ -432,6 +471,7 @@ class ClobWebSocket:
         self._reconnect_pending[market_id].discard(outcome)
         if not self._reconnect_pending[market_id]:
             del self._reconnect_pending[market_id]
+            self._reconnect_pending_at.pop(market_id, None)
             log.debug(
                 "ws_market_fully_refreshed",
                 market_id=market_id,
@@ -483,6 +523,7 @@ class ClobWebSocket:
                 self._last_known_prices.clear()
                 self._pending_snapshots.clear()
                 self._reconnect_pending.clear()
+                self._reconnect_pending_at.clear()
                 self._reconnect_pending_since = time.monotonic()
                 await self._connect(initial_token_ids)
                 consecutive_failures = 0

@@ -40,6 +40,15 @@ class ClobClient:
                     )
                     await asyncio.sleep(backoff)
                     continue
+                if response.status_code == 404:
+                    # CLOB returns 404 for closed/delisted markets that no longer
+                    # have a live order book. This is common for resolved markets
+                    # we have not flipped inactive yet (the Gamma resolution sync
+                    # is offset-capped, so older closed markets linger active).
+                    # Treat it as "no quote" rather than an error so it doesn't
+                    # spam ERROR-level tracebacks on every poll cycle.
+                    log.debug("clob_not_found", url=url, params=kwargs.get("params"))
+                    return None
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError:

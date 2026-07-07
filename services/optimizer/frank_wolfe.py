@@ -85,7 +85,17 @@ def optimize(
     n_a = len(prices_a)
     n_b = len(prices_b)
 
-    # Normalize market prices to valid distributions
+    # Keep the RAW quoted prices for the result: downstream trade
+    # construction (fills, edges, fees, payout proofs) must use what the
+    # market actually charges. WS-merged per-token mids routinely sum to
+    # ≠ 1, so emitting the normalized copy shifted every fill and edge by
+    # ~(sum-1)/2 — phantom edge when the sum was below 1.
+    raw_p = np.concatenate([
+        np.asarray(prices_a, dtype=np.float64),
+        np.asarray(prices_b, dtype=np.float64),
+    ])
+
+    # Normalized copy: the KL reference distribution for FW internals only
     p = np.concatenate([
         _normalize(prices_a),
         _normalize(prices_b),
@@ -95,7 +105,9 @@ def optimize(
     q = _find_initial_feasible(n_a, n_b, feasibility_matrix)
     if q is None:
         logger.error("no_feasible_initial_point")
-        return FWResult(p, p, 0, float("inf"), False, 0.0, n_a, n_b, feasibility_matrix)
+        # q = raw_p so every edge (q - p) is exactly zero → no trades can
+        # be constructed from this failed result.
+        return FWResult(raw_p, raw_p, 0, float("inf"), False, 0.0, n_a, n_b, feasibility_matrix)
 
     converged = False
     final_gap = float("inf")
@@ -140,7 +152,7 @@ def optimize(
         kl_divergence=kl_div,
     )
 
-    return FWResult(q, p, iterations, final_gap, converged, kl_div, n_a, n_b, feasibility_matrix)
+    return FWResult(q, raw_p, iterations, final_gap, converged, kl_div, n_a, n_b, feasibility_matrix)
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import redis.asyncio as aioredis
 import structlog
+from redis.exceptions import RedisError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -66,19 +67,34 @@ async def _redis_broadcaster(r: aioredis.Redis):
     pubsub = r.pubsub()
     await pubsub.psubscribe("polyarb:*")
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "pmessage":
-                payload = json.dumps({
-                    "channel": message["channel"],
-                    "data": json.loads(message["data"]),
-                })
-                dead = set()
-                for ws in ws_clients:
-                    try:
-                        await ws.send_text(payload)
-                    except Exception:
-                        dead.add(ws)
-                ws_clients -= dead
+        # Poll with get_message rather than the blocking listen(): redis-py 7.x
+        # raises a read TimeoutError from listen() on an idle connection, which
+        # would kill this broadcaster task. get_message returns None when idle.
+        while True:
+            try:
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
+            except RedisError as exc:
+                logger.debug("ws_broadcaster_read_retry", error=str(exc))
+                await asyncio.sleep(0.5)
+                continue
+            if not message or message.get("type") != "pmessage":
+                continue
+            payload = json.dumps({
+                "channel": message["channel"],
+                "data": json.loads(message["data"]),
+            })
+            dead = set()
+            # Snapshot the client set: it is mutated by concurrent
+            # connect/disconnect handlers while send_text is suspended,
+            # and iterating the live set raises RuntimeError mid-broadcast.
+            for ws in tuple(ws_clients):
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    dead.add(ws)
+            ws_clients -= dead
     finally:
         await pubsub.punsubscribe("polyarb:*")
         await pubsub.aclose()

@@ -1,11 +1,16 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from typing import TypeVar
 
 import redis.asyncio as aioredis
+import structlog
 from pydantic import BaseModel
+from redis.exceptions import RedisError
 
 from shared.config import settings
+
+logger = structlog.get_logger()
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -54,11 +59,28 @@ async def publish_event(r: aioredis.Redis, channel: str, event: BaseModel) -> No
 async def subscribe(
     r: aioredis.Redis, channel: str
 ) -> AsyncGenerator[dict, None]:
+    """Yield JSON messages published to a channel.
+
+    Polls with get_message(timeout=...) rather than the blocking listen():
+    newer redis-py (7.x) enforces a read timeout on a blocking pubsub read and
+    raises redis.TimeoutError when an idle channel sees no traffic within it.
+    Under asyncio.gather (no return_exceptions) that single read-timeout
+    crashed the whole service. get_message returns None on an idle poll, so the
+    loop stays alive; transient RedisErrors are tolerated with a short backoff.
+    """
     pubsub = r.pubsub()
     await pubsub.subscribe(channel)
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
+        while True:
+            try:
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
+            except RedisError as exc:
+                logger.debug("pubsub_read_retry", channel=channel, error=str(exc))
+                await asyncio.sleep(0.5)
+                continue
+            if message and message.get("type") == "message":
                 yield json.loads(message["data"])
     finally:
         await pubsub.unsubscribe(channel)

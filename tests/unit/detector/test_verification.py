@@ -79,10 +79,13 @@ class TestStructuralChecks:
             confidence=0.90,
         )
         assert result["verified"] is False
-        assert any("neither market has event_id" in r for r in result["reasons"])
+        assert any("missing event_id" in r for r in result["reasons"])
 
-    def test_me_one_event_id_passes(self):
-        """If at least one market has event_id, ME is potentially verifiable."""
+    def test_me_one_event_id_fails(self):
+        """A one-sided event_id is as non-verifiable as none: ME requires the
+        SAME event_id on BOTH markets (post-E1 invariant). This previously
+        passed, which let hallucinated ME pairs through whenever exactly one
+        market lacked an event_id."""
         result = verify_pair(
             "mutual_exclusion",
             {"outcomes": ["Yes", "No"], "event_id": "evt1"},
@@ -91,7 +94,7 @@ class TestStructuralChecks:
             {"Yes": 0.5, "No": 0.5},
             confidence=0.90,
         )
-        assert result["verified"] is True
+        assert result["verified"] is False
 
     def test_me_non_binary_fails(self):
         result = verify_pair(
@@ -360,3 +363,113 @@ class TestStructuralEdgeCases:
         )
         assert result["verified"] is False
         assert any("unknown dependency_type" in r for r in result["reasons"])
+
+
+class TestMutualExclusionEventIdEquality:
+    """ME must have the SAME event_id on BOTH markets — a one-sided id is
+    exactly as non-verifiable as none at all (post-E1 invariant)."""
+
+    def test_one_sided_event_id_fails(self):
+        result = verify_pair(
+            "mutual_exclusion",
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will A win?"},
+            {"outcomes": ["Yes", "No"], "question": "Will B win?"},
+            {"Yes": 0.4, "No": 0.6},
+            {"Yes": 0.5, "No": 0.5},
+            confidence=0.90,
+        )
+        assert result["verified"] is False
+        assert any("missing event_id" in r for r in result["reasons"])
+
+    def test_one_sided_event_id_fails_mirrored(self):
+        result = verify_pair(
+            "mutual_exclusion",
+            {"outcomes": ["Yes", "No"], "question": "Will A win?"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will B win?"},
+            {"Yes": 0.4, "No": 0.6},
+            {"Yes": 0.5, "No": 0.5},
+            confidence=0.90,
+        )
+        assert result["verified"] is False
+
+
+class TestConditionalNegativeGates:
+    """conditional/negative inherits the ME profit formula (P(A)+P(B)-1), so
+    it must meet the same evidentiary bar: same event_id, distinct questions,
+    and the ME price-sum cap."""
+
+    def _verify(self, market_a, market_b, prices_a, prices_b):
+        return verify_pair(
+            "conditional",
+            market_a,
+            market_b,
+            prices_a,
+            prices_b,
+            confidence=0.90,
+            correlation="negative",
+        )
+
+    def test_same_event_passes(self):
+        result = self._verify(
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will A lead?"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will B lead?"},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.50, "No": 0.50},
+        )
+        assert result["verified"] is True
+
+    def test_missing_event_ids_fail(self):
+        result = self._verify(
+            {"outcomes": ["Yes", "No"], "question": "Will A lead?"},
+            {"outcomes": ["Yes", "No"], "question": "Will B lead?"},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.50, "No": 0.50},
+        )
+        assert result["verified"] is False
+        assert any("missing event_id" in r for r in result["reasons"])
+
+    def test_different_event_ids_fail(self):
+        result = self._verify(
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will A lead?"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt2", "question": "Will B lead?"},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.50, "No": 0.50},
+        )
+        assert result["verified"] is False
+        assert any("different event_ids" in r for r in result["reasons"])
+
+    def test_identical_questions_fail(self):
+        result = self._verify(
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will it rain?"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will it rain?"},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.50, "No": 0.50},
+        )
+        assert result["verified"] is False
+        assert any("identical questions" in r for r in result["reasons"])
+
+    def test_sum_above_me_cap_fails(self):
+        # 0.90 + 0.45 = 1.35 > 1.10 — likely independent markets, the
+        # "excess" is misclassification, not arbitrage.
+        result = self._verify(
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will A lead?"},
+            {"outcomes": ["Yes", "No"], "event_id": "evt1", "question": "Will B lead?"},
+            {"Yes": 0.90, "No": 0.10},
+            {"Yes": 0.45, "No": 0.55},
+        )
+        assert result["verified"] is False
+        assert any("> 1.1" in r for r in result["reasons"])
+
+    def test_positive_conditional_unaffected(self):
+        # conditional/positive has no provable-profit formula; the new
+        # negative-only gates must not apply to it.
+        result = verify_pair(
+            "conditional",
+            {"outcomes": ["Yes", "No"], "question": "Will A lead?"},
+            {"outcomes": ["Yes", "No"], "question": "Will B lead?"},
+            {"Yes": 0.55, "No": 0.45},
+            {"Yes": 0.50, "No": 0.50},
+            confidence=0.90,
+            correlation="positive",
+        )
+        assert result["verified"] is True

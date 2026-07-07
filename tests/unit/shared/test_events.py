@@ -76,28 +76,54 @@ class TestSubscribe:
         payload = {"opportunity_id": 7, "type": "implication"}
         encoded = json.dumps(payload)
 
-        # Build a mock pubsub that yields one message then stops
+        # subscribe() polls get_message(); None means an idle poll and must
+        # be skipped, not treated as a message.
         mock_pubsub = AsyncMock()
         mock_pubsub.subscribe = AsyncMock()
         mock_pubsub.unsubscribe = AsyncMock()
         mock_pubsub.aclose = AsyncMock()
-
-        async def _listen():
-            yield {"type": "subscribe", "data": 1}  # ignored
-            yield {"type": "message", "data": encoded}
-
-        mock_pubsub.listen = _listen
+        mock_pubsub.get_message = AsyncMock(side_effect=[
+            None,  # idle poll — loop must stay alive
+            {"type": "message", "data": encoded},
+        ])
 
         r = AsyncMock()
         r.pubsub = MagicMock(return_value=mock_pubsub)
 
-        results = []
-        async for msg in subscribe(r, "test:channel"):
-            results.append(msg)
-            break  # only consume one message
+        gen = subscribe(r, "test:channel")
+        try:
+            results = [await anext(gen)]
+        finally:
+            await gen.aclose()
 
         assert results == [payload]
         mock_pubsub.subscribe.assert_awaited_once_with("test:channel")
+
+    @pytest.mark.asyncio
+    async def test_tolerates_transient_redis_errors(self):
+        """A RedisError on one poll must not kill the generator."""
+        from redis.exceptions import RedisError
+
+        payload = {"x": 1}
+        mock_pubsub = AsyncMock()
+        mock_pubsub.subscribe = AsyncMock()
+        mock_pubsub.unsubscribe = AsyncMock()
+        mock_pubsub.aclose = AsyncMock()
+        mock_pubsub.get_message = AsyncMock(side_effect=[
+            RedisError("transient read failure"),
+            {"type": "message", "data": json.dumps(payload)},
+        ])
+
+        r = AsyncMock()
+        r.pubsub = MagicMock(return_value=mock_pubsub)
+
+        gen = subscribe(r, "chan")
+        try:
+            msg = await anext(gen)
+        finally:
+            await gen.aclose()
+
+        assert msg == payload
 
     @pytest.mark.asyncio
     async def test_unsubscribes_on_exit(self):
@@ -106,18 +132,18 @@ class TestSubscribe:
         mock_pubsub.subscribe = AsyncMock()
         mock_pubsub.unsubscribe = AsyncMock()
         mock_pubsub.aclose = AsyncMock()
-
-        async def _listen():
-            yield {"type": "message", "data": json.dumps({"x": 1})}
-
-        mock_pubsub.listen = _listen
+        mock_pubsub.get_message = AsyncMock(
+            return_value={"type": "message", "data": json.dumps({"x": 1})}
+        )
 
         r = AsyncMock()
         r.pubsub = MagicMock(return_value=mock_pubsub)
 
-        # Exhaust the generator fully so the finally block always runs
-        async for _ in subscribe(r, "chan"):
-            pass
+        # subscribe() is an endless poll loop; consumers terminate it by
+        # closing the generator, which must still run the finally cleanup.
+        gen = subscribe(r, "chan")
+        await anext(gen)
+        await gen.aclose()
 
         mock_pubsub.unsubscribe.assert_awaited_once_with("chan")
         mock_pubsub.aclose.assert_awaited_once()

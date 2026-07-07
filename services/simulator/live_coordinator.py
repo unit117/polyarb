@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.circuit_breaker import CircuitBreaker
+from shared.config import settings
 from shared.events import CHANNEL_PORTFOLIO_UPDATED, publish_event
 from shared.schemas import PortfolioUpdatedEvent
 from shared.lifecycle import OrderStatus, TradeStatus
@@ -447,9 +448,18 @@ class LiveTradingCoordinator:
                     prices[key] = 1.0 if outcome == resolved[market_id] else 0.0
                     continue
 
+                # Age-bound the mark; stale markets fall back to cost basis
+                # in total_value()/unrealized_pnl() (same policy as the
+                # paper portfolio's _get_current_prices).
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    seconds=settings.valuation_max_snapshot_age_seconds
+                )
                 snapshot = await session.scalar(
                     select(PriceSnapshot)
-                    .where(PriceSnapshot.market_id == market_id)
+                    .where(
+                        PriceSnapshot.market_id == market_id,
+                        PriceSnapshot.timestamp >= cutoff,
+                    )
                     .order_by(PriceSnapshot.timestamp.desc())
                     .limit(1)
                 )

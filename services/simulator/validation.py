@@ -10,7 +10,7 @@ from sqlalchemy import select
 from shared.circuit_breaker import CircuitBreaker
 from shared.config import settings, venue_fee, DRAWDOWN_THRESHOLD, DRAWDOWN_WINDOW, DRAWDOWN_MIN_SCALE
 from shared.models import PriceSnapshot
-from shared.pricing import get_latest_snapshot
+from shared.pricing import get_latest_snapshot, is_price_frozen
 from shared.schemas import OptimalTrades
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
@@ -109,6 +109,27 @@ async def build_validated_bundle(
                 "stale_snapshot_skipped",
                 opportunity_id=opp.id,
                 market_id=market.id,
+            )
+            return None
+
+        # A fresh snapshot is necessary but not sufficient: the ingestor
+        # re-writes identical prices for illiquid/dead markets, so a frozen
+        # midpoint passes the freshness check above. Reject those — their
+        # "edge" is fabricated from stale quotes, and trading them re-enters
+        # the same position every cycle, accumulating on dead data.
+        if settings.reject_frozen_prices and await is_price_frozen(
+            session,
+            market.id,
+            trade.outcome,
+            window_seconds=settings.price_staleness_window_seconds,
+            min_observations=settings.price_staleness_min_observations,
+        ):
+            logger.info(
+                "frozen_price_skipped",
+                opportunity_id=opp.id,
+                market_id=market.id,
+                outcome=trade.outcome,
+                window_seconds=settings.price_staleness_window_seconds,
             )
             return None
 

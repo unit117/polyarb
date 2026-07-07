@@ -525,6 +525,22 @@ async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
     return None
 
 
+def _is_kimi_fixed_param_model(model: str) -> bool:
+    """Whether this is a Kimi k2.5/k2.6 model served directly by Moonshot.
+
+    These models pin ``temperature`` to a fixed per-mode value and reject any
+    custom value ("invalid temperature: only 1 is allowed for this model"), so
+    temperature must be omitted. They also default to a ``thinking`` reasoning
+    mode that can exhaust the classifier's small token budget, so it is disabled
+    for classifier JSON calls. OpenRouter-style IDs ('moonshotai/kimi-k2.6')
+    carry a slash and use the generic OpenAI-compatible path instead.
+    """
+    m = model.lower()
+    if "/" in m:
+        return False
+    return m.startswith("kimi-k2.5") or m.startswith("kimi-k2.6") or m == "kimi-latest"
+
+
 async def classify_llm(
     client: openai.AsyncOpenAI,
     model: str,
@@ -546,19 +562,17 @@ async def classify_llm(
         kwargs = {
             "model": model,
             "messages": list(rendered_prompt.messages),
-            # Reasoning models (M2.7) need more tokens for mandatory <think> block.
-            # Direct DeepSeek V4 and Kimi k2.5/k2.6 are run with thinking disabled
-            # below to preserve compact JSON behavior and avoid spending output
-            # budget on CoT.
+            # Reasoning models (M2.7) need more tokens for mandatory <think> block
             "max_tokens": 1024 if "minimax" in model_lower else 256,
         }
-        # Kimi k2.5/k2.6 reject any custom temperature (they pin a fixed value per
-        # thinking mode); omit it so the API applies its default. Others get 0.1.
+        # Kimi k2.5/k2.6 reject any custom temperature ("only 1 is allowed");
+        # omit it so the API applies its fixed default. Others get 0.1.
         if not _is_kimi_fixed_param_model(model):
             kwargs["temperature"] = 0.1
-        if _should_disable_thinking(model):
+        # Kimi defaults to a thinking mode that can exhaust the small token
+        # budget; disable it so the model returns the compact JSON directly.
+        if _is_kimi_fixed_param_model(model):
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-
         response = await client.chat.completions.create(**kwargs)
 
         msg = response.choices[0].message
@@ -661,46 +675,6 @@ def _supports_json_response_format(model: str) -> bool:
     return not any(token in model_lower for token in unsupported_substrings)
 
 
-def _is_direct_deepseek_v4_model(model: str) -> bool:
-    """Return whether this is a direct DeepSeek V4 model name.
-
-    OpenRouter DeepSeek IDs include a slash (e.g. deepseek/deepseek-chat) and
-    should not receive DeepSeek-specific request bodies.
-    """
-    model_lower = model.lower()
-    return "/" not in model_lower and model_lower.startswith("deepseek-v4-")
-
-
-def _is_kimi_fixed_param_model(model: str) -> bool:
-    """Return whether this is a Kimi k2.5/k2.6 model served directly by Moonshot.
-
-    These models (a) default to a `thinking` reasoning mode that must be disabled
-    so chain-of-thought doesn't exhaust the classifier's small token budget, and
-    (b) pin `temperature` to a fixed per-mode value and reject any custom value
-    ("any other value will result in an error"), so temperature must be omitted.
-    OpenRouter-style IDs ('moonshotai/kimi-k2.6') carry a slash and follow the
-    generic OpenAI-compatible path instead.
-    """
-    model_lower = model.lower()
-    if "/" in model_lower:
-        return False
-    return (
-        model_lower.startswith("kimi-k2.5")
-        or model_lower.startswith("kimi-k2.6")
-        or model_lower == "kimi-latest"
-    )
-
-
-def _should_disable_thinking(model: str) -> bool:
-    """Return whether to send {"thinking": {"type": "disabled"}} for this model.
-
-    Both DeepSeek V4 and Kimi k2.5/k2.6 default to a reasoning mode and accept the
-    same request body to return a compact JSON answer instead of spending the
-    token budget on chain-of-thought.
-    """
-    return _is_direct_deepseek_v4_model(model) or _is_kimi_fixed_param_model(model)
-
-
 def _derive_dependency_type(
     valid_outcomes: list[dict],
     outcomes_a: list,
@@ -750,12 +724,15 @@ def _derive_dependency_type(
             return {"dependency_type": "partition", "implication_direction": None, "correlation": None}
         if combos & all_four == {("Yes", "Yes"), ("No", "No")}:
             return {"dependency_type": "cross_platform", "implication_direction": None, "correlation": None}
-        # Other 2-combo patterns → conditional with direction inferred
-        if ("Yes", "Yes") in combos and ("No", "No") not in combos:
-            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "positive"}
-        if ("Yes", "Yes") not in combos:
-            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "negative"}
-        return {"dependency_type": "conditional", "implication_direction": None, "correlation": None}
+        # Any other 2-combo set fixes one market's outcome regardless of the
+        # other (e.g. {YN, NN} claims B can never resolve Yes). A market with
+        # a live mid-range price is never logically certain or impossible, so
+        # these are hallucinated structure, not a tradeable relationship.
+        # They used to map to conditional/negative, which inherits the
+        # mutual-exclusion profit formula with none of its safeguards — one
+        # such vector set made an unhedgeable directional bet look like
+        # provable arbitrage (the E1 failure class).
+        return {"dependency_type": "_error", "implication_direction": None, "correlation": None}
 
     return {"dependency_type": "_error", "implication_direction": None, "correlation": None}
 
@@ -796,14 +773,12 @@ async def classify_llm_resolution(
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
             "max_tokens": 2048 if "minimax" in model_lower else 512,
         }
-        # MiniMax official API rejects temperature=0.0 (clamp to 0.01); Kimi
-        # k2.5/k2.6 reject any custom temperature (omit so the API uses its fixed
-        # default). All other providers get a deterministic 0.0.
+        # MiniMax rejects temperature=0.0; Kimi k2.5/k2.6 reject any custom
+        # temperature (omit so the API uses its fixed default). Others get 0.0.
         if not _is_kimi_fixed_param_model(model):
             kwargs["temperature"] = 0.01 if "minimax" in model_lower else 0.0
-        # DeepSeek V4 and Kimi k2.5/k2.6 default to thinking mode. Disable it for
-        # classifier JSON calls so the model returns the requested compact schema.
-        if _should_disable_thinking(model):
+        # Kimi defaults to thinking mode; disable it for compact JSON output.
+        if _is_kimi_fixed_param_model(model):
             kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         # Use JSON response format when model supports it
         if _supports_json_response_format(model):

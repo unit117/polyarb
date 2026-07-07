@@ -113,9 +113,22 @@ class OptimizerPipeline:
                 logger.warning("missing_prices", pair_id=pair.id)
                 return {"status": "no_prices"}
 
-            # Build price vectors aligned with outcomes
-            p_a = np.array([prices_a.get(o, 0.5) for o in constraint.outcomes_a], dtype=np.float64)
-            p_b = np.array([prices_b.get(o, 0.5) for o in constraint.outcomes_b], dtype=np.float64)
+            # Build price vectors aligned with outcomes. A missing outcome
+            # label is a data gap, not a 50/50 prior — a fabricated 0.5 used
+            # to flow all the way into TradeLeg.market_price and become a
+            # paper fill price. Skip and wait for a complete snapshot.
+            missing = [o for o in constraint.outcomes_a if o not in prices_a]
+            missing += [o for o in constraint.outcomes_b if o not in prices_b]
+            if missing:
+                logger.warning(
+                    "missing_outcome_prices",
+                    opportunity_id=opportunity_id,
+                    pair_id=pair.id,
+                    missing=missing[:4],
+                )
+                return {"status": "no_prices"}
+            p_a = np.array([float(prices_a[o]) for o in constraint.outcomes_a], dtype=np.float64)
+            p_b = np.array([float(prices_b[o]) for o in constraint.outcomes_b], dtype=np.float64)
 
             # Run Frank-Wolfe
             logger.info(
