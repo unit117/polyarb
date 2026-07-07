@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
     shadow_classifier_base_url: str = ""
     detection_interval_seconds: int = 60
+    # Minimum gap between successive opportunities on the same pair. Prevents
+    # the rescan-by-market-ids path from recreating a DETECTED opp every
+    # WebSocket tick after the optimizer rejects one for sub-min_edge spread.
+    pair_cooldown_seconds: int = 1800  # 30 min
 
     # Uncertainty filter — reject near-resolved markets in detector
     uncertainty_price_floor: float = 0.05

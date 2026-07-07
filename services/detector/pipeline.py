@@ -690,8 +690,21 @@ class DetectionPipeline:
                 in_flight_opps = {
                     opp.pair_id: opp for opp in opp_result.scalars().all()
                 }
+                cooldown_cutoff = datetime.now(timezone.utc) - timedelta(
+                    seconds=settings.pair_cooldown_seconds
+                )
+                cooldown_result = await session.execute(
+                    select(ArbitrageOpportunity.pair_id)
+                    .where(
+                        ArbitrageOpportunity.pair_id.in_(pair_ids),
+                        ArbitrageOpportunity.timestamp >= cooldown_cutoff,
+                    )
+                    .distinct()
+                )
+                cooled_down_pairs = {row[0] for row in cooldown_result.fetchall()}
             else:
                 in_flight_opps = {}
+                cooled_down_pairs = set()
 
             for pair in pairs:
                 if not pair.constraint_matrix:
@@ -748,6 +761,9 @@ class DetectionPipeline:
                         })
                     stats["refreshed"] += 1
                 elif profit > 0:
+                    if pair.id in cooled_down_pairs:
+                        stats["cooldown_skipped"] = stats.get("cooldown_skipped", 0) + 1
+                        continue
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",
@@ -776,7 +792,7 @@ class DetectionPipeline:
         for payload in deferred_events:
             await publish_event(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
-        if stats["opportunities"] > 0 or stats["refreshed"] > 0:
+        if stats["opportunities"] > 0 or stats["refreshed"] > 0 or stats.get("cooldown_skipped", 0) > 0:
             logger.info("snapshot_rescan_complete", **stats)
         return stats
 

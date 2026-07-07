@@ -16,6 +16,9 @@ from services.detector.classifier import (
     _check_over_under_markets,
     _check_milestone_threshold_markets,
     _derive_dependency_type,
+    _is_direct_deepseek_v4_model,
+    _is_kimi_fixed_param_model,
+    _should_disable_thinking,
     _strip_think_tags,
     _supports_json_response_format,
     classify_rule_based,
@@ -23,6 +26,29 @@ from services.detector.classifier import (
     classify_llm_resolution,
     classify_pair,
 )
+
+
+class TestProviderHelpers:
+    def test_direct_deepseek_v4_detection_excludes_openrouter_ids(self):
+        assert _is_direct_deepseek_v4_model("deepseek-v4-pro")
+        assert _is_direct_deepseek_v4_model("deepseek-v4-flash")
+        assert not _is_direct_deepseek_v4_model("deepseek/deepseek-chat")
+
+    def test_kimi_fixed_param_detection(self):
+        assert _is_kimi_fixed_param_model("kimi-k2.6")
+        assert _is_kimi_fixed_param_model("kimi-k2.5")
+        assert _is_kimi_fixed_param_model("kimi-latest")
+        # OpenRouter-style IDs carry a slash → generic path, not Moonshot-direct
+        assert not _is_kimi_fixed_param_model("moonshotai/kimi-k2.6")
+        # Classic non-thinking Moonshot models accept normal temperature
+        assert not _is_kimi_fixed_param_model("moonshot-v1-8k")
+        assert not _is_kimi_fixed_param_model("gpt-4.1-mini")
+
+    def test_should_disable_thinking_covers_deepseek_and_kimi(self):
+        assert _should_disable_thinking("deepseek-v4-pro")
+        assert _should_disable_thinking("kimi-k2.6")
+        assert not _should_disable_thinking("gpt-4.1-mini")
+        assert not _should_disable_thinking("moonshot-v1-8k")
 
 
 class TestCheckSameEvent:
@@ -331,6 +357,30 @@ class TestClassifyLLM:
         ))
         await classify_llm(client, "MiniMax-M2.7", {"question": "A"}, {"question": "B"})
         assert client.chat.completions.create.await_args.kwargs["max_tokens"] == 1024
+
+    @pytest.mark.asyncio
+    async def test_direct_deepseek_v4_disables_thinking_for_label_json(self):
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(return_value=_make_llm_response(
+            '{"dependency_type": "none", "confidence": 0.60, "correlation": null, "reasoning": "independent"}'
+        ))
+        await classify_llm(client, "deepseek-v4-pro", {"question": "A"}, {"question": "B"})
+        assert client.chat.completions.create.await_args.kwargs["extra_body"] == {
+            "thinking": {"type": "disabled"}
+        }
+
+    @pytest.mark.asyncio
+    async def test_kimi_k26_disables_thinking_and_omits_temperature_for_label(self):
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(return_value=_make_llm_response(
+            '{"dependency_type": "none", "confidence": 0.60, "correlation": null, "reasoning": "independent"}'
+        ))
+        await classify_llm(client, "kimi-k2.6", {"question": "A"}, {"question": "B"})
+        kwargs = client.chat.completions.create.await_args.kwargs
+        # Thinking disabled so CoT doesn't eat the 256-token budget
+        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+        # Custom temperature is rejected by k2.6 → must be omitted entirely
+        assert "temperature" not in kwargs
 
 
 class TestClassifyPair:
@@ -821,6 +871,56 @@ class TestClassifyLLMResolution:
         )
         assert result is not None
         assert "response_format" not in client.chat.completions.create.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_direct_deepseek_v4_disables_thinking_for_resolution_json(self):
+        response_json = json.dumps({
+            "valid_outcomes": [
+                {"a": "Yes", "b": "Yes"}, {"a": "Yes", "b": "No"},
+                {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"},
+            ],
+            "reasoning": "Independent",
+            "confidence": 0.90,
+        })
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(
+            return_value=_make_llm_response(response_json)
+        )
+        result = await classify_llm_resolution(
+            client, "deepseek-v4-flash",
+            {"question": "A?", "outcomes": ["Yes", "No"]},
+            {"question": "B?", "outcomes": ["Yes", "No"]},
+        )
+        assert result is not None
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+        assert kwargs["response_format"] == {"type": "json_object"}
+
+    @pytest.mark.asyncio
+    async def test_kimi_k26_disables_thinking_omits_temperature_keeps_json(self):
+        response_json = json.dumps({
+            "valid_outcomes": [
+                {"a": "Yes", "b": "Yes"}, {"a": "Yes", "b": "No"},
+                {"a": "No", "b": "Yes"}, {"a": "No", "b": "No"},
+            ],
+            "reasoning": "Independent",
+            "confidence": 0.90,
+        })
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(
+            return_value=_make_llm_response(response_json)
+        )
+        result = await classify_llm_resolution(
+            client, "kimi-k2.6",
+            {"question": "A?", "outcomes": ["Yes", "No"]},
+            {"question": "B?", "outcomes": ["Yes", "No"]},
+        )
+        assert result is not None
+        kwargs = client.chat.completions.create.await_args.kwargs
+        # Thinking off, JSON mode on (k2.6 supports it), temperature omitted
+        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+        assert kwargs["response_format"] == {"type": "json_object"}
+        assert "temperature" not in kwargs
 
     @pytest.mark.asyncio
     async def test_implication_with_direction(self):
