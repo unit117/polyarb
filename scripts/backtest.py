@@ -287,6 +287,17 @@ async def optimize_opportunity(session, opp_id: int, as_of: datetime) -> dict:
 #  Simulation step (time-bounded)
 # ═══════════════════════════════════════════════════════════════════
 
+def _finalize_simulated(opp) -> None:
+    """Mark an opportunity simulated.
+
+    The transition table only allows SIMULATED from PENDING (the live
+    simulator's claim step).  The backtest has no separate claim phase,
+    so hop through PENDING at finalization time.
+    """
+    transition(opp, OppStatus.PENDING)
+    transition(opp, OppStatus.SIMULATED)
+
+
 async def simulate_opportunity(
     session,
     opp_id: int,
@@ -322,7 +333,7 @@ async def simulate_opportunity(
                 resolved_at=str(mkt.resolved_at),
                 as_of=str(as_of),
             )
-            transition(opp, OppStatus.SIMULATED)
+            _finalize_simulated(opp)
             return {"status": "resolved_market_blocked", "trades_executed": 0}
 
     trades_executed = 0
@@ -330,7 +341,7 @@ async def simulate_opportunity(
     # Half-Kelly sizing — same formula as live pipeline
     net_profit = optimal.estimated_profit
     if net_profit <= 0:
-        transition(opp, OppStatus.SIMULATED)
+        _finalize_simulated(opp)
         return {"status": "simulated", "trades_executed": 0}
     kelly_fraction = min(net_profit * settings.kelly_multiplier, settings.kelly_fraction_cap)
 
@@ -443,7 +454,7 @@ async def simulate_opportunity(
         session.add(paper_trade)
         trades_executed += 1
 
-    transition(opp, OppStatus.SIMULATED)
+    _finalize_simulated(opp)
     return {"status": "simulated", "trades_executed": trades_executed}
 
 

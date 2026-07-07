@@ -84,6 +84,7 @@ def _make_opp(opp_id=1, pair_id=1, status="optimized"):
             {
                 "market": "A",
                 "outcome": "Yes",
+                "outcome_index": 0,
                 "side": "BUY",
                 "edge": 0.05,
                 "market_price": 0.34,
@@ -91,6 +92,9 @@ def _make_opp(opp_id=1, pair_id=1, status="optimized"):
             },
         ],
         "estimated_profit": 0.04,
+        "theoretical_profit": 0.05,
+        "market_a_prices": {"current": [0.34, 0.66], "optimal": [0.50, 0.50]},
+        "market_b_prices": {"current": [0.50, 0.50], "optimal": [0.50, 0.50]},
     }
     return opp
 

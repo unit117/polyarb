@@ -53,16 +53,9 @@ class TestResolvedMarketGuards:
         get_prices_at = AsyncMock()
         monkeypatch.setattr(backtest, "get_prices_at", get_prices_at)
 
-        resolved_skip_logged = set()
-        opp_ids = await backtest.detect_opportunities(
-            session,
-            [pair],
-            as_of,
-            resolved_skip_logged=resolved_skip_logged,
-        )
+        opp_ids = await backtest.detect_opportunities(session, [pair], as_of)
 
         assert opp_ids == []
-        assert resolved_skip_logged == {pair.id}
         get_prices_at.assert_not_called()
         session.add.assert_not_called()
         session.flush.assert_not_awaited()
@@ -79,11 +72,17 @@ class TestResolvedMarketGuards:
                     {
                         "market": "A",
                         "outcome": "Yes",
+                        "outcome_index": 0,
                         "side": "BUY",
+                        "edge": 0.05,
                         "market_price": 0.55,
+                        "fair_price": 0.60,
                     }
                 ],
                 "estimated_profit": 0.04,
+                "theoretical_profit": 0.05,
+                "market_a_prices": {"current": [0.55, 0.45], "optimal": [0.60, 0.40]},
+                "market_b_prices": {"current": [0.50, 0.50], "optimal": [0.50, 0.50]},
             },
         )
         pair = SimpleNamespace(id=1, market_a_id=10, market_b_id=11)
@@ -114,22 +113,20 @@ class TestResolvedMarketGuards:
         monkeypatch.setattr(backtest, "get_snapshot_at", get_snapshot_at)
 
         portfolio = Portfolio(10000.0)
-        resolved_skip_logged = set()
         result = await backtest.simulate_opportunity(
             session,
             7,
             portfolio,
             as_of,
             max_position_size=100.0,
-            resolved_skip_logged=resolved_skip_logged,
         )
 
         assert result == {
-            "status": "skipped",
-            "reason": "resolved_market",
+            "status": "resolved_market_blocked",
             "trades_executed": 0,
         }
-        assert resolved_skip_logged == {pair.id}
+        # Opportunity is finalized so it can't cycle back through the pipeline
+        assert opp.status == "simulated"
         get_snapshot_at.assert_not_called()
         session.add.assert_not_called()
         assert portfolio.total_trades == 0
