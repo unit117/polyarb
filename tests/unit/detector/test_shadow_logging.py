@@ -6,6 +6,7 @@ from services.detector.shadow_logging import (
     extract_order_book_summary,
     preview_trade_gates,
 )
+from shared.schemas import MarketPriceComparison, OptimalTrades, TradeLeg
 
 
 class TestExtractOrderBookSummary:
@@ -65,17 +66,34 @@ class TestPreviewTradeGates:
 
     def test_maps_optimizer_and_trade_preview(self):
         fw_result = SimpleNamespace(iterations=17, final_gap=0.0004)
+        optimal = OptimalTrades(
+            trades=[
+                TradeLeg(
+                    market="A",
+                    outcome="Yes",
+                    outcome_index=0,
+                    side="BUY",
+                    edge=0.051,
+                    market_price=0.60,
+                    fair_price=0.55,
+                ),
+            ],
+            estimated_profit=0.018,
+            theoretical_profit=0.04,
+            market_a_prices=MarketPriceComparison(
+                current=[0.60, 0.40], optimal=[0.55, 0.45]
+            ),
+            market_b_prices=MarketPriceComparison(
+                current=[0.45, 0.55], optimal=[0.50, 0.50]
+            ),
+        )
 
         with patch(
             "services.detector.shadow_logging.optimize",
             return_value=fw_result,
         ) as mock_optimize, patch(
             "services.detector.shadow_logging.compute_trades",
-            return_value={
-                "trades": [{"market": "A"}],
-                "estimated_profit": 0.018,
-                "max_edge": 0.051,
-            },
+            return_value=optimal,
         ) as mock_compute_trades:
             preview = preview_trade_gates(
                 {

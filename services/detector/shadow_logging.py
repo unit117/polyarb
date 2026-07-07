@@ -3,6 +3,14 @@ from __future__ import annotations
 
 from typing import Any
 
+try:  # Optimizer deps (numpy/ortools) may be absent in some containers
+    import numpy as np
+    from services.optimizer.frank_wolfe import optimize
+    from services.optimizer.trades import compute_trades
+    _OPTIMIZER_AVAILABLE = True
+except ImportError:
+    _OPTIMIZER_AVAILABLE = False
+
 SILVER_FAILURE_SIGNATURES = {
     "mutual_exclusion: neither market has event_id": "mutual_exclusion_missing_event_id",
     "mutual_exclusion: different event_ids": "mutual_exclusion_different_event_ids",
@@ -77,11 +85,7 @@ def preview_trade_gates(
     skip_conditional: bool = True,
 ) -> dict[str, Any]:
     """Run the current optimizer/trade gates without mutating DB state."""
-    try:
-        import numpy as np
-        from services.optimizer.frank_wolfe import optimize
-        from services.optimizer.trades import compute_trades
-    except ImportError:
+    if not _OPTIMIZER_AVAILABLE:
         return {"status": "optimizer_unavailable", "would_trade": False}
 
     if not constraint:
@@ -133,16 +137,16 @@ def preview_trade_gates(
         venue_a=venue_a,
         venue_b=venue_b,
     )
-    trade_count = len(trade_info["trades"])
+    trade_count = len(trade_info.trades)
     would_trade = trade_count > 0
 
     return {
         "status": "would_trade" if would_trade else "optimizer_rejected",
         "would_trade": would_trade,
         "trade_count": trade_count,
-        "estimated_profit": float(trade_info.get("estimated_profit", 0.0)),
-        "max_edge": trade_info.get("max_edge"),
-        "rejection_reason": trade_info.get("rejection_reason"),
+        "estimated_profit": float(trade_info.estimated_profit),
+        "max_edge": max((t.edge for t in trade_info.trades), default=None),
+        "rejection_reason": None,
         "iterations": result.iterations,
         "gap": result.final_gap,
     }
