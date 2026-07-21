@@ -25,6 +25,10 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+*.textClipping
+
+# Syncthing conflict copies
+*.sync-conflict-*
 
 # Docker
 docker-compose.override.yml
