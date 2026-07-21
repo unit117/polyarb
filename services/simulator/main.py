@@ -27,11 +27,13 @@ def _build_circuit_breaker(
     *,
     max_daily_loss: float,
     max_position_per_market: float,
+    scope: str,
 ) -> CircuitBreaker:
     return CircuitBreaker(
         redis=redis,
         max_daily_loss=max_daily_loss,
         max_position_per_market=max_position_per_market,
+        scope=scope,
         max_drawdown_pct=settings.cb_max_drawdown_pct,
         max_consecutive_errors=settings.cb_max_consecutive_errors,
         cooldown_seconds=settings.cb_cooldown_seconds,
@@ -53,6 +55,7 @@ async def main() -> None:
         redis,
         max_daily_loss=settings.cb_max_daily_loss,
         max_position_per_market=settings.cb_max_position_per_market,
+        scope="paper",
     )
     pipeline = SimulatorPipeline(
         session_factory=SessionFactory,
@@ -78,6 +81,7 @@ async def main() -> None:
                 / 100.0
             ),
             max_position_per_market=settings.live_trading_max_position_size,
+            scope="live",
         )
         live_executor = LiveExecutor(
             private_key=settings.live_trading_private_key,

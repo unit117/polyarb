@@ -262,3 +262,25 @@ class TestPairFlowLedger:
         assert p.pair_flow(None, 604800) == Decimal("0")
         assert p.pair_flow(42, 604800) == Decimal("0")
         assert p.pair_entry_flow == {}
+
+
+class TestOpeningExposureSize:
+    def test_pure_open_counts_whole_size(self):
+        from services.simulator.portfolio import opening_exposure_size
+
+        assert opening_exposure_size("BUY", 0, 10) == Decimal("10")
+        assert opening_exposure_size("SELL", 0, 10) == Decimal("10")
+        assert opening_exposure_size("BUY", 5, 10) == Decimal("10")  # adding long
+        assert opening_exposure_size("SELL", -5, 10) == Decimal("10")  # adding short
+
+    def test_pure_exit_counts_nothing(self):
+        from services.simulator.portfolio import opening_exposure_size
+
+        assert opening_exposure_size("SELL", 10, 10) == Decimal("0")
+        assert opening_exposure_size("BUY", -10, 4) == Decimal("0")
+
+    def test_flip_counts_only_remainder(self):
+        from services.simulator.portfolio import opening_exposure_size
+
+        assert opening_exposure_size("SELL", 1, Decimal("2.5")) == Decimal("1.5")
+        assert opening_exposure_size("BUY", -100, 150) == Decimal("50")

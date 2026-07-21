@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from shared.config import settings
 from shared.models import ArbitrageOpportunity, PaperTrade
-from services.simulator.portfolio import Portfolio
+from services.simulator.portfolio import Portfolio, opening_exposure_size
 
 logger = structlog.get_logger()
 
@@ -84,17 +84,22 @@ def replay_trades_into_portfolio(
             )
 
             if (
-                not is_exit
-                and result["executed"]
+                result["executed"]
                 and pair_map is not None
                 and trade.opportunity_id is not None
                 and (flow_window_start is None or _aware(trade.executed_at) >= flow_window_start)
             ):
-                portfolio.record_pair_entry(
-                    pair_map.get(trade.opportunity_id),
-                    Decimal(str(result["size"])) * price_d,
-                    at=_aware(trade.executed_at),
+                # Flip-aware: count only the exposure-opening portion,
+                # mirroring the live recording in pipeline._execute_pending
+                opened = opening_exposure_size(
+                    trade.side, pre_position, result["size"]
                 )
+                if opened > 0:
+                    portfolio.record_pair_entry(
+                        pair_map.get(trade.opportunity_id),
+                        opened * price_d,
+                        at=_aware(trade.executed_at),
+                    )
 
             if is_exit and pre_position != 0 and result["executed"]:
                 actual_size = Decimal(str(result["size"]))

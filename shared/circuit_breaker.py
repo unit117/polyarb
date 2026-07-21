@@ -26,9 +26,9 @@ from shared.events import publish
 logger = structlog.get_logger()
 
 CHANNEL_CB_TRIPPED = "polyarb:circuit_breaker_tripped"
-REDIS_KILL_SWITCH_KEY = "polyarb:kill_switch"
-REDIS_TRIP_KEY = "polyarb:cb:trip"
-REDIS_DAILY_LOSS_KEY = "polyarb:cb:daily_loss:{day}"
+REDIS_KILL_SWITCH_KEY = "polyarb:kill_switch"  # intentionally global across books
+REDIS_TRIP_KEY = "polyarb:cb:{scope}:trip"
+REDIS_DAILY_LOSS_KEY = "polyarb:cb:{scope}:daily_loss:{day}"
 DAILY_LOSS_KEY_TTL = 172800  # 2 days; the key is UTC-date-stamped
 
 
@@ -51,8 +51,12 @@ class CircuitBreaker:
         max_drawdown_pct: float = 10.0,
         max_consecutive_errors: int = 5,
         cooldown_seconds: int = 300,
+        scope: str = "paper",
     ):
+        # The paper and live books run separate breakers with different
+        # limits in the same process — their Redis state must not mix.
         self.redis = redis
+        self.scope = scope
         self.max_daily_loss = max_daily_loss
         self.max_position_per_market = max_position_per_market
         self.max_drawdown_pct = max_drawdown_pct
@@ -65,6 +69,13 @@ class CircuitBreaker:
         self._consecutive_errors = 0
         self._daily_loss = 0.0
         self._day: str = _utc_day()
+
+    @property
+    def _trip_key(self) -> str:
+        return REDIS_TRIP_KEY.format(scope=self.scope)
+
+    def _loss_key(self, day: str) -> str:
+        return REDIS_DAILY_LOSS_KEY.format(scope=self.scope, day=day)
 
     def _reset_daily(self) -> None:
         """Reset the in-memory daily counter when the UTC day rolls over."""
@@ -98,14 +109,17 @@ class CircuitBreaker:
         logger.warning("circuit_breaker_tripped", reason=reason, **details)
         try:
             # TTL doubles as the auto-reset across restarts: key gone = reset.
-            await self.redis.set(REDIS_TRIP_KEY, reason, ex=self.cooldown_seconds)
+            await self.redis.set(self._trip_key, reason, ex=self.cooldown_seconds)
         except RedisError as exc:
             logger.debug("cb_trip_persist_failed", error=str(exc))
-        await publish(
-            self.redis,
-            CHANNEL_CB_TRIPPED,
-            {"reason": reason, "timestamp": self._trip_time, **details},
-        )
+        try:
+            await publish(
+                self.redis,
+                CHANNEL_CB_TRIPPED,
+                {"reason": reason, "timestamp": self._trip_time, **details},
+            )
+        except RedisError as exc:
+            logger.debug("cb_trip_publish_failed", error=str(exc))
 
     async def _refresh_from_redis(self) -> None:
         """Adopt Redis-persisted trip/daily-loss state (fail-open on errors).
@@ -116,14 +130,17 @@ class CircuitBreaker:
         """
         try:
             trip_val, loss_val = await self.redis.mget(
-                REDIS_TRIP_KEY,
-                REDIS_DAILY_LOSS_KEY.format(day=_utc_day()),
+                self._trip_key,
+                self._loss_key(_utc_day()),
             )
         except RedisError as exc:
             logger.debug("cb_refresh_failed", error=str(exc))
             return
         reason = _as_str(trip_val)
-        if reason is not None and not self._tripped:
+        # is_tripped (not the raw flag) so a locally-expired trip is
+        # normalized first — otherwise a fresh trip key written by another
+        # process would be skipped and one trade could slip through.
+        if reason is not None and not self.is_tripped:
             # A prior process (or pre-restart self) tripped; adopt it. The
             # remaining TTL is unknown, so anchor the memory cooldown now —
             # worst case the memory trip outlives the key by one cooldown.
@@ -138,8 +155,12 @@ class CircuitBreaker:
                 pass
 
     async def check_kill_switch(self) -> bool:
-        """Check Redis for manual kill switch."""
-        val = await self.redis.get(REDIS_KILL_SWITCH_KEY)
+        """Check Redis for manual kill switch (fail-open on Redis errors)."""
+        try:
+            val = await self.redis.get(REDIS_KILL_SWITCH_KEY)
+        except RedisError as exc:
+            logger.debug("cb_kill_switch_check_failed", error=str(exc))
+            return False
         val = _as_str(val)
         if val and val.lower() in ("1", "true", "yes"):
             if not self._tripped or self._trip_reason != "manual_kill_switch":
@@ -264,7 +285,7 @@ class CircuitBreaker:
         self._reset_daily()
         self._daily_loss += amount
         try:
-            key = REDIS_DAILY_LOSS_KEY.format(day=self._day)
+            key = self._loss_key(self._day)
             await self.redis.incrbyfloat(key, amount)
             await self.redis.expire(key, DAILY_LOSS_KEY_TTL)
         except RedisError as exc:

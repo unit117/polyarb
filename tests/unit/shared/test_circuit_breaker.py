@@ -290,9 +290,29 @@ class TestRedisDurability:
         assert allowed is False
         assert reason == "circuit_breaker_tripped:max_daily_loss"
         # key TTL mirrors the cooldown so expiry = auto-reset across restarts
-        from shared.circuit_breaker import REDIS_TRIP_KEY
+        assert 0 < await redis.ttl(cb1._trip_key) <= 300
 
-        assert 0 < await redis.ttl(REDIS_TRIP_KEY) <= 300
+    @pytest.mark.asyncio
+    async def test_scoped_keys_isolate_paper_and_live(self):
+        # Regression: unscoped keys let $60 of routine paper losses trip a
+        # live breaker whose daily limit is $10, and cross-adopt trips.
+        redis = self._fake_redis()
+        paper = CircuitBreaker(redis=redis, max_daily_loss=500.0, scope="paper")
+        live = CircuitBreaker(redis=redis, max_daily_loss=10.0, scope="live")
+        await paper.record_loss(60.0)
+
+        portfolio = _make_portfolio()
+        allowed, reason = await live.pre_trade_check(
+            portfolio, market_id=1, trade_size=1, trade_side="BUY", outcome="Yes"
+        )
+        assert allowed is True
+        assert live._daily_loss == 0.0
+
+        await paper._trip("max_drawdown")
+        allowed, _ = await live.pre_trade_check(
+            portfolio, market_id=1, trade_size=1, trade_side="BUY", outcome="Yes"
+        )
+        assert allowed is True
 
     @pytest.mark.asyncio
     async def test_redis_down_falls_back_to_memory(self):

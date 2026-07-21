@@ -28,7 +28,7 @@ from shared.models import (
     PortfolioSnapshot,
     PriceSnapshot,
 )
-from services.simulator.portfolio import Portfolio
+from services.simulator.portfolio import Portfolio, opening_exposure_size
 from services.simulator.validation import (
     ValidatedExecutionBundle,
     ValidatedLeg,
@@ -212,11 +212,16 @@ class SimulatorPipeline:
                     continue
 
                 actual_size = result["size"]
-                if not is_exit:
-                    # Feed the per-pair flow cap with the EXECUTED exposure
+                # Feed the per-pair flow cap with the EXECUTED exposure that
+                # opened NEW risk (flip-aware: a leg past |existing| opens
+                # the remainder even though it also closed a position).
+                opened = opening_exposure_size(
+                    leg.side, existing_position, actual_size
+                )
+                if opened > 0:
                     self.portfolio.record_pair_entry(
                         opp.pair_id,
-                        Decimal(str(actual_size)) * Decimal(str(leg.vwap_price)),
+                        opened * Decimal(str(leg.vwap_price)),
                     )
                 paper_trade = PaperTrade(
                     opportunity_id=opp.id,

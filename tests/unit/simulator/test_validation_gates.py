@@ -158,3 +158,17 @@ class TestPairFlowCap:
         monkeypatch.setattr(settings, "max_pair_weekly_flow", 0.0)
         world.portfolio.record_pair_entry(42, 5000.0, at=world.now)
         assert await _build(world, _opp()) is not None
+
+
+class TestFlipAwareCap:
+    @pytest.mark.asyncio
+    async def test_flip_remainder_counts_toward_cap(self, world):
+        # Position +1 long each market; SELL 2.5 closes 1 and opens a 1.5
+        # short — the remainder must count as new exposure (whole-leg exit
+        # classification let flips open unlimited uncapped exposure).
+        world.portfolio.positions = {
+            "101:Yes": Decimal("1"),
+            "102:Yes": Decimal("1"),
+        }
+        world.portfolio.record_pair_entry(42, 99.9, at=world.now)
+        assert await _build(world, _opp(side="SELL", fair=0.4)) is None

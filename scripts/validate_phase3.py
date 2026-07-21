@@ -39,8 +39,19 @@ class MockRedis:
         self.data = {}
     async def get(self, key):
         return self.data.get(key)
-    async def set(self, key, value):
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.data:
+            return None
         self.data[key] = value
+        return True
+    async def mget(self, *keys):
+        return [self.data.get(k) for k in keys]
+    async def incrbyfloat(self, key, amount):
+        val = float(self.data.get(key, 0)) + amount
+        self.data[key] = str(val)
+        return val
+    async def expire(self, key, seconds):
+        return True
     async def publish(self, channel, message):
         pass
 
@@ -60,19 +71,20 @@ async def test_circuit_breaker():
     portfolio = Portfolio(1000.0)
     # Mock portfolio positions
     portfolio.positions = {"1:Yes": Decimal("40.0")}
-    allowed, reason = await cb.pre_trade_check(portfolio, market_id=1, trade_size=20.0)
+    allowed, reason = await cb.pre_trade_check(
+        portfolio, market_id=1, trade_size=20.0, trade_side="BUY", outcome="Yes"
+    )
     print(f"Position limit check (should fail): allowed={allowed}, reason={reason}")
     assert not allowed
-    assert cb.is_tripped
-
-    # Wait for cooldown
-    await asyncio.sleep(1.1)
-    print(f"Tripped after cooldown: {cb.is_tripped}")
+    # Position cap is a LOCAL rejection since the 9-bug audit — no global trip
+    assert reason == "max_position_per_market"
     assert not cb.is_tripped
 
     # 2. Test Daily Loss
     await cb.record_loss(150.0)
-    allowed, reason = await cb.pre_trade_check(portfolio, market_id=2, trade_size=10.0)
+    allowed, reason = await cb.pre_trade_check(
+        portfolio, market_id=2, trade_size=10.0, trade_side="BUY", outcome="Yes"
+    )
     print(f"Daily loss check (should fail): allowed={allowed}, reason={reason}")
     assert not allowed
 
@@ -88,7 +100,9 @@ async def test_circuit_breaker():
     # 4. Test Kill Switch
     await redis.set(REDIS_KILL_SWITCH_KEY, "true")
     await asyncio.sleep(1.1) # Wait for previous trip to expire
-    allowed, reason = await cb.pre_trade_check(portfolio, market_id=3, trade_size=1.0)
+    allowed, reason = await cb.pre_trade_check(
+        portfolio, market_id=3, trade_size=1.0, trade_side="BUY", outcome="Yes"
+    )
     print(f"Kill switch check (should fail): allowed={allowed}, reason={reason}")
     assert not allowed
 
@@ -139,7 +153,7 @@ async def test_dedup():
     )
     
     # Mock _simulate_opportunity_inner to just hang
-    async def slow_inner(opp_id):
+    async def slow_inner(opp_id, live_coordinator=None):
         await asyncio.sleep(0.5)
         return {"status": "simulated"}
     

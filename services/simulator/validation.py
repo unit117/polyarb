@@ -13,7 +13,7 @@ from shared.models import PriceSnapshot
 from shared.frozen_cooldown import record_frozen_rejection
 from shared.pricing import get_latest_snapshot, is_price_frozen
 from shared.schemas import OptimalTrades
-from services.simulator.portfolio import Portfolio
+from services.simulator.portfolio import Portfolio, opening_exposure_size
 from services.simulator.vwap import compute_vwap
 
 logger = structlog.get_logger()
@@ -192,20 +192,19 @@ async def build_validated_bundle(
         midpoint = trade.market_price or 0.5
         fill = compute_vwap(snapshot.order_book, trade.side, base_size, midpoint)
 
-        # Exposure-opening legs count toward the per-pair flow cap. Both
+        # Exposure-opening dollars count toward the per-pair flow cap. Both
         # directions open exposure: BUYs opening/adding longs AND SELLs
         # opening/adding shorts (pair 53507 hit 20% of net cash flow with
         # 188 short-opening SELLs — a BUY-only cap would have missed it).
+        # Flip-aware: a leg larger than the position it closes opens the
+        # remainder as new exposure.
         leg_key = f"{market.id}:{trade.outcome}"
         leg_existing = portfolio.positions.get(leg_key, Decimal("0"))
-        leg_is_exit = (
-            (trade.side == "SELL" and leg_existing > 0)
-            or (trade.side == "BUY" and leg_existing < 0)
+        opening_size = opening_exposure_size(
+            trade.side, leg_existing, fill["filled_size"]
         )
-        if not leg_is_exit:
-            opening_flow += Decimal(str(fill["filled_size"])) * Decimal(
-                str(fill["vwap_price"])
-            )
+        if opening_size > 0:
+            opening_flow += opening_size * Decimal(str(fill["vwap_price"]))
         trade_venue = trade.venue or getattr(market, "venue", "polymarket")
         fee_bps = trade.fee_rate_bps if trade.fee_rate_bps is not None else getattr(market, "fee_rate_bps", None)
         fees = (
@@ -306,6 +305,16 @@ async def build_validated_bundle(
                 opening_flow=float(opening_flow),
                 limit=settings.max_pair_weekly_flow,
             )
+            # A capped pair stays capped for up to the window length; feed
+            # the cooldown so detection stops re-creating its opportunities
+            # instead of looping detect->optimize->reject for days.
+            if await record_frozen_rejection(redis, opp.pair_id):
+                logger.warning(
+                    "pair_flow_cap_cooldown_started",
+                    pair_id=opp.pair_id,
+                    opportunity_id=opp.id,
+                    cooldown_seconds=settings.frozen_pair_cooldown_seconds,
+                )
             return None
 
     return ValidatedExecutionBundle(

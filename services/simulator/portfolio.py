@@ -9,6 +9,22 @@ import structlog
 logger = structlog.get_logger()
 
 
+def opening_exposure_size(side: str, existing, size):
+    """Portion of a trade that opens NEW exposure, flip-aware.
+
+    A SELL over a long (or BUY over a short) first closes the existing
+    position; only the remainder past |existing| opens fresh exposure.
+    Whole-leg exit classification let flips open unlimited exposure
+    invisible to the per-pair flow cap.
+    """
+    existing_d = Decimal(str(existing))
+    size_d = Decimal(str(size))
+    closing = (side == "SELL" and existing_d > 0) or (side == "BUY" and existing_d < 0)
+    if not closing:
+        return size_d
+    return max(Decimal("0"), size_d - abs(existing_d))
+
+
 class Portfolio:
     """In-memory portfolio state, periodically persisted to DB."""
 
