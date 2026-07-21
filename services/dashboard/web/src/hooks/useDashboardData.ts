@@ -284,14 +284,24 @@ export function useDashboardData(): DashboardData {
   const sourceParam = `source=${mode}`;
 
   const fetchStats = useCallback(() => {
-    apiFetch<Stats>(`/stats?${sourceParam}`).then(setStats).catch(console.error);
-  }, [sourceParam]);
+    const requestMode = mode;
+    apiFetch<Stats>(`/stats?${sourceParam}`)
+      .then((data) => {
+        if (modeRef.current !== requestMode) return;
+        setStats(data);
+      })
+      .catch(console.error);
+  }, [sourceParam, mode]);
 
   const fetchHistory = useCallback(() => {
+    const requestMode = mode;
     apiFetch<{ history: HistoryPoint[] }>(`/portfolio/history?hours=24&${sourceParam}`)
-      .then((r) => setHistory(r.history))
+      .then((r) => {
+        if (modeRef.current !== requestMode) return;
+        setHistory(r.history);
+      })
       .catch(console.error);
-  }, [sourceParam]);
+  }, [sourceParam, mode]);
 
   const fetchBaseline = useCallback(() => {
     // Once resolved (got a value OR confirmed no epoch), stop retrying
@@ -328,13 +338,15 @@ export function useDashboardData(): DashboardData {
 
   const fetchTrades = useCallback(() => {
     const limit = loadedCountRef.current.trades;
+    const requestMode = mode;
     apiFetch<{ trades: Trade[]; total: number; offset: number; limit: number }>(`/trades?limit=${limit}&offset=0&${sourceParam}`)
       .then((r) => {
+        if (modeRef.current !== requestMode) return;
         setTrades(r.trades);
         setTradesPag(makePagination(r.total, 0, limit));
       })
       .catch(console.error);
-  }, [sourceParam]);
+  }, [sourceParam, mode]);
 
   const fetchPairs = useCallback(() => {
     const limit = loadedCountRef.current.pairs;
@@ -353,10 +365,14 @@ export function useDashboardData(): DashboardData {
 
   // Open positions for the current source (paper/live).
   const fetchPositions = useCallback(() => {
+    const requestMode = mode;
     apiFetch<{ positions: Position[] }>(`/positions?${sourceParam}`)
-      .then((r) => setPositions(r.positions))
+      .then((r) => {
+        if (modeRef.current !== requestMode) return;
+        setPositions(r.positions);
+      })
       .catch(console.error);
-  }, [sourceParam]);
+  }, [sourceParam, mode]);
 
   const loadMoreOpportunities = useCallback(() => {
     const nextOffset = opportunities.length;
