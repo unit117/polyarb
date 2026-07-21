@@ -1,0 +1,31 @@
+{
+  "status": "blocked",
+  "generated_at": "2026-03-25T16:12:42.442719Z",
+  "access": {
+    "local_root": null,
+    "manifest": null,
+    "http_index": null
+  },
+  "blockers": [
+    "No PMXT access path configured. Set --local-root, --manifest, or --http-index (or PMXT_ARCHIVE_ROOT / PMXT_ARCHIVE_MANIFEST / PMXT_ARCHIVE_INDEX_URL)."
+  ],
+  "archive": {
+    "file_count": 0,
+    "oldest_hour": null,
+    "newest_hour": null,
+    "size": {
+      "known_file_sizes": 0,
+      "total_bytes": null,
+      "min_bytes": null,
+      "median_bytes": null,
+      "max_bytes": null
+    },
+    "cadence_gaps": [],
+    "datasets": {},
+    "joinability": {
+      "status": "insufficient_data",
+      "reason": "Need both order_book and trades files to evaluate joinability"
+    },
+    "inspected_files": []
+  }
+}
