@@ -332,11 +332,17 @@ class TestProcessPending:
             return None
         session.get = AsyncMock(side_effect=mock_get)
 
-        # First execute returns opp IDs, subsequent return prices
+        # First execute is the expire-stale UPDATE (no rows), second returns
+        # opp IDs, subsequent return prices
         call_count = [0]
         def execute_side_effect(query):
             call_count[0] += 1
             if call_count[0] == 1:
+                # Expire-stale UPDATE ... RETURNING — nothing expired
+                mock_rows = MagicMock()
+                mock_rows.fetchall = MagicMock(return_value=[])
+                return mock_rows
+            if call_count[0] == 2:
                 # Return list of opp IDs for process_pending query
                 mock_rows = MagicMock()
                 mock_rows.fetchall = MagicMock(return_value=[(1,)])
@@ -375,6 +381,11 @@ class TestProcessPending:
         def execute_side_effect(query):
             call_count[0] += 1
             if call_count[0] == 1:
+                # Expire-stale UPDATE ... RETURNING — nothing expired
+                mock_rows = MagicMock()
+                mock_rows.fetchall = MagicMock(return_value=[])
+                return mock_rows
+            if call_count[0] == 2:
                 mock_rows = MagicMock()
                 mock_rows.fetchall = MagicMock(return_value=[(42,)])
                 return mock_rows

@@ -10,9 +10,20 @@ from services.simulator.portfolio import Portfolio
 
 
 def _mock_session_factory():
-    """Create a mock async session factory."""
+    """Create a mock async session factory.
+
+    flush() assigns IDs to added objects like a real DB flush would — the
+    typed TradeExecutedEvent requires an int trade_id.
+    """
     session = AsyncMock()
-    session.add = MagicMock()  # add() is sync
+    added_objects = []
+    session.add = MagicMock(side_effect=added_objects.append)  # add() is sync
+
+    async def mock_flush():
+        for i, obj in enumerate(added_objects, start=1):
+            if getattr(obj, "id", None) is None:
+                obj.id = i
+    session.flush = AsyncMock(side_effect=mock_flush)
     factory = AsyncMock()
     factory.__aenter__ = AsyncMock(return_value=session)
     factory.__aexit__ = AsyncMock(return_value=False)
@@ -34,6 +45,7 @@ def _make_opportunity(
             {
                 "market": "A",
                 "outcome": "Yes",
+                "outcome_index": 0,
                 "side": "BUY",
                 "edge": 0.05,
                 "market_price": 0.55,
@@ -42,6 +54,9 @@ def _make_opportunity(
             },
         ],
         "estimated_profit": 0.04,
+        "theoretical_profit": 0.05,
+        "market_a_prices": {"current": [0.55, 0.45], "optimal": [0.60, 0.40]},
+        "market_b_prices": {"current": [0.50, 0.50], "optimal": [0.50, 0.50]},
     }
     opp.timestamp = MagicMock()
     return opp
@@ -60,6 +75,8 @@ def _make_market(market_id=1, venue="polymarket", resolved_outcome=None):
     m.id = market_id
     m.venue = venue
     m.resolved_outcome = resolved_outcome
+    m.active = True
+    m.fee_rate_bps = None
     return m
 
 
@@ -153,7 +170,8 @@ class TestSimulateOpportunity:
         assert result["reason"] == "in_flight"
 
     @pytest.mark.asyncio
-    async def test_no_trades_returns_no_trades(self):
+    async def test_empty_trades_expires_opportunity(self):
+        """An opportunity with no trades is a dead end — expired, not retried."""
         factory_fn, session = _mock_session_factory()
         redis = AsyncMock()
         portfolio = Portfolio(10000.0)
@@ -169,7 +187,9 @@ class TestSimulateOpportunity:
         )
 
         result = await pipeline.simulate_opportunity(1)
-        assert result["status"] == "no_trades"
+        assert result["status"] == "expired"
+        assert result["reason"] == "no_trades"
+        assert opp.status == "expired"
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_blocks_trade(self):

@@ -108,10 +108,15 @@ class TestDetectionPipelineRunOnce:
             return mock_price_result  # Price queries
         session.execute = AsyncMock(side_effect=mock_execute)
 
-        # Mock pair flush (assign ID)
-        flush_count = [0]
+        # Mock pair flush (assign IDs like a real DB flush would — the typed
+        # PairDetectedEvent requires an int pair_id)
+        added_objects = []
+        session.add = MagicMock(side_effect=added_objects.append)
+
         async def mock_flush():
-            flush_count[0] += 1
+            for i, obj in enumerate(added_objects, start=1):
+                if getattr(obj, "id", None) is None:
+                    obj.id = i
         session.flush = AsyncMock(side_effect=mock_flush)
 
         pipeline = DetectionPipeline(
