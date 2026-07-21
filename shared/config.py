@@ -92,8 +92,10 @@ class Settings(BaseSettings):
     # markets whose latest snapshot was written AFTER boot. Pre-restart
     # snapshots can be minutes old (passing max_snapshot_age_seconds) while
     # the market moved during the outage — the daily NAS power-cycle showed
-    # every service cold-starting against pre-reboot quotes. 0 disables.
-    simulator_startup_grace_seconds: int = 180
+    # every service cold-starting against pre-reboot quotes. Keep >=
+    # max_snapshot_age_seconds: a shorter grace leaves pre-boot snapshots
+    # tradeable between grace expiry and the age gate. 0 disables.
+    simulator_startup_grace_seconds: int = 600
     # Per-pair exposure-opening flow cap: total dollars of NEW exposure
     # (longs bought or shorts sold) a single pair may open within the rolling
     # window. Bounds concentration — one pair recycling capital through
