@@ -158,6 +158,7 @@ class SimulatorPipeline:
                 max_position_size=self.max_position_size,
                 circuit_breaker=self.circuit_breaker,
                 current_prices=current_prices,
+                redis=self.redis,
             )
             if not bundle or not bundle.legs:
                 return await self._handle_blocked(session, opp, market_a, market_b)
@@ -183,23 +184,29 @@ class SimulatorPipeline:
                 )
 
                 if is_exit and existing_position != 0 and result["executed"]:
-                    close_size = min(abs(existing_position), Decimal(str(leg.size)))
-                    avg_entry = pre_trade_cost / abs(existing_position)
-                    exit_price = Decimal(str(leg.vwap_price))
-                    exit_fees = (
-                        Decimal(str(leg.fees)) * close_size / Decimal(str(leg.size))
-                        if leg.size > 0
-                        else Decimal("0")
-                    )
+                    # Use the EXECUTED size, not the requested one:
+                    # execute_trade can clamp a SELL for margin, and with the
+                    # requested size a fully-clamped trade would book realized
+                    # PnL for a close that never happened. (The live
+                    # coordinator already uses actual size — this is the same
+                    # fix, and restart replay mirrors this arithmetic.)
+                    actual_size_d = Decimal(str(result["size"]))
+                    close_size = min(abs(existing_position), actual_size_d)
+                    if close_size > 0:
+                        avg_entry = pre_trade_cost / abs(existing_position)
+                        exit_price = Decimal(str(leg.vwap_price))
+                        exit_fees = (
+                            Decimal(str(leg.fees)) * close_size / actual_size_d
+                        )
 
-                    if existing_position > 0:
-                        realized = (exit_price - avg_entry) * close_size - exit_fees
-                    else:
-                        realized = (avg_entry - exit_price) * close_size - exit_fees
+                        if existing_position > 0:
+                            realized = (exit_price - avg_entry) * close_size - exit_fees
+                        else:
+                            realized = (avg_entry - exit_price) * close_size - exit_fees
 
-                    self.portfolio.realized_pnl += realized
-                    if self.circuit_breaker and realized < 0:
-                        self.circuit_breaker.record_loss(float(abs(realized)))
+                        self.portfolio.realized_pnl += realized
+                        if self.circuit_breaker and realized < 0:
+                            self.circuit_breaker.record_loss(float(abs(realized)))
 
                 if not result["executed"]:
                     continue
@@ -362,6 +369,7 @@ class SimulatorPipeline:
             for mid, outcome in result.all():
                 resolved[mid] = outcome
 
+            stale_marks: list[str] = []
             for key in self.portfolio.positions:
                 parts = key.split(":")
                 if len(parts) != 2:
@@ -373,15 +381,35 @@ class SimulatorPipeline:
                     prices[key] = 1.0 if position_outcome == resolved[market_id] else 0.0
                     continue
 
-                snapshot = await get_latest_snapshot(session, market_id)
-                if snapshot and snapshot.midpoints:
+                # Age-bound the mark. A market that stopped snapshotting
+                # (delisted, dropped from the snapshot set, WS gap) would
+                # otherwise be valued at its frozen last price forever,
+                # feeding phantom PnL into portfolio snapshots, drawdown
+                # trips, and Kelly scaling. Omitting the key makes
+                # total_value()/unrealized_pnl() mark the position at cost
+                # basis (break-even) instead.
+                snapshot = await get_latest_snapshot(
+                    session, market_id, settings.valuation_max_snapshot_age_seconds
+                )
+                if not snapshot:
+                    stale_marks.append(key)
+                    continue
+                if snapshot.midpoints:
                     price = snapshot.midpoints.get(position_outcome)
                     if price is not None:
                         prices[key] = float(price)
-                elif snapshot and snapshot.prices:
+                elif snapshot.prices:
                     price = snapshot.prices.get(position_outcome)
                     if price is not None:
                         prices[key] = float(price)
+
+            if stale_marks:
+                logger.warning(
+                    "valuation_marked_at_cost",
+                    count=len(stale_marks),
+                    sample=stale_marks[:5],
+                    max_age_seconds=settings.valuation_max_snapshot_age_seconds,
+                )
         return prices
 
     async def snapshot_portfolio(self) -> None:

@@ -27,6 +27,7 @@ from shared.models import (
     PriceSnapshot,
 )
 from shared.config import settings
+from shared.frozen_cooldown import is_pair_cooled
 from shared.pricing import get_latest_snapshot
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
@@ -422,11 +423,13 @@ class DetectionPipeline:
                 if dep_type == "mutual_exclusion":
                     event_a = market_a_dict.get("event_id")
                     event_b = market_b_dict.get("event_id")
-                    if not event_a and not event_b:
+                    # Mirrors verification: ME requires the same event_id on
+                    # BOTH markets; one-sided or missing ids always fail there.
+                    if not event_a or not event_b or event_a != event_b:
                         logger.info(
                             "skipped_structural_precheck",
                             market_a_id=market_a.id, market_b_id=market_b.id,
-                            reason="mutual_exclusion_no_event_ids",
+                            reason="mutual_exclusion_event_id_mismatch",
                         )
                         continue
                     outcomes_a = market_a_dict.get("outcomes", [])
@@ -609,6 +612,13 @@ class DetectionPipeline:
                 if not verified or profit <= 0:
                     continue
 
+                # Pairs the simulator keeps rejecting on frozen quotes are on
+                # cooldown — re-creating their opportunities just restarts the
+                # detect→optimize→reject loop on dead data.
+                if await is_pair_cooled(self.redis, pair.id):
+                    stats["frozen_cooldown_skipped"] = stats.get("frozen_cooldown_skipped", 0) + 1
+                    continue
+
                 opp = ArbitrageOpportunity(
                     pair_id=pair.id,
                     type="rebalancing",
@@ -637,9 +647,40 @@ class DetectionPipeline:
         for payload in deferred_events:
             await publish_event(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
-        if stats["opportunities"] > 0:
+        if stats["opportunities"] > 0 or stats.get("frozen_cooldown_skipped", 0) > 0:
             logger.info("rescan_complete", **stats)
         return stats
+
+    async def _is_pair_dormant(self, session, pair_id: int) -> bool:
+        """True if a pair keeps optimizing to zero executable profit.
+
+        Some pairs show a theoretical edge every snapshot but the optimizer
+        finds zero executable profit (e.g. a frozen/illiquid quote), so they
+        recycle DETECTED→OPTIMIZED→EXPIRED ~once a minute forever. When the
+        pair's last `dormant_pair_min_evaluations` optimizer-evaluated opps
+        within the window were ALL zero estimated_profit, treat it as dormant
+        and stop re-creating opportunities for it. It re-probes on its own once
+        the window empties (no fresh opps → fewer than the minimum in window).
+        """
+        if not settings.dormant_pair_enabled:
+            return False
+        window_start = datetime.now(timezone.utc) - timedelta(
+            seconds=settings.dormant_pair_window_seconds
+        )
+        result = await session.execute(
+            select(ArbitrageOpportunity.estimated_profit)
+            .where(
+                ArbitrageOpportunity.pair_id == pair_id,
+                ArbitrageOpportunity.estimated_profit.isnot(None),
+                ArbitrageOpportunity.timestamp >= window_start,
+            )
+            .order_by(ArbitrageOpportunity.timestamp.desc())
+            .limit(settings.dormant_pair_min_evaluations)
+        )
+        profits = [row[0] for row in result.all()]
+        if len(profits) < settings.dormant_pair_min_evaluations:
+            return False
+        return all((p or 0) == 0 for p in profits)
 
     async def rescan_by_market_ids(self, market_ids: set[int]) -> dict:
         """Re-evaluate verified pairs involving specific markets with fresh prices.
@@ -706,7 +747,47 @@ class DetectionPipeline:
                     session, pair, prices_a, prices_b,
                 )
                 if not verified:
+                    # The pair just failed re-verification with current
+                    # prices, but nothing downstream checks pair.verified —
+                    # the optimizer reads only constraint_matrix and the
+                    # simulator only market state. Expire any in-flight
+                    # opportunity here, or it stays tradeable on exactly the
+                    # constraint the verifier just rejected (and the failure
+                    # mode — a large violation — is the one that looks most
+                    # profitable). PENDING is left alone: the simulator is
+                    # mid-execution and owns that transition.
+                    stale_opp = in_flight_opps.get(pair.id)
+                    if (
+                        stale_opp
+                        and stale_opp.status != OppStatus.PENDING
+                        and not stale_opp.expired_at
+                    ):
+                        stale_opp.theoretical_profit = Decimal("0")
+                        stale_opp.estimated_profit = Decimal("0")
+                        stale_opp.optimal_trades = None
+                        transition(stale_opp, OppStatus.EXPIRED)
+                        stats["expired_unverified"] = stats.get("expired_unverified", 0) + 1
+                        logger.info(
+                            "opportunity_expired_unverified",
+                            opportunity_id=stale_opp.id,
+                            pair_id=pair.id,
+                        )
                     continue
+
+                # Dormant pairs keep optimizing to zero executable profit and
+                # would otherwise recycle every snapshot — skip re-detecting and
+                # re-creating their opportunities. Only query when profit > 0.
+                # Frozen-cooled pairs are the sibling case: positive theoretical
+                # profit, but the simulator keeps rejecting them on frozen quotes.
+                dormant = profit > 0 and await self._is_pair_dormant(session, pair.id)
+                frozen_cooled = (
+                    profit > 0
+                    and not dormant
+                    and await is_pair_cooled(self.redis, pair.id)
+                )
+                if frozen_cooled:
+                    stats["frozen_cooldown_skipped"] = stats.get("frozen_cooldown_skipped", 0) + 1
+                paused = dormant or frozen_cooled
 
                 existing_opp = in_flight_opps.get(pair.id)
                 if existing_opp:
@@ -731,23 +812,33 @@ class DetectionPipeline:
                         )
                         continue
 
-                    # Refresh the existing opportunity with current profit
+                    # Refresh the existing opportunity with current profit.
+                    # Re-stamp it too: the optimizer's stale sweep expires
+                    # DETECTED opps older than its snapshot-age cutoff by
+                    # timestamp, and a refresh means prices were re-validated
+                    # NOW — without this, long-lived recurring arbs are
+                    # systematically killed at the sweep age despite being
+                    # current.
                     existing_opp.theoretical_profit = Decimal(
                         str(max(profit, 0))
                     )
-                    if existing_opp.status in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED):
+                    existing_opp.timestamp = datetime.now(timezone.utc)
+                    if (
+                        existing_opp.status in (OppStatus.OPTIMIZED, OppStatus.UNCONVERGED)
+                        and not paused
+                    ):
                         transition(existing_opp, OppStatus.DETECTED)
                         existing_opp.optimal_trades = None
                         existing_opp.fw_iterations = None
                         existing_opp.bregman_gap = None
-                        deferred_events.append({
-                            "opportunity_id": existing_opp.id,
-                            "pair_id": pair.id,
-                            "type": "rebalancing",
-                            "theoretical_profit": float(max(profit, 0)),
-                        })
+                        deferred_events.append(ArbitrageFoundEvent(
+                            opportunity_id=existing_opp.id,
+                            pair_id=pair.id,
+                            type="rebalancing",
+                            theoretical_profit=float(max(profit, 0)),
+                        ))
                     stats["refreshed"] += 1
-                elif profit > 0:
+                elif profit > 0 and not paused:
                     opp = ArbitrageOpportunity(
                         pair_id=pair.id,
                         type="rebalancing",
@@ -776,7 +867,12 @@ class DetectionPipeline:
         for payload in deferred_events:
             await publish_event(self.redis, CHANNEL_ARBITRAGE_FOUND, payload)
 
-        if stats["opportunities"] > 0 or stats["refreshed"] > 0:
+        if (
+            stats["opportunities"] > 0
+            or stats["refreshed"] > 0
+            or stats.get("expired_unverified", 0) > 0
+            or stats.get("frozen_cooldown_skipped", 0) > 0
+        ):
             logger.info("snapshot_rescan_complete", **stats)
         return stats
 

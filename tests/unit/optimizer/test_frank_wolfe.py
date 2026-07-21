@@ -126,3 +126,32 @@ class TestOptimize:
             )
         # Should not have converged since oracle always fails
         assert result.converged is False
+
+
+class TestRawPriceEmission:
+    """FWResult.market_prices must be the RAW quoted prices, not the
+    normalized KL reference — fills, edges, fees, and payout proofs are all
+    computed against it, and WS-merged per-token mids routinely sum to ≠ 1."""
+
+    def test_market_prices_are_raw_not_normalized(self):
+        prices_a = np.array([0.4, 0.5])    # sums to 0.9
+        prices_b = np.array([0.25, 0.6])   # sums to 0.85
+        result = optimize(
+            prices_a=prices_a,
+            prices_b=prices_b,
+            feasibility_matrix=[[1, 1], [1, 1]],
+            max_iterations=50,
+        )
+        np.testing.assert_allclose(result.market_prices, [0.4, 0.5, 0.25, 0.6])
+
+    def test_infeasible_result_has_zero_edges(self):
+        """The no-initial-point path must not fabricate edges: q == p so no
+        trade leg can clear any noise floor."""
+        result = optimize(
+            prices_a=np.array([0.4, 0.6]),
+            prices_b=np.array([0.5, 0.5]),
+            feasibility_matrix=[[0, 0], [0, 0]],
+            max_iterations=50,
+        )
+        assert result.converged is False
+        np.testing.assert_allclose(result.optimal_q, result.market_prices)

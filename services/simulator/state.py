@@ -47,24 +47,39 @@ def replay_trades_into_portfolio(
             portfolio.winning_trades = 0
             portfolio.settled_trades = 0
             portfolio.realized_pnl = Decimal("0")
-        elif trade.side == "BUY":
-            portfolio.execute_trade(
+        elif trade.side in ("BUY", "SELL"):
+            # Mirror the live pipeline's exit accounting: a SELL closing a
+            # long (or a BUY covering a short) realizes PnL against the
+            # pre-trade cost basis. execute_trade() itself never touches
+            # realized_pnl, so without this every restart silently dropped
+            # all exit PnL accumulated since the last SETTLE/PURGE.
+            pre_position = portfolio.positions.get(key, Decimal("0"))
+            pre_cost = portfolio.cost_basis.get(key, Decimal("0"))
+            is_exit = (
+                (trade.side == "SELL" and pre_position > 0)
+                or (trade.side == "BUY" and pre_position < 0)
+            )
+
+            result = portfolio.execute_trade(
                 market_id=trade.market_id,
                 outcome=trade.outcome,
-                side="BUY",
+                side=trade.side,
                 size=float(size_d),
                 vwap_price=float(price_d),
                 fees=float(fees_d),
             )
-        elif trade.side == "SELL":
-            portfolio.execute_trade(
-                market_id=trade.market_id,
-                outcome=trade.outcome,
-                side="SELL",
-                size=float(size_d),
-                vwap_price=float(price_d),
-                fees=float(fees_d),
-            )
+
+            if is_exit and pre_position != 0 and result["executed"]:
+                actual_size = Decimal(str(result["size"]))
+                close_size = min(abs(pre_position), actual_size)
+                if close_size > 0:
+                    avg_entry = pre_cost / abs(pre_position)
+                    exit_fees = fees_d * close_size / actual_size
+                    if pre_position > 0:
+                        realized = (price_d - avg_entry) * close_size - exit_fees
+                    else:
+                        realized = (avg_entry - price_d) * close_size - exit_fees
+                    portfolio.realized_pnl += realized
 
 
 async def restore_portfolio(

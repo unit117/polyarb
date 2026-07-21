@@ -193,7 +193,7 @@ docker compose --profile backtest up -d dashboard-backtest
 
 E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. After 27 bug fixes: +1.72% return with Sonnet 4 classifier. See `E1_Backtest_Findings_Summary.md` for details.
 
-Live paper trading has been running since March 20, 2026. Post-purge clean window (Apr 8–16) showed +4.4% over 8 days on a $9,031 base.
+Live paper trading has been running since March 20, 2026. As of July 20, 2026 the book stands at **+16.1% over the 99-day clean window** since the final accounting purge (Apr 12, $9,130 base → $10,597), with the most recent week at +3.0% and a 56–61% win rate on settled trades.
 
 ## Ports
 
@@ -241,6 +241,8 @@ The detector's market-pair classifier has been evaluated across 6 models. Result
 
 See `reports/classifier_model_comparison_*.md` for full comparison.
 
+The config default is `gpt-4.1-mini`; the live deployment currently runs `kimi-k2.6` (Moonshot, OpenAI-compatible — see `.env.example` for the `CLASSIFIER_*` override block). Embeddings always require an OpenAI key regardless of classifier choice.
+
 ## Key Concepts
 
 **Market pairs** — Two Polymarket (or Kalshi) markets whose outcomes are logically related. Detected via embedding similarity, classified by an LLM into relationship types (`implication`, `mutual_exclusion`, `partition`), then verified through a 3-check gate (same event_id, no identical question text, consistent implication direction) before entering the pipeline. Verification is a first-class stage — unverified pairs never reach the optimizer.
@@ -269,6 +271,8 @@ Major fixes include:
 - **Portfolio restore** — cost_basis is rebuilt from full trade history on restart, not carried forward as stale JSONB
 - **Concurrent opportunity lock** — asyncio.Lock on simulator prevents race conditions when multiple opportunities arrive simultaneously
 - **Total-spread edge gating** — optimizer applies min_edge to combined spread across all legs, not per-leg, unlocking valid implication pairs
+- **Frozen-pair cooldown** — pairs whose quotes stop moving (dead/stale order books) enter a Redis-backed 4-hour cooldown, killing infinite detect → optimize → reject loops that previously starved the pipeline
+- **Redis pub/sub polling** — subscribers use `get_message` polling instead of idle `pubsub.listen()`, which crash-looped under redis-py ≥ 7.4; dependency versions are now pinned
 
 The remaining engineering debt is **structural, not correctional** — the core detection, optimization, and trading logic is sound. What remains is explicit contracts and decomposition:
 

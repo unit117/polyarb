@@ -10,7 +10,8 @@ from sqlalchemy import select
 from shared.circuit_breaker import CircuitBreaker
 from shared.config import settings, venue_fee, DRAWDOWN_THRESHOLD, DRAWDOWN_WINDOW, DRAWDOWN_MIN_SCALE
 from shared.models import PriceSnapshot
-from shared.pricing import get_latest_snapshot
+from shared.frozen_cooldown import record_frozen_rejection
+from shared.pricing import get_latest_snapshot, is_price_frozen
 from shared.schemas import OptimalTrades
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
@@ -52,6 +53,7 @@ async def build_validated_bundle(
     max_position_size: float,
     circuit_breaker: CircuitBreaker | None,
     current_prices: dict[str, float],
+    redis=None,
 ) -> ValidatedExecutionBundle | None:
     """Validate an opportunity and build an execution bundle.
 
@@ -110,6 +112,38 @@ async def build_validated_bundle(
                 opportunity_id=opp.id,
                 market_id=market.id,
             )
+            return None
+
+        # A fresh snapshot is necessary but not sufficient: the ingestor
+        # re-writes identical prices for illiquid/dead markets, so a frozen
+        # midpoint passes the freshness check above. Reject those — their
+        # "edge" is fabricated from stale quotes, and trading them re-enters
+        # the same position every cycle, accumulating on dead data.
+        if settings.reject_frozen_prices and await is_price_frozen(
+            session,
+            market.id,
+            trade.outcome,
+            window_seconds=settings.price_staleness_window_seconds,
+            min_observations=settings.price_staleness_min_observations,
+        ):
+            logger.info(
+                "frozen_price_skipped",
+                opportunity_id=opp.id,
+                market_id=market.id,
+                outcome=trade.outcome,
+                window_seconds=settings.price_staleness_window_seconds,
+            )
+            # Tell the rest of the pipeline this pair keeps failing on frozen
+            # quotes; past the threshold the detector stops re-creating its
+            # opportunities and the ingestor stops polling it.
+            if await record_frozen_rejection(redis, opp.pair_id):
+                logger.warning(
+                    "frozen_pair_cooldown_started",
+                    pair_id=opp.pair_id,
+                    opportunity_id=opp.id,
+                    market_id=market.id,
+                    cooldown_seconds=settings.frozen_pair_cooldown_seconds,
+                )
             return None
 
         midpoint = trade.market_price or 0.5

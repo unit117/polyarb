@@ -525,6 +525,22 @@ async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
     return None
 
 
+def _is_kimi_fixed_param_model(model: str) -> bool:
+    """Whether this is a Kimi k2.5/k2.6 model served directly by Moonshot.
+
+    These models pin ``temperature`` to a fixed per-mode value and reject any
+    custom value ("invalid temperature: only 1 is allowed for this model"), so
+    temperature must be omitted. They also default to a ``thinking`` reasoning
+    mode that can exhaust the classifier's small token budget, so it is disabled
+    for classifier JSON calls. OpenRouter-style IDs ('moonshotai/kimi-k2.6')
+    carry a slash and use the generic OpenAI-compatible path instead.
+    """
+    m = model.lower()
+    if "/" in m:
+        return False
+    return m.startswith("kimi-k2.5") or m.startswith("kimi-k2.6") or m == "kimi-latest"
+
+
 async def classify_llm(
     client: openai.AsyncOpenAI,
     model: str,
@@ -543,13 +559,21 @@ async def classify_llm(
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=list(rendered_prompt.messages),
-            temperature=0.1,
+        kwargs = {
+            "model": model,
+            "messages": list(rendered_prompt.messages),
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            max_tokens=1024 if "minimax" in model_lower else 256,
-        )
+            "max_tokens": 1024 if "minimax" in model_lower else 256,
+        }
+        # Kimi k2.5/k2.6 reject any custom temperature ("only 1 is allowed");
+        # omit it so the API applies its fixed default. Others get 0.1.
+        if not _is_kimi_fixed_param_model(model):
+            kwargs["temperature"] = 0.1
+        # Kimi defaults to a thinking mode that can exhaust the small token
+        # budget; disable it so the model returns the compact JSON directly.
+        if _is_kimi_fixed_param_model(model):
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        response = await client.chat.completions.create(**kwargs)
 
         msg = response.choices[0].message
         content = msg.content
@@ -700,12 +724,15 @@ def _derive_dependency_type(
             return {"dependency_type": "partition", "implication_direction": None, "correlation": None}
         if combos & all_four == {("Yes", "Yes"), ("No", "No")}:
             return {"dependency_type": "cross_platform", "implication_direction": None, "correlation": None}
-        # Other 2-combo patterns → conditional with direction inferred
-        if ("Yes", "Yes") in combos and ("No", "No") not in combos:
-            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "positive"}
-        if ("Yes", "Yes") not in combos:
-            return {"dependency_type": "conditional", "implication_direction": None, "correlation": "negative"}
-        return {"dependency_type": "conditional", "implication_direction": None, "correlation": None}
+        # Any other 2-combo set fixes one market's outcome regardless of the
+        # other (e.g. {YN, NN} claims B can never resolve Yes). A market with
+        # a live mid-range price is never logically certain or impossible, so
+        # these are hallucinated structure, not a tradeable relationship.
+        # They used to map to conditional/negative, which inherits the
+        # mutual-exclusion profit formula with none of its safeguards — one
+        # such vector set made an unhedgeable directional bet look like
+        # provable arbitrage (the E1 failure class).
+        return {"dependency_type": "_error", "implication_direction": None, "correlation": None}
 
     return {"dependency_type": "_error", "implication_direction": None, "correlation": None}
 
@@ -743,12 +770,16 @@ async def classify_llm_resolution(
         kwargs = {
             "model": model,
             "messages": list(rendered_prompt.messages),
-            # MiniMax official API rejects temperature=0.0; keep the
-            # value effectively deterministic while remaining valid.
-            "temperature": 0.01 if "minimax" in model_lower else 0.0,
             # Reasoning models (M2.7) need more tokens for mandatory <think> block
             "max_tokens": 2048 if "minimax" in model_lower else 512,
         }
+        # MiniMax rejects temperature=0.0; Kimi k2.5/k2.6 reject any custom
+        # temperature (omit so the API uses its fixed default). Others get 0.0.
+        if not _is_kimi_fixed_param_model(model):
+            kwargs["temperature"] = 0.01 if "minimax" in model_lower else 0.0
+        # Kimi defaults to thinking mode; disable it for compact JSON output.
+        if _is_kimi_fixed_param_model(model):
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         # Use JSON response format when model supports it
         if _supports_json_response_format(model):
             kwargs["response_format"] = {"type": "json_object"}

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -15,6 +15,7 @@ from shared.events import (
     publish,
     publish_event,
 )
+from shared.frozen_cooldown import cooled_pair_ids
 from shared.schemas import MarketResolvedEvent, MarketUpdatedEvent, SnapshotCreatedEvent
 from shared.models import Market, MarketPair, PriceSnapshot
 from services.ingestor.clob_client import ClobClient
@@ -148,7 +149,16 @@ class MarketPoller:
                             "description": stmt.excluded.description,
                             "outcomes": stmt.excluded.outcomes,
                             "token_ids": stmt.excluded.token_ids,
-                            "active": stmt.excluded.active,
+                            # Never re-activate a market we've already recorded as
+                            # resolved. Gamma keeps reporting resolved markets as
+                            # active="true" until it archives them, so blindly
+                            # taking excluded.active would flip our resolved rows
+                            # back to active — leaving them in the WS token map and
+                            # firing endless reconnect-pending warnings.
+                            "active": case(
+                                (Market.resolved_outcome.isnot(None), False),
+                                else_=stmt.excluded.active,
+                            ),
                             "end_date": stmt.excluded.end_date,
                             "volume": stmt.excluded.volume,
                             "liquidity": stmt.excluded.liquidity,
@@ -324,22 +334,32 @@ class MarketPoller:
         by_liquidity = sorted(markets_by_id.values(), key=lambda m: m.liquidity or 0, reverse=True)
         eligible_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
 
-        # Add markets from pairs with recent opportunities (not ALL pairs)
+        # Add markets from pairs with recent opportunities (not ALL pairs).
+        # Pairs on frozen-price cooldown are excluded: their "recent
+        # opportunities" are the rejected recycles of a dead quote, and this
+        # inclusion rule is what kept re-polling them (fresh-but-flat
+        # snapshots), feeding the detect→reject loop the cooldown breaks.
         from datetime import datetime, timedelta, timezone as tz
         from shared.models import ArbitrageOpportunity
         cutoff = datetime.now(tz.utc) - timedelta(hours=24)
         async with self._session_factory() as session:
             result = await session.execute(
-                select(MarketPair.market_a_id, MarketPair.market_b_id)
+                select(MarketPair.id, MarketPair.market_a_id, MarketPair.market_b_id)
                 .join(ArbitrageOpportunity, ArbitrageOpportunity.pair_id == MarketPair.id)
                 .where(ArbitrageOpportunity.timestamp > cutoff)
                 .distinct()
             )
-            for row in result.fetchall():
-                if row.market_a_id in markets_by_id:
-                    eligible_ids.add(row.market_a_id)
-                if row.market_b_id in markets_by_id:
-                    eligible_ids.add(row.market_b_id)
+            rows = result.fetchall()
+        cooled = await cooled_pair_ids(self._redis, {row.id for row in rows})
+        for row in rows:
+            if row.id in cooled:
+                continue
+            if row.market_a_id in markets_by_id:
+                eligible_ids.add(row.market_a_id)
+            if row.market_b_id in markets_by_id:
+                eligible_ids.add(row.market_b_id)
+        if cooled:
+            log.info("snapshot_frozen_cooldown_excluded", pairs=len(cooled))
 
         # Hard cap to keep poll cycle under ~10 min at 2 RPS
         MAX_CLOB_SNAPSHOTS = 500
