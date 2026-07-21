@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     classifier_base_url: str = ""  # empty = OpenAI direct; set for any OpenAI-compatible provider
     classifier_api_key: str = ""  # optional provider-specific key for classifier traffic
     classifier_prompt_adapter: Literal["auto", "openai_generic", "claude_xml"] = "auto"
+    # JSON override for the per-model capability registry (pattern -> partial
+    # fields), so a new provider quirk is a .env edit instead of a code
+    # hotfix. See services/detector/model_capabilities.py for the format.
+    classifier_model_capabilities: str = ""
     openrouter_api_key: str = ""  # legacy fallback for OpenRouter-based classifier routing
     shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
     shadow_classifier_base_url: str = ""

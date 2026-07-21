@@ -7,6 +7,7 @@ Uses a two-stage approach:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Optional
@@ -14,6 +15,10 @@ from typing import Optional
 import openai
 import structlog
 
+from services.detector.model_capabilities import (
+    is_kimi_fixed_param_model,
+    resolve_capabilities,
+)
 from services.detector.prompt_specs import (
     LABEL_PROMPT_SPEC_V1,
     RESOLUTION_VECTOR_PROMPT_SPEC_V1,
@@ -23,6 +28,73 @@ from services.detector.prompt_specs import (
 logger = structlog.get_logger()
 
 DEPENDENCY_TYPES = ("implication", "partition", "mutual_exclusion", "conditional", "cross_platform")
+
+# Bounded app-level retry for LLM calls. The AsyncOpenAI client is built with
+# max_retries=0 and an explicit timeout (see services/detector/main.py) so
+# this policy is the only retry layer — before it, every failure class fell
+# straight through to a fail-closed "none" that got cached permanently.
+_RETRY_BACKOFF = (1.0, 4.0)  # sleeps between the 3 attempts
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    """Timeouts, connection drops, 429s, and 5xx are worth retrying; other
+    API errors (400/401/403/404/422) are config breakage — retrying spams."""
+    if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
+        return True
+    if isinstance(exc, openai.RateLimitError):
+        return True
+    status = getattr(exc, "status_code", None)
+    return status is not None and status >= 500
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if not headers:
+        return None
+    try:
+        val = headers.get("retry-after")
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _create_with_retry(client: openai.AsyncOpenAI, kwargs: dict, *, call: str):
+    """chat.completions.create with bounded retry on transient errors only."""
+    attempts = len(_RETRY_BACKOFF) + 1
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except openai.APIError as exc:
+            if not _is_transient_llm_error(exc):
+                logger.error(
+                    "llm_permanent_error",
+                    call=call,
+                    model=kwargs.get("model"),
+                    status_code=getattr(exc, "status_code", None),
+                    error=str(exc),
+                )
+                raise
+            last_exc = exc
+            if attempt == attempts - 1:
+                break
+            delay = max(_RETRY_BACKOFF[attempt], _retry_after_seconds(exc) or 0.0)
+            logger.warning(
+                "llm_transient_error_retrying",
+                call=call,
+                attempt=attempt + 1,
+                delay_seconds=delay,
+                error=str(exc),
+            )
+            await asyncio.sleep(delay)
+    logger.error(
+        "llm_transient_retries_exhausted",
+        call=call,
+        model=kwargs.get("model"),
+        attempts=attempts,
+        error=str(last_exc),
+    )
+    raise last_exc
 
 
 def _check_same_event(market_a: dict, market_b: dict) -> dict | None:
@@ -526,19 +598,8 @@ async def classify_rule_based(market_a: dict, market_b: dict) -> dict | None:
 
 
 def _is_kimi_fixed_param_model(model: str) -> bool:
-    """Whether this is a Kimi k2.5/k2.6 model served directly by Moonshot.
-
-    These models pin ``temperature`` to a fixed per-mode value and reject any
-    custom value ("invalid temperature: only 1 is allowed for this model"), so
-    temperature must be omitted. They also default to a ``thinking`` reasoning
-    mode that can exhaust the classifier's small token budget, so it is disabled
-    for classifier JSON calls. OpenRouter-style IDs ('moonshotai/kimi-k2.6')
-    carry a slash and use the generic OpenAI-compatible path instead.
-    """
-    m = model.lower()
-    if "/" in m:
-        return False
-    return m.startswith("kimi-k2.5") or m.startswith("kimi-k2.6") or m == "kimi-latest"
+    """Back-compat wrapper — the truth lives in the capability registry."""
+    return is_kimi_fixed_param_model(model)
 
 
 async def classify_llm(
@@ -549,7 +610,6 @@ async def classify_llm(
     prompt_adapter: str = "auto",
 ) -> dict:
     """Use LLM to classify the dependency between two markets."""
-    model_lower = model.lower()
     rendered_prompt = render_prompt(
         LABEL_PROMPT_SPEC_V1,
         market_a,
@@ -557,23 +617,19 @@ async def classify_llm(
         model=model,
         prompt_adapter=prompt_adapter,
     )
+    caps = resolve_capabilities(model)
 
     try:
         kwargs = {
             "model": model,
             "messages": list(rendered_prompt.messages),
-            # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            "max_tokens": 1024 if "minimax" in model_lower else 256,
+            "max_tokens": caps.max_tokens_label,
         }
-        # Kimi k2.5/k2.6 reject any custom temperature ("only 1 is allowed");
-        # omit it so the API applies its fixed default. Others get 0.1.
-        if not _is_kimi_fixed_param_model(model):
-            kwargs["temperature"] = 0.1
-        # Kimi defaults to a thinking mode that can exhaust the small token
-        # budget; disable it so the model returns the compact JSON directly.
-        if _is_kimi_fixed_param_model(model):
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        response = await client.chat.completions.create(**kwargs)
+        if caps.temperature_label is not None:
+            kwargs["temperature"] = caps.temperature_label
+        if caps.extra_body:
+            kwargs["extra_body"] = caps.extra_body
+        response = await _create_with_retry(client, kwargs, call="label")
 
         msg = response.choices[0].message
         content = msg.content
@@ -598,7 +654,13 @@ async def classify_llm(
                 finish_reason=response.choices[0].finish_reason,
                 response_dump=str(dump)[:2000],
             )
-            return {"dependency_type": "none", "confidence": 0.0, "reasoning": "empty response (reasoning only)" if has_reasoning else "empty response"}
+            return {
+                "dependency_type": "none",
+                "confidence": 0.0,
+                "reasoning": "empty response (reasoning only)" if has_reasoning else "empty response",
+                # Provider glitch, not a verdict — must not be cached
+                "classification_error": True,
+            }
         raw = content.strip()
         # Strip think tags in case label-based fallback hits a reasoning model
         raw = _strip_think_tags(raw)
@@ -615,7 +677,13 @@ async def classify_llm(
 
         if result.get("dependency_type") not in (*DEPENDENCY_TYPES, "none"):
             logger.warning("llm_invalid_type", raw=raw)
-            return {"dependency_type": "none", "confidence": 0.0, "reasoning": raw}
+            return {
+                "dependency_type": "none",
+                "confidence": 0.0,
+                "reasoning": raw,
+                # Malformed output, not a verdict — retry next cycle
+                "classification_error": True,
+            }
 
         # Conditional without correlation is useless — downgrade to none
         if (
@@ -632,6 +700,23 @@ async def classify_llm(
                 f"Downgraded from conditional: missing correlation. Original: {raw}"
             )
 
+        # Label-path conditional/positive is provably untradeable: it builds
+        # an unconstrained all-ones matrix, gets a 0.0 profit bound, and the
+        # optimizer skips llm_label conditionals anyway — while the verified
+        # MarketPair row is rescanned every cycle forever. Pure cost. (The
+        # VECTOR path keeps its conditional/positive label — decision D-B on
+        # implementing its excluded-(No,No) profit bound is still open.)
+        if (
+            result.get("dependency_type") == "conditional"
+            and result.get("correlation") == "positive"
+        ):
+            logger.info("llm_conditional_positive_downgraded", raw=raw[:200])
+            result["dependency_type"] = "none"
+            result["confidence"] = 0.0
+            result["reasoning"] = (
+                f"Downgraded label-path conditional/positive (untradeable). Original: {raw}"
+            )
+
         logger.info(
             "llm_classification",
             dep_type=result["dependency_type"],
@@ -643,7 +728,15 @@ async def classify_llm(
 
     except (json.JSONDecodeError, KeyError, openai.APIError) as e:
         logger.error("llm_classification_failed", error=str(e))
-        return {"dependency_type": "none", "confidence": 0.0, "reasoning": str(e)}
+        return {
+            "dependency_type": "none",
+            "confidence": 0.0,
+            "reasoning": str(e),
+            # Failure, not a verdict: _build_cache_row skips error-tagged
+            # results, so the pair re-classifies next detection cycle
+            # instead of being blackholed by a cached transient error.
+            "classification_error": True,
+        }
 
 
 def _strip_think_tags(raw: str) -> str:
@@ -664,15 +757,8 @@ def _strip_think_tags(raw: str) -> str:
 
 
 def _supports_json_response_format(model: str) -> bool:
-    """Return whether Tier 2 should request OpenAI JSON mode for this model.
-
-    Some providers expose an OpenAI-compatible endpoint but do not fully support
-    `response_format={"type": "json_object"}`. DashScope Qwen models are the
-    current known case, so they must rely on prompt-only JSON discipline.
-    """
-    model_lower = model.lower()
-    unsupported_substrings = ("minimax", "qwen")
-    return not any(token in model_lower for token in unsupported_substrings)
+    """Back-compat wrapper — the truth lives in the capability registry."""
+    return resolve_capabilities(model).supports_json_response_format
 
 
 def _derive_dependency_type(
@@ -766,25 +852,21 @@ async def classify_llm_resolution(
         prompt_adapter=prompt_adapter,
     )
 
+    caps = resolve_capabilities(model)
     try:
         kwargs = {
             "model": model,
             "messages": list(rendered_prompt.messages),
-            # Reasoning models (M2.7) need more tokens for mandatory <think> block
-            "max_tokens": 2048 if "minimax" in model_lower else 512,
+            "max_tokens": caps.max_tokens_vector,
         }
-        # MiniMax rejects temperature=0.0; Kimi k2.5/k2.6 reject any custom
-        # temperature (omit so the API uses its fixed default). Others get 0.0.
-        if not _is_kimi_fixed_param_model(model):
-            kwargs["temperature"] = 0.01 if "minimax" in model_lower else 0.0
-        # Kimi defaults to thinking mode; disable it for compact JSON output.
-        if _is_kimi_fixed_param_model(model):
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        # Use JSON response format when model supports it
-        if _supports_json_response_format(model):
+        if caps.temperature_vector is not None:
+            kwargs["temperature"] = caps.temperature_vector
+        if caps.extra_body:
+            kwargs["extra_body"] = caps.extra_body
+        if caps.supports_json_response_format:
             kwargs["response_format"] = {"type": "json_object"}
 
-        response = await client.chat.completions.create(**kwargs)
+        response = await _create_with_retry(client, kwargs, call="vector")
         msg = response.choices[0].message
         content = msg.content
         # Reasoning-only response (e.g. M2.7 exhausted token budget on <think>):
@@ -852,11 +934,22 @@ async def classify_llm_resolution(
         return classification
 
     except (json.JSONDecodeError, KeyError) as e:
+        # Parse trouble is model-output noise — fall back to the label path
         logger.warning("resolution_vector_parse_failed", error=str(e))
         return None
     except openai.APIError as e:
+        # The provider itself is failing (post-retry). Falling back to the
+        # label path would just fire more doomed calls at the same provider;
+        # return an error-tagged verdict so classify_pair stops here and the
+        # pair re-classifies next cycle (never cached).
         logger.error("resolution_vector_api_failed", error=str(e))
-        return None
+        return {
+            "dependency_type": "none",
+            "confidence": 0.0,
+            "reasoning": f"llm unavailable: {e}",
+            "classification_source": "llm_vector",
+            "classification_error": True,
+        }
 
 
 async def classify_pair(

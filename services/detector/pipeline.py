@@ -923,6 +923,12 @@ def _build_cache_row(
 ) -> dict | None:
     if classification.get("classification_source") not in {"llm_vector", "llm_label"}:
         return None
+    # Never cache failures: a transient timeout/429/5xx or garbled response
+    # is not a verdict. Caching one permanently blackholed the pair until its
+    # market fingerprint changed. Uncached, find_similar_pairs re-emits the
+    # candidate next cycle — that IS the retry queue.
+    if classification.get("classification_error"):
+        return None
 
     market_a_id, market_b_id = _pair_key(market_a["id"], market_b["id"])
     canonical_a = market_a if market_a["id"] == market_a_id else market_b

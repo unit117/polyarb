@@ -37,6 +37,11 @@ async def main() -> None:
         openai_client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=settings.classifier_base_url,
+            # App-level retry policy owns retries (classifier._create_with_retry);
+            # SDK defaults (2 retries, ~600s timeout) could hold the detection
+            # lock for ~30 min on a hung provider.
+            timeout=30.0,
+            max_retries=0,
         )
         logger.info(
             "classifier_client",
@@ -44,7 +49,11 @@ async def main() -> None:
             base_url=settings.classifier_base_url,
         )
     else:
-        openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        openai_client = openai.AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=30.0,
+            max_retries=0,
+        )
         logger.info("classifier_client", provider="openai_direct")
 
     redis = await get_redis()

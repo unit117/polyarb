@@ -255,10 +255,9 @@ def resolve_prompt_adapter(model: str, prompt_adapter: str | None = None) -> str
     if adapter != "auto":
         return adapter
 
-    model_lower = model.lower()
-    if "claude" in model_lower or "anthropic" in model_lower:
-        return "claude_xml"
-    return "openai_generic"
+    from services.detector.model_capabilities import resolve_capabilities
+
+    return resolve_capabilities(model).prompt_adapter
 
 
 def _render_claude_text(tag: str, content: str) -> str:

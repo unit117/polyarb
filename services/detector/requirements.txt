@@ -6,6 +6,8 @@ redis[hiredis]==7.4.0
 pydantic>=2.0
 pydantic-settings>=2.0
 structlog>=24.0
-openai>=1.0
+# Pinned range after the redis-py 7.4 unpinned-dep outage (2026-06-03);
+# 2.46.0 is the verified-live version on the NAS
+openai>=2.46,<3
 pgvector>=0.3
 numpy>=1.26

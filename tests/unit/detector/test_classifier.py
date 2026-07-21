@@ -264,6 +264,13 @@ class TestClassifyRuleBased:
         assert result["dependency_type"] == "implication"
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    """Zero the retry backoff so transient-error tests don't sleep."""
+    import services.detector.classifier as _clf
+    monkeypatch.setattr(_clf, "_RETRY_BACKOFF", (0.0, 0.0))
+
+
 def _make_llm_response(content: str):
     response = MagicMock()
     response.choices[0].message.content = content
