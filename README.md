@@ -191,7 +191,7 @@ docker compose --profile backtest up -d dashboard-backtest
 # → http://localhost:8082
 ```
 
-E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. After 27 bug fixes: +1.72% return with Sonnet 4 classifier. See `E1_Backtest_Findings_Summary.md` for details.
+E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. After 27 bug fixes the post-fix baseline was +0.19% (GPT-4.1-mini classifier); Sonnet 4 reached +0.84% (Sharpe 1.51). See `E1_Backtest_Findings_Summary.md` for details.
 
 Live paper trading has been running since March 20, 2026. As of July 20, 2026 the book stands at **+16.1% over the 99-day clean window** since the final accounting purge (Apr 12, $9,130 base → $10,597), with the most recent week at +3.0% and a 56–61% win rate on settled trades.
 
