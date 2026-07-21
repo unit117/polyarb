@@ -26,12 +26,12 @@ class FakeRedis:
 
 @pytest.mark.asyncio
 async def test_live_runtime_status_round_trip(monkeypatch):
-    published: list[tuple[str, dict]] = []
+    published: list[tuple[str, object]] = []
 
-    async def fake_publish(_redis, channel: str, payload: dict) -> None:
-        published.append((channel, payload))
+    async def fake_publish_event(_redis, channel: str, event) -> None:
+        published.append((channel, event))
 
-    monkeypatch.setattr("shared.live_runtime.publish", fake_publish)
+    monkeypatch.setattr("shared.live_runtime.publish_event", fake_publish_event)
 
     redis = FakeRedis()
     status = await set_live_runtime_status(
@@ -53,10 +53,10 @@ async def test_live_runtime_status_round_trip(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_live_kill_switch_updates_status(monkeypatch):
-    async def fake_publish(_redis, _channel: str, _payload: dict) -> None:
+    async def fake_publish_event(_redis, _channel: str, _event) -> None:
         return None
 
-    monkeypatch.setattr("shared.live_runtime.publish", fake_publish)
+    monkeypatch.setattr("shared.live_runtime.publish_event", fake_publish_event)
 
     redis = FakeRedis()
     await set_live_runtime_status(

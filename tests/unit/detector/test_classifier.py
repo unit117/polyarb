@@ -537,7 +537,7 @@ class TestPairOrderInvariant:
             prices_a={"Yes": 0.5, "No": 0.5},
             prices_b={"Yes": 0.5, "No": 0.5},
             implication_direction=classification.get("implication_direction"),
-        )["matrix"]
+        ).matrix
 
     def test_price_threshold_order_invariant(self):
         a = {"question": "PLTR above $128 on March 21?"}
