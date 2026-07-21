@@ -81,10 +81,14 @@ def _make_market(market_id=1, venue="polymarket", resolved_outcome=None):
 
 
 def _make_snapshot(prices=None, order_book=None, midpoints=None):
+    from datetime import datetime, timedelta, timezone
+
     snap = MagicMock()
     snap.prices = prices or {"Yes": 0.55, "No": 0.45}
     snap.order_book = order_book
     snap.midpoints = midpoints
+    # Post-boot timestamp so the startup-grace gate treats it as fresh
+    snap.timestamp = datetime.now(timezone.utc) + timedelta(seconds=1)
     return snap
 
 

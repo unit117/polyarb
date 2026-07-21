@@ -1,6 +1,7 @@
 """Portfolio state management for paper trading."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
@@ -20,6 +21,43 @@ class Portfolio:
         self.total_trades = 0
         self.winning_trades = 0
         self.settled_trades = 0
+        # pair_id -> [(executed_at, dollars)] for exposure-OPENING trades;
+        # backs the per-pair rolling flow cap. Rebuilt on restart from the
+        # trade ledger (see state.restore_portfolio).
+        self.pair_entry_flow: dict[int, list[tuple[datetime, Decimal]]] = {}
+
+    def record_pair_entry(
+        self, pair_id: int | None, amount, at: datetime | None = None
+    ) -> None:
+        """Record dollars of new exposure opened against a pair."""
+        if pair_id is None:
+            return
+        amount_d = Decimal(str(amount))
+        if amount_d <= 0:
+            return
+        at = at or datetime.now(timezone.utc)
+        self.pair_entry_flow.setdefault(pair_id, []).append((at, amount_d))
+
+    def pair_flow(
+        self, pair_id: int | None, window_seconds: int, now: datetime | None = None
+    ) -> Decimal:
+        """Total exposure-opening dollars for a pair within the rolling window.
+
+        Prunes entries older than the window as a side effect.
+        """
+        if pair_id is None:
+            return Decimal("0")
+        entries = self.pair_entry_flow.get(pair_id)
+        if not entries:
+            return Decimal("0")
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=window_seconds)
+        kept = [(ts, amt) for ts, amt in entries if ts >= cutoff]
+        if kept:
+            self.pair_entry_flow[pair_id] = kept
+        else:
+            del self.pair_entry_flow[pair_id]
+        return sum((amt for _, amt in kept), Decimal("0"))
 
     def execute_trade(
         self,

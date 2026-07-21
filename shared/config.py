@@ -88,6 +88,22 @@ class Settings(BaseSettings):
     simulator_interval_seconds: int = 60
     max_snapshot_age_seconds: int = 600  # Reject price snapshots older than this (10 min)
     max_opportunity_retries: int = 10  # Expire opportunity after this many blocked attempts
+    # Post-restart grace: for this long after simulator boot, only trade
+    # markets whose latest snapshot was written AFTER boot. Pre-restart
+    # snapshots can be minutes old (passing max_snapshot_age_seconds) while
+    # the market moved during the outage — the daily NAS power-cycle showed
+    # every service cold-starting against pre-reboot quotes. 0 disables.
+    simulator_startup_grace_seconds: int = 180
+    # Per-pair exposure-opening flow cap: total dollars of NEW exposure
+    # (longs bought or shorts sold) a single pair may open within the rolling
+    # window. Bounds concentration — one pair recycling capital through
+    # buy/settle or sell/settle loops can otherwise dominate cash flow
+    # (pair 53507 reached ~20% of net flow via 188 short-opening SELLs).
+    # 0 disables. Calibration 2026-07-21: 7-day per-pair flows topped out
+    # at ~$112; $100 ≈ 1% of capital binds outliers without touching the
+    # typical pair (<= $42/week).
+    max_pair_weekly_flow: float = 100.0
+    pair_flow_window_seconds: int = 604800  # 7 days
     # Frozen-price guard: reject trades whose quoted midpoint has not moved
     # across recent snapshots. A frozen price means an illiquid/stale market
     # whose "edge" is not actually tradeable; without this, the same opportunity

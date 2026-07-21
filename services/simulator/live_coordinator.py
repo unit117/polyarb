@@ -292,7 +292,7 @@ class LiveTradingCoordinator:
                         stats["settled"] += 1
                         stats["pnl_realized"] += close_result["pnl"]
                         if self.circuit_breaker and close_result["pnl"] < 0:
-                            self.circuit_breaker.record_loss(abs(close_result["pnl"]))
+                            await self.circuit_breaker.record_loss(abs(close_result["pnl"]))
 
                 await session.commit()
 
@@ -380,7 +380,7 @@ class LiveTradingCoordinator:
 
             self.portfolio.realized_pnl += realized
             if self.circuit_breaker and realized < 0:
-                self.circuit_breaker.record_loss(float(abs(realized)))
+                await self.circuit_breaker.record_loss(float(abs(realized)))
 
         session.add(
             LiveFill(

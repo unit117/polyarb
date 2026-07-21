@@ -68,10 +68,14 @@ def _make_opportunity(opp_id=1, status="optimized", pair_id=1, trades=None):
 
 
 def _make_snapshot():
+    from datetime import datetime, timedelta, timezone
+
     snap = MagicMock()
     snap.prices = {"Yes": 0.55, "No": 0.45}
     snap.order_book = None
     snap.midpoints = None
+    # Post-boot timestamp so the startup-grace gate treats it as fresh
+    snap.timestamp = datetime.now(timezone.utc) + timedelta(seconds=1)
     return snap
 
 

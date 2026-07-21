@@ -206,12 +206,18 @@ class SimulatorPipeline:
 
                         self.portfolio.realized_pnl += realized
                         if self.circuit_breaker and realized < 0:
-                            self.circuit_breaker.record_loss(float(abs(realized)))
+                            await self.circuit_breaker.record_loss(float(abs(realized)))
 
                 if not result["executed"]:
                     continue
 
                 actual_size = result["size"]
+                if not is_exit:
+                    # Feed the per-pair flow cap with the EXECUTED exposure
+                    self.portfolio.record_pair_entry(
+                        opp.pair_id,
+                        Decimal(str(actual_size)) * Decimal(str(leg.vwap_price)),
+                    )
                 paper_trade = PaperTrade(
                     opportunity_id=opp.id,
                     market_id=leg.market_id,

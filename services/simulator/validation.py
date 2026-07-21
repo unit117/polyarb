@@ -18,6 +18,12 @@ from services.simulator.vwap import compute_vwap
 
 logger = structlog.get_logger()
 
+# Anchors the post-restart grace window (import time ≈ process start). For
+# simulator_startup_grace_seconds after boot, only snapshots written AFTER
+# boot are tradeable: pre-restart snapshots can pass the max-age gate while
+# the market moved during the outage.
+_PROCESS_START = datetime.now(timezone.utc)
+
 
 @dataclass(frozen=True)
 class ValidatedLeg:
@@ -81,6 +87,19 @@ async def build_validated_bundle(
         return None
 
     if optimal.estimated_profit <= 0:
+        # Deterministic zero-edge pairs used to bypass the frozen-pair
+        # cooldown entirely — this return preceded the only
+        # record_frozen_rejection call site, so a pair whose optimizer
+        # output is exactly zero could recycle detect→optimize→reject
+        # forever (pair 51726: ~350 opps in 1.5 days). Count it toward the
+        # same threshold as frozen-price rejections.
+        if await record_frozen_rejection(redis, opp.pair_id):
+            logger.warning(
+                "zero_edge_pair_cooldown_started",
+                pair_id=opp.pair_id,
+                opportunity_id=opp.id,
+                cooldown_seconds=settings.frozen_pair_cooldown_seconds,
+            )
         return None
     net_profit = optimal.estimated_profit
 
@@ -97,6 +116,7 @@ async def build_validated_bundle(
     validated_legs: list[ValidatedLeg] = []
     from decimal import Decimal
     reserved_cash = Decimal("0")
+    opening_flow = Decimal("0")  # dollars of NEW exposure this bundle opens
 
     for trade in optimal.trades:
         market = market_a if trade.market == "A" else market_b
@@ -113,6 +133,29 @@ async def build_validated_bundle(
                 market_id=market.id,
             )
             return None
+
+        # Post-restart grace: within the window, refuse snapshots written
+        # before this process booted (they may look fresh but predate the
+        # restart, and the market moved while everything was down).
+        if settings.simulator_startup_grace_seconds > 0:
+            since_boot = (datetime.now(timezone.utc) - _PROCESS_START).total_seconds()
+            if since_boot < settings.simulator_startup_grace_seconds:
+                snap_ts = snapshot.timestamp
+                if snap_ts.tzinfo is None:
+                    snap_ts = snap_ts.replace(tzinfo=timezone.utc)
+                if snap_ts < _PROCESS_START:
+                    logger.info(
+                        "startup_grace_stale_snapshot_skipped",
+                        opportunity_id=opp.id,
+                        market_id=market.id,
+                        snapshot_age_seconds=round(
+                            (datetime.now(timezone.utc) - snap_ts).total_seconds()
+                        ),
+                        grace_remaining_seconds=round(
+                            settings.simulator_startup_grace_seconds - since_boot
+                        ),
+                    )
+                    return None
 
         # A fresh snapshot is necessary but not sufficient: the ingestor
         # re-writes identical prices for illiquid/dead markets, so a frozen
@@ -148,6 +191,21 @@ async def build_validated_bundle(
 
         midpoint = trade.market_price or 0.5
         fill = compute_vwap(snapshot.order_book, trade.side, base_size, midpoint)
+
+        # Exposure-opening legs count toward the per-pair flow cap. Both
+        # directions open exposure: BUYs opening/adding longs AND SELLs
+        # opening/adding shorts (pair 53507 hit 20% of net cash flow with
+        # 188 short-opening SELLs — a BUY-only cap would have missed it).
+        leg_key = f"{market.id}:{trade.outcome}"
+        leg_existing = portfolio.positions.get(leg_key, Decimal("0"))
+        leg_is_exit = (
+            (trade.side == "SELL" and leg_existing > 0)
+            or (trade.side == "BUY" and leg_existing < 0)
+        )
+        if not leg_is_exit:
+            opening_flow += Decimal(str(fill["filled_size"])) * Decimal(
+                str(fill["vwap_price"])
+            )
         trade_venue = trade.venue or getattr(market, "venue", "polymarket")
         fee_bps = trade.fee_rate_bps if trade.fee_rate_bps is not None else getattr(market, "fee_rate_bps", None)
         fees = (
@@ -228,6 +286,27 @@ async def build_validated_bundle(
 
     if not validated_legs:
         return None
+
+    # Per-pair concentration cap: bound the dollars of new exposure one pair
+    # may open within the rolling window. Exits are never blocked.
+    if (
+        settings.max_pair_weekly_flow > 0
+        and opp.pair_id is not None
+        and opening_flow > 0
+    ):
+        recent_flow = portfolio.pair_flow(
+            opp.pair_id, settings.pair_flow_window_seconds
+        )
+        if recent_flow + opening_flow > Decimal(str(settings.max_pair_weekly_flow)):
+            logger.info(
+                "pair_flow_cap_rejected",
+                opportunity_id=opp.id,
+                pair_id=opp.pair_id,
+                window_flow=float(recent_flow),
+                opening_flow=float(opening_flow),
+                limit=settings.max_pair_weekly_flow,
+            )
+            return None
 
     return ValidatedExecutionBundle(
         opportunity_id=opp.id,

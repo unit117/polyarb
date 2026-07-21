@@ -657,8 +657,8 @@ class DetectionPipeline:
         Some pairs show a theoretical edge every snapshot but the optimizer
         finds zero executable profit (e.g. a frozen/illiquid quote), so they
         recycle DETECTED→OPTIMIZED→EXPIRED ~once a minute forever. When the
-        pair's last `dormant_pair_min_evaluations` optimizer-evaluated opps
-        within the window were ALL zero estimated_profit, treat it as dormant
+        pair's last `dormant_pair_min_evaluations` opps within the window all
+        have zero (or never-written NULL) estimated_profit, treat it as dormant
         and stop re-creating opportunities for it. It re-probes on its own once
         the window empties (no fresh opps → fewer than the minimum in window).
         """
@@ -671,12 +671,15 @@ class DetectionPipeline:
             select(ArbitrageOpportunity.estimated_profit)
             .where(
                 ArbitrageOpportunity.pair_id == pair_id,
-                ArbitrageOpportunity.estimated_profit.isnot(None),
                 ArbitrageOpportunity.timestamp >= window_start,
             )
             .order_by(ArbitrageOpportunity.timestamp.desc())
             .limit(settings.dormant_pair_min_evaluations)
         )
+        # NULL estimated_profit counts as a zero evaluation: opps expired by
+        # the optimizer's stale sweep while still DETECTED never get a profit
+        # written, and filtering them out let a pair oscillate in and out of
+        # dormancy right at the threshold rate.
         profits = [row[0] for row in result.all()]
         if len(profits) < settings.dormant_pair_min_evaluations:
             return False

@@ -229,3 +229,36 @@ class TestSnapshotDict:
         assert "unrealized_pnl" in snap
         assert "total_trades" in snap
         assert snap["cash"] == pytest.approx(10000.0)
+
+
+class TestPairFlowLedger:
+    def test_records_and_sums_within_window(self):
+        from datetime import datetime, timezone
+
+        p = Portfolio(10000.0)
+        now = datetime.now(timezone.utc)
+        p.record_pair_entry(42, 30.0, at=now)
+        p.record_pair_entry(42, Decimal("20"), at=now)
+        p.record_pair_entry(7, 99.0, at=now)  # other pair, separate bucket
+        assert p.pair_flow(42, 604800, now=now) == Decimal("50")
+        assert p.pair_flow(7, 604800, now=now) == Decimal("99")
+
+    def test_prunes_entries_outside_window(self):
+        from datetime import datetime, timedelta, timezone
+
+        p = Portfolio(10000.0)
+        now = datetime.now(timezone.utc)
+        p.record_pair_entry(42, 30.0, at=now - timedelta(days=8))
+        p.record_pair_entry(42, 20.0, at=now - timedelta(days=1))
+        assert p.pair_flow(42, 604800, now=now) == Decimal("20")
+        # the day-8 entry was pruned, not just filtered
+        assert len(p.pair_entry_flow[42]) == 1
+
+    def test_none_pair_and_nonpositive_ignored(self):
+        p = Portfolio(10000.0)
+        p.record_pair_entry(None, 30.0)
+        p.record_pair_entry(42, 0)
+        p.record_pair_entry(42, -5)
+        assert p.pair_flow(None, 604800) == Decimal("0")
+        assert p.pair_flow(42, 604800) == Decimal("0")
+        assert p.pair_entry_flow == {}

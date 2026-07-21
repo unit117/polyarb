@@ -1,22 +1,35 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from shared.models import PaperTrade
+from shared.config import settings
+from shared.models import ArbitrageOpportunity, PaperTrade
 from services.simulator.portfolio import Portfolio
 
 logger = structlog.get_logger()
 
 
+def _aware(ts: datetime) -> datetime:
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
 def replay_trades_into_portfolio(
     portfolio: Portfolio,
     trades: list[PaperTrade],
+    pair_map: dict[int, int] | None = None,
+    flow_window_start: datetime | None = None,
 ) -> None:
-    """Rebuild cash, positions, cost basis, and counters from the trade ledger."""
+    """Rebuild cash, positions, cost basis, and counters from the trade ledger.
+
+    When pair_map (opportunity_id -> pair_id) is given, exposure-opening
+    BUY/SELL trades newer than flow_window_start also rebuild the per-pair
+    flow ledger backing the concentration cap.
+    """
     portfolio.cash = portfolio.initial_capital
     portfolio.positions = {}
     portfolio.cost_basis = {}
@@ -24,6 +37,7 @@ def replay_trades_into_portfolio(
     portfolio.total_trades = 0
     portfolio.winning_trades = 0
     portfolio.settled_trades = 0
+    portfolio.pair_entry_flow = {}
 
     for trade in trades:
         key = f"{trade.market_id}:{trade.outcome}"
@@ -69,6 +83,19 @@ def replay_trades_into_portfolio(
                 fees=float(fees_d),
             )
 
+            if (
+                not is_exit
+                and result["executed"]
+                and pair_map is not None
+                and trade.opportunity_id is not None
+                and (flow_window_start is None or _aware(trade.executed_at) >= flow_window_start)
+            ):
+                portfolio.record_pair_entry(
+                    pair_map.get(trade.opportunity_id),
+                    Decimal(str(result["size"])) * price_d,
+                    at=_aware(trade.executed_at),
+                )
+
             if is_exit and pre_position != 0 and result["executed"]:
                 actual_size = Decimal(str(result["size"]))
                 close_size = min(abs(pre_position), actual_size)
@@ -106,7 +133,22 @@ async def restore_portfolio(
             )
             return portfolio
 
-        replay_trades_into_portfolio(portfolio, trades)
+        opp_ids = {t.opportunity_id for t in trades if t.opportunity_id is not None}
+        pair_map: dict[int, int] = {}
+        if opp_ids:
+            rows = await session.execute(
+                select(ArbitrageOpportunity.id, ArbitrageOpportunity.pair_id).where(
+                    ArbitrageOpportunity.id.in_(opp_ids)
+                )
+            )
+            pair_map = {oid: pid for oid, pid in rows.all()}
+
+        flow_window_start = datetime.now(timezone.utc) - timedelta(
+            seconds=settings.pair_flow_window_seconds
+        )
+        replay_trades_into_portfolio(
+            portfolio, trades, pair_map=pair_map, flow_window_start=flow_window_start
+        )
 
         logger.info(
             "portfolio_restored",

@@ -71,7 +71,7 @@ async def test_circuit_breaker():
     assert not cb.is_tripped
 
     # 2. Test Daily Loss
-    cb.record_loss(150.0)
+    await cb.record_loss(150.0)
     allowed, reason = await cb.pre_trade_check(portfolio, market_id=2, trade_size=10.0)
     print(f"Daily loss check (should fail): allowed={allowed}, reason={reason}")
     assert not allowed

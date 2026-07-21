@@ -13,6 +13,7 @@ def _make_cb(**kwargs):
     """Create CircuitBreaker with mock Redis."""
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
+    redis.mget = AsyncMock(return_value=(None, None))
     defaults = dict(
         max_daily_loss=500.0,
         max_position_per_market=200.0,
@@ -85,15 +86,17 @@ class TestRecordSuccess:
 
 
 class TestRecordLoss:
-    def test_tracks_daily_loss(self):
+    @pytest.mark.asyncio
+    async def test_tracks_daily_loss(self):
         cb = _make_cb()
-        cb.record_loss(100.0)
-        cb.record_loss(200.0)
+        await cb.record_loss(100.0)
+        await cb.record_loss(200.0)
         assert cb._daily_loss == 300.0
 
-    def test_ignores_negative(self):
+    @pytest.mark.asyncio
+    async def test_ignores_negative(self):
         cb = _make_cb()
-        cb.record_loss(-50.0)
+        await cb.record_loss(-50.0)
         assert cb._daily_loss == 0.0
 
 
@@ -133,7 +136,7 @@ class TestPreTradeCheck:
     @pytest.mark.asyncio
     async def test_blocked_daily_loss(self):
         cb = _make_cb(max_daily_loss=100.0)
-        cb.record_loss(100.0)
+        await cb.record_loss(100.0)
         portfolio = _make_portfolio()
         allowed, reason = await cb.pre_trade_check(
             portfolio, market_id=1, trade_size=50, trade_side="BUY", outcome="Yes"
@@ -233,17 +236,75 @@ class TestPositionCapLocalRejection:
 
 
 class TestResetDaily:
-    def test_daily_reset_after_24h(self):
+    @pytest.mark.asyncio
+    async def test_daily_reset_on_utc_day_rollover(self):
         cb = _make_cb()
-        cb.record_loss(200.0)
+        await cb.record_loss(200.0)
         assert cb._daily_loss == 200.0
-        # Simulate 24+ hours having passed
-        cb._day_start = time.time() - 86401
+        cb._day = "19700101"  # force a rollover
         cb._reset_daily()
         assert cb._daily_loss == 0.0
 
-    def test_no_reset_before_24h(self):
+    @pytest.mark.asyncio
+    async def test_no_reset_within_same_utc_day(self):
         cb = _make_cb()
-        cb.record_loss(200.0)
+        await cb.record_loss(200.0)
         cb._reset_daily()
         assert cb._daily_loss == 200.0
+
+
+class TestRedisDurability:
+    """Daily loss and trip state must survive a restart (new CB instance)."""
+
+    def _fake_redis(self):
+        import fakeredis
+
+        return fakeredis.FakeAsyncRedis(decode_responses=True)
+
+    @pytest.mark.asyncio
+    async def test_daily_loss_survives_restart(self):
+        redis = self._fake_redis()
+        cb1 = CircuitBreaker(redis=redis, max_daily_loss=100.0)
+        await cb1.record_loss(60.0)
+        await cb1.record_loss(50.0)
+
+        cb2 = CircuitBreaker(redis=redis, max_daily_loss=100.0)  # "restarted"
+        portfolio = _make_portfolio()
+        allowed, reason = await cb2.pre_trade_check(
+            portfolio, market_id=1, trade_size=10, trade_side="BUY", outcome="Yes"
+        )
+        assert allowed is False
+        assert reason == "max_daily_loss"
+
+    @pytest.mark.asyncio
+    async def test_trip_survives_restart_and_expires(self):
+        redis = self._fake_redis()
+        cb1 = CircuitBreaker(redis=redis, cooldown_seconds=300)
+        await cb1._trip("max_daily_loss", daily_loss=600.0)
+
+        cb2 = CircuitBreaker(redis=redis, cooldown_seconds=300)
+        portfolio = _make_portfolio()
+        allowed, reason = await cb2.pre_trade_check(
+            portfolio, market_id=1, trade_size=10, trade_side="BUY", outcome="Yes"
+        )
+        assert allowed is False
+        assert reason == "circuit_breaker_tripped:max_daily_loss"
+        # key TTL mirrors the cooldown so expiry = auto-reset across restarts
+        from shared.circuit_breaker import REDIS_TRIP_KEY
+
+        assert 0 < await redis.ttl(REDIS_TRIP_KEY) <= 300
+
+    @pytest.mark.asyncio
+    async def test_redis_down_falls_back_to_memory(self):
+        cb = _make_cb(max_daily_loss=100.0)
+        from redis.exceptions import RedisError
+
+        cb.redis.mget = AsyncMock(side_effect=RedisError("down"))
+        cb.redis.incrbyfloat = AsyncMock(side_effect=RedisError("down"))
+        await cb.record_loss(150.0)  # memory still accumulates
+        portfolio = _make_portfolio()
+        allowed, reason = await cb.pre_trade_check(
+            portfolio, market_id=1, trade_size=10, trade_side="BUY", outcome="Yes"
+        )
+        assert allowed is False
+        assert reason == "max_daily_loss"

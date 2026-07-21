@@ -59,3 +59,11 @@ class TestIsPairDormant:
         session = _session_returning([Decimal("0")] * 5)
         assert await _pipeline()._is_pair_dormant(session, 30730) is False
         session.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_null_profit_counts_as_zero(self):
+        # Opps expired by the optimizer's stale sweep while still DETECTED
+        # never get a profit written; they must count toward dormancy
+        # instead of hiding it (the pre-fix SQL filtered NULLs out).
+        session = _session_returning([None, Decimal("0"), None, None, Decimal("0")])
+        assert await _pipeline()._is_pair_dormant(session, 30730) is True

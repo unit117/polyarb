@@ -28,6 +28,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    # AOF + a named volume make cooldown keys, breaker state, and the kill
+    # switch survive both restarts and `docker compose down` (the image's
+    # anonymous /data volume was silently dropped on recreation).
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
     ports:
       - "6380:6379"
     healthcheck:
@@ -229,3 +235,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:

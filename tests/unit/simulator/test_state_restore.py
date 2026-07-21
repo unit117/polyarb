@@ -53,6 +53,7 @@ async def test_restore_portfolio_rebuilds_state_from_trades():
     """Restore must rebuild all portfolio state purely from the trade ledger."""
     trades = [
         SimpleNamespace(
+            opportunity_id=None,
             market_id=10,
             outcome="Yes",
             side="BUY",
@@ -81,6 +82,7 @@ async def test_restore_portfolio_purge_resets_counters():
     """After PURGE rows, counters should be zeroed for the post-purge baseline."""
     trades = [
         SimpleNamespace(
+            opportunity_id=None,
             market_id=10,
             outcome="Yes",
             side="BUY",
@@ -89,6 +91,7 @@ async def test_restore_portfolio_purge_resets_counters():
             fees=Decimal("0"),
         ),
         SimpleNamespace(
+            opportunity_id=None,
             market_id=10,
             outcome="Yes",
             side="PURGE",
@@ -97,6 +100,7 @@ async def test_restore_portfolio_purge_resets_counters():
             fees=Decimal("0"),
         ),
         SimpleNamespace(
+            opportunity_id=None,
             market_id=20,
             outcome="Yes",
             side="BUY",
@@ -138,6 +142,7 @@ async def test_restore_portfolio_fresh_start_with_no_trades():
 
 def _trade(side: str, size: float, price: float, fees: float = 0.0):
     return SimpleNamespace(
+        opportunity_id=None,
         market_id=1,
         outcome="Yes",
         side=side,
@@ -188,3 +193,38 @@ async def test_replay_entry_only_has_no_realized_pnl():
 
     assert portfolio.realized_pnl == Decimal("0")
     assert portfolio.positions["1:Yes"] == Decimal("10")
+
+
+def test_replay_rebuilds_pair_flow_ledger():
+    from datetime import datetime, timedelta, timezone
+
+    from services.simulator.portfolio import Portfolio
+    from services.simulator.state import replay_trades_into_portfolio
+
+    portfolio = Portfolio(1000.0)
+    now = datetime.now(timezone.utc)
+
+    def t(opp_id, side, size, price, days_ago):
+        return SimpleNamespace(
+            opportunity_id=opp_id,
+            market_id=1,
+            outcome="Yes",
+            side=side,
+            size=Decimal(str(size)),
+            vwap_price=Decimal(str(price)),
+            fees=Decimal("0"),
+            executed_at=now - timedelta(days=days_ago),
+        )
+
+    trades = [
+        t(7, "BUY", 10, 0.5, days_ago=1),   # opening: counts ($5)
+        t(7, "SELL", 10, 0.6, days_ago=0.5),  # exit: never counts
+        t(8, "BUY", 4, 0.25, days_ago=10),  # outside window: dropped
+    ]
+    replay_trades_into_portfolio(
+        portfolio,
+        trades,
+        pair_map={7: 42, 8: 42},
+        flow_window_start=now - timedelta(days=7),
+    )
+    assert portfolio.pair_flow(42, 604800, now=now) == Decimal("5.0")

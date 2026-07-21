@@ -63,7 +63,7 @@ async def settle_resolved_markets(
                 stats["settled"] += 1
                 stats["pnl_realized"] += close_result["pnl"]
                 if circuit_breaker and close_result["pnl"] < 0:
-                    circuit_breaker.record_loss(abs(close_result["pnl"]))
+                    await circuit_breaker.record_loss(abs(close_result["pnl"]))
 
                 session.add(
                     PaperTrade(
