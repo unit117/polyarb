@@ -233,6 +233,47 @@ class PortfolioSnapshot(Base):
     )
 
 
+class MarketTrade(Base):
+    """Raw market tape from WS last_trade_price events.
+
+    Before this table, trade events were folded into price snapshots and
+    their size/side/timestamp discarded — leaving no way to backtest the
+    live period from our own data. Covers only WS-subscribed tokens.
+    """
+
+    __tablename__ = "market_trades"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id"), index=True)
+    token_id: Mapped[str] = mapped_column(String, index=True)
+    outcome: Mapped[str] = mapped_column(String)
+    price: Mapped[Decimal] = mapped_column(Numeric)
+    size: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
+    side: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    fee_rate_bps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    event_ts: Mapped[Optional[datetime]] = mapped_column(TIMESTAMPTZ, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_market_trades_market_ts", "market_id", "event_ts"),
+        Index("ix_market_trades_token_ts", "token_id", "event_ts"),
+        # Best-effort reconnect-replay dedup (WS events carry no unique id).
+        # NULLs compare distinct in Postgres, so rows missing fields simply
+        # skip dedup — acceptable for backtest tape.
+        Index(
+            "uq_market_trades_dedup",
+            "token_id",
+            "event_ts",
+            "price",
+            "size",
+            "side",
+            unique=True,
+        ),
+    )
+
+
 class LiveOrder(Base):
     __tablename__ = "live_orders"
 

@@ -24,7 +24,8 @@ from shared.events import (
     publish_event,
 )
 from shared.schemas import MarketResolvedEvent, SnapshotCreatedEvent
-from shared.models import Market, PriceSnapshot
+from shared.config import settings
+from shared.models import Market, MarketTrade, PriceSnapshot
 
 log = structlog.get_logger()
 
@@ -68,6 +69,7 @@ class ClobWebSocket:
         self._ws = None
         self._subscribed_tokens: set[str] = set()
         self._token_map: dict[str, tuple[int, str]] = {}  # token_id -> (market_id, outcome)
+        self._pending_trades: list[dict] = []
         self._pending_snapshots: dict[int, dict] = {}  # market_id -> {prices, midpoints}
         self._last_known_prices: dict[int, dict] = {}  # market_id -> {outcome: price} full state
         self._flush_task: asyncio.Task | None = None
@@ -370,11 +372,30 @@ class ClobWebSocket:
                     sample=stuck[:5],
                 )
 
+            trade_rows = self._pending_trades
+            self._pending_trades = []
+
             try:
                 if rows:
                     async with self._session_factory() as session:
                         await session.execute(insert(PriceSnapshot), rows)
                         await session.commit()
+
+                if trade_rows:
+                    try:
+                        async with self._session_factory() as session:
+                            # Reconnect replays can duplicate events; the
+                            # dedup index absorbs them
+                            await session.execute(
+                                insert(MarketTrade)
+                                .values(trade_rows)
+                                .on_conflict_do_nothing(),
+                            )
+                            await session.commit()
+                    except Exception:
+                        log.exception(
+                            "ws_trades_flush_error", count=len(trade_rows)
+                        )
 
                 # Check for resolution (only on fresh rows)
                 for row_data in rows:
@@ -448,7 +469,16 @@ class ClobWebSocket:
                 self._mark_outcome_refreshed(market_id, outcome)
 
     def _handle_last_trade(self, msg: dict) -> None:
-        """Process a last_trade_price event — update buffered price."""
+        """Process a last_trade_price event.
+
+        Persists the raw trade (price/size/side/timestamp) to the
+        market_trades buffer — before this, everything but the price was
+        discarded, leaving no tape to backtest the live period from. The
+        legacy folding of trade prices into snapshot prices is gated
+        (fold_trade_prices_into_midpoints): it contaminates the
+        frozen-price guard's inputs and goes away once a before/after
+        rejection-rate baseline exists.
+        """
         asset_id = msg.get("asset_id", "")
         mapping = self._token_map.get(asset_id)
         if not mapping:
@@ -459,10 +489,42 @@ class ClobWebSocket:
         if price is None:
             return
 
-        if market_id not in self._pending_snapshots:
-            self._pending_snapshots[market_id] = {"prices": {}, "midpoints": {}}
-        self._pending_snapshots[market_id]["prices"][outcome] = str(price)
-        self._mark_outcome_refreshed(market_id, outcome)
+        if settings.capture_ws_trades:
+            event_ts = None
+            raw_ts = msg.get("timestamp")
+            if raw_ts is not None:
+                try:
+                    ts_val = float(raw_ts)
+                    # WS timestamps are epoch millis; tolerate seconds too
+                    if ts_val > 1e11:
+                        ts_val /= 1000.0
+                    event_ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+                except (TypeError, ValueError, OSError, OverflowError):
+                    event_ts = None
+            side = msg.get("side")
+            fee_raw = msg.get("fee_rate_bps")
+            try:
+                fee_rate_bps = int(float(fee_raw)) if fee_raw is not None else None
+            except (TypeError, ValueError):
+                fee_rate_bps = None
+            self._pending_trades.append(
+                {
+                    "market_id": market_id,
+                    "token_id": asset_id,
+                    "outcome": outcome,
+                    "price": str(price),
+                    "size": str(msg["size"]) if msg.get("size") is not None else None,
+                    "side": str(side)[:4].upper() if side else None,
+                    "fee_rate_bps": fee_rate_bps,
+                    "event_ts": event_ts,
+                }
+            )
+
+        if settings.fold_trade_prices_into_midpoints:
+            if market_id not in self._pending_snapshots:
+                self._pending_snapshots[market_id] = {"prices": {}, "midpoints": {}}
+            self._pending_snapshots[market_id]["prices"][outcome] = str(price)
+            self._mark_outcome_refreshed(market_id, outcome)
 
     def _mark_outcome_refreshed(self, market_id: int, outcome: str) -> None:
         """Remove an outcome from the reconnect-pending set for a market."""

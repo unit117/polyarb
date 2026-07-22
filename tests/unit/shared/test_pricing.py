@@ -130,3 +130,26 @@ class TestIsPriceFrozen:
         assert await is_price_frozen(
             session, 1, "Yes", window_seconds=3600, min_observations=4
         ) is False
+
+
+class TestSelectOutcomeBook:
+    def test_legacy_single_book_returned_for_any_outcome(self):
+        from shared.pricing import select_outcome_book
+
+        legacy = {"bids": [["0.4", "1"]], "asks": []}
+        assert select_outcome_book(legacy, "Yes") is legacy
+        assert select_outcome_book(legacy, "No") is legacy
+
+    def test_keyed_book_selects_outcome(self):
+        from shared.pricing import select_outcome_book
+
+        yes_book = {"bids": [], "asks": [["0.6", "2"]]}
+        keyed = {"Yes": yes_book, "No": {"bids": [], "asks": []}}
+        assert select_outcome_book(keyed, "Yes") is yes_book
+        assert select_outcome_book(keyed, "Maybe") is None
+
+    def test_none_and_garbage(self):
+        from shared.pricing import select_outcome_book
+
+        assert select_outcome_book(None, "Yes") is None
+        assert select_outcome_book("x", "Yes") is None

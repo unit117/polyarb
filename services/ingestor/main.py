@@ -78,6 +78,7 @@ async def main() -> None:
             buffer_seconds=settings.ws_snapshot_buffer_seconds,
             resolution_threshold=settings.resolution_price_threshold,
             max_snapshot_markets=settings.max_snapshot_markets,
+            max_ws_subscriptions=settings.max_ws_subscriptions,
         )
         poller.set_ws_client(ws_client)
 
@@ -87,6 +88,8 @@ async def main() -> None:
             tasks.append(ws_client.run())
         if kalshi_poller:
             tasks.append(kalshi_poller.run())
+        if settings.snapshot_retention_days > 0 or settings.trades_retention_days > 0:
+            tasks.append(_retention_loop())
         await asyncio.gather(*tasks)
     finally:
         if ws_client:
@@ -96,6 +99,51 @@ async def main() -> None:
         await gamma.close()
         await clob.close()
         await redis.aclose()
+
+
+async def _retention_loop() -> None:
+    """Prune old price_snapshots / market_trades on a 6h cadence.
+
+    Off by default (retention 0 = keep forever — the whole point of the
+    capture work is future backtests). Enable via .env once NAS disk
+    headroom demands it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete
+
+    from shared.models import MarketTrade, PriceSnapshot
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            async with SessionFactory() as session:
+                if settings.snapshot_retention_days > 0:
+                    cutoff = now - timedelta(days=settings.snapshot_retention_days)
+                    result = await session.execute(
+                        delete(PriceSnapshot).where(PriceSnapshot.timestamp < cutoff)
+                    )
+                    if result.rowcount:
+                        log.info(
+                            "snapshot_retention_pruned",
+                            rows=result.rowcount,
+                            days=settings.snapshot_retention_days,
+                        )
+                if settings.trades_retention_days > 0:
+                    cutoff = now - timedelta(days=settings.trades_retention_days)
+                    result = await session.execute(
+                        delete(MarketTrade).where(MarketTrade.received_at < cutoff)
+                    )
+                    if result.rowcount:
+                        log.info(
+                            "trades_retention_pruned",
+                            rows=result.rowcount,
+                            days=settings.trades_retention_days,
+                        )
+                await session.commit()
+        except Exception:
+            log.exception("retention_loop_error")
+        await asyncio.sleep(6 * 3600)
 
 
 if __name__ == "__main__":

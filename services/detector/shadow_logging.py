@@ -22,8 +22,20 @@ def extract_order_book_summary(
     order_book: dict | None,
     *,
     depth_levels: int = 5,
+    outcome: str | None = None,
 ) -> dict[str, float | None]:
-    """Summarize top-of-book spread and visible depth for review rows."""
+    """Summarize top-of-book spread and visible depth for review rows.
+
+    Accepts both snapshot order_book shapes: legacy single top-level
+    {bids, asks} and the per-outcome keyed form (pass ``outcome`` to pick
+    a book; without it, keyed rows summarize as empty).
+    """
+    from shared.pricing import select_outcome_book
+
+    if isinstance(order_book, dict) and not (
+        "bids" in order_book or "asks" in order_book
+    ):
+        order_book = select_outcome_book(order_book, outcome) if outcome else None
     if not isinstance(order_book, dict):
         return {
             "best_bid": None,

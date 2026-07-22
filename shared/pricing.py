@@ -12,6 +12,23 @@ from sqlalchemy import select
 from shared.models import PriceSnapshot
 
 
+def select_outcome_book(order_book: dict | None, outcome: str) -> dict | None:
+    """Pick the traded outcome's book from a snapshot's order_book JSONB.
+
+    Two shapes exist forever: legacy rows hold a single top-level
+    {bids, asks} dict (historically the FIRST outcome's book, whatever
+    outcome was traded); per-outcome rows key books by outcome name like
+    prices/midpoints. Returns None when the outcome has no book — callers
+    fall back to midpoint fills rather than pricing against the wrong side.
+    """
+    if not isinstance(order_book, dict):
+        return None
+    if "bids" in order_book or "asks" in order_book:
+        return order_book  # legacy single-book row
+    book = order_book.get(outcome)
+    return book if isinstance(book, dict) else None
+
+
 async def get_latest_snapshot(
     session, market_id: int, max_age_seconds: int = 0
 ) -> PriceSnapshot | None:

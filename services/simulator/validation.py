@@ -11,7 +11,7 @@ from shared.circuit_breaker import CircuitBreaker
 from shared.config import settings, venue_fee, DRAWDOWN_THRESHOLD, DRAWDOWN_WINDOW, DRAWDOWN_MIN_SCALE
 from shared.models import PriceSnapshot
 from shared.frozen_cooldown import record_frozen_rejection
-from shared.pricing import get_latest_snapshot, is_price_frozen
+from shared.pricing import get_latest_snapshot, is_price_frozen, select_outcome_book
 from shared.schemas import OptimalTrades
 from services.simulator.portfolio import Portfolio, opening_exposure_size
 from services.simulator.vwap import compute_vwap
@@ -190,7 +190,12 @@ async def build_validated_bundle(
             return None
 
         midpoint = trade.market_price or 0.5
-        fill = compute_vwap(snapshot.order_book, trade.side, base_size, midpoint)
+        fill = compute_vwap(
+            select_outcome_book(snapshot.order_book, trade.outcome),
+            trade.side,
+            base_size,
+            midpoint,
+        )
 
         # Exposure-opening dollars count toward the per-pair flow cap. Both
         # directions open exposure: BUYs opening/adding longs AND SELLs

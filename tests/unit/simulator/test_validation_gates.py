@@ -172,3 +172,38 @@ class TestFlipAwareCap:
         }
         world.portfolio.record_pair_entry(42, 99.9, at=world.now)
         assert await _build(world, _opp(side="SELL", fair=0.4)) is None
+
+
+class TestPerOutcomeBookSelection:
+    @pytest.mark.asyncio
+    async def test_vwap_receives_selected_outcome_book(self, world, monkeypatch):
+        yes_book = {"bids": [["0.49", "100"]], "asks": [["0.51", "100"]]}
+        received = []
+        monkeypatch.setattr(
+            validation,
+            "compute_vwap",
+            lambda ob, side, size, mid: (
+                received.append(ob),
+                {"filled_size": size, "vwap_price": mid, "slippage": 0.0},
+            )[1],
+        )
+        world.snapshot.order_book = {"Yes": yes_book, "No": {"bids": [], "asks": []}}
+        bundle = await _build(world, _opp())
+        assert bundle is not None
+        assert received == [yes_book, yes_book]  # both legs trade "Yes"
+
+    @pytest.mark.asyncio
+    async def test_legacy_top_level_book_still_used(self, world, monkeypatch):
+        legacy = {"bids": [["0.49", "100"]], "asks": [["0.51", "100"]]}
+        received = []
+        monkeypatch.setattr(
+            validation,
+            "compute_vwap",
+            lambda ob, side, size, mid: (
+                received.append(ob),
+                {"filled_size": size, "vwap_price": mid, "slippage": 0.0},
+            )[1],
+        )
+        world.snapshot.order_book = legacy
+        assert await _build(world, _opp()) is not None
+        assert received == [legacy, legacy]

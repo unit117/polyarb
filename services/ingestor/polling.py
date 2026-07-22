@@ -15,6 +15,7 @@ from shared.events import (
     publish,
     publish_event,
 )
+from shared.config import settings
 from shared.frozen_cooldown import cooled_pair_ids
 from shared.schemas import MarketResolvedEvent, MarketUpdatedEvent, SnapshotCreatedEvent
 from shared.models import Market, MarketPair, PriceSnapshot
@@ -324,72 +325,108 @@ class MarketPoller:
         log.info("embeddings_done", count=len(need_embedding))
 
     async def snapshot_prices(self, markets: list[Market]) -> None:
-        # Top N by liquidity + paired markets with recent opportunities.
-        # Cap total to avoid multi-hour poll cycles at 2 RPS.
-        # WS already provides real-time prices for subscribed markets;
-        # CLOB midpoint is a fallback for markets WS might miss.
+        # Coverage: ALL verified-pair markets (the backtesting-relevant set,
+        # minus frozen-cooldown pairs) + top N by liquidity, fetched via the
+        # CLOB batch endpoints. Sequential single-token GETs cost ~8.3 min
+        # for 500 binary markets at 2 RPS; batched, ~6k markets take ~55s —
+        # the cap below now bounds DB growth, not cycle time.
         markets_by_id = {m.id: m for m in markets if m.token_ids}
 
-        # Start with top N by liquidity
         by_liquidity = sorted(markets_by_id.values(), key=lambda m: m.liquidity or 0, reverse=True)
         eligible_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
 
-        # Add markets from pairs with recent opportunities (not ALL pairs).
-        # Pairs on frozen-price cooldown are excluded: their "recent
-        # opportunities" are the rejected recycles of a dead quote, and this
-        # inclusion rule is what kept re-polling them (fresh-but-flat
-        # snapshots), feeding the detect→reject loop the cooldown breaks.
-        from datetime import datetime, timedelta, timezone as tz
-        from shared.models import ArbitrageOpportunity
-        cutoff = datetime.now(tz.utc) - timedelta(hours=24)
+        # All verified-pair markets. Pairs on frozen-price cooldown are
+        # excluded: polling them re-feeds the detect→reject loop the
+        # cooldown exists to break.
         async with self._session_factory() as session:
             result = await session.execute(
                 select(MarketPair.id, MarketPair.market_a_id, MarketPair.market_b_id)
-                .join(ArbitrageOpportunity, ArbitrageOpportunity.pair_id == MarketPair.id)
-                .where(ArbitrageOpportunity.timestamp > cutoff)
-                .distinct()
+                .where(MarketPair.verified.is_(True))
             )
             rows = result.fetchall()
         cooled = await cooled_pair_ids(self._redis, {row.id for row in rows})
+        paired_ids: set[int] = set()
         for row in rows:
             if row.id in cooled:
                 continue
             if row.market_a_id in markets_by_id:
-                eligible_ids.add(row.market_a_id)
+                paired_ids.add(row.market_a_id)
             if row.market_b_id in markets_by_id:
-                eligible_ids.add(row.market_b_id)
+                paired_ids.add(row.market_b_id)
         if cooled:
             log.info("snapshot_frozen_cooldown_excluded", pairs=len(cooled))
+        eligible_ids |= paired_ids
 
-        # Hard cap to keep poll cycle under ~10 min at 2 RPS
-        MAX_CLOB_SNAPSHOTS = 500
+        # Cap bounds DB growth; paired markets outrank liquidity-only ones
         eligible = [markets_by_id[mid] for mid in eligible_ids if mid in markets_by_id]
-        if len(eligible) > MAX_CLOB_SNAPSHOTS:
-            eligible.sort(key=lambda m: m.liquidity or 0, reverse=True)
-            eligible = eligible[:MAX_CLOB_SNAPSHOTS]
-        log.info("snapshots_start", eligible=len(eligible), total=len(markets))
+        if len(eligible) > settings.max_clob_snapshots:
+            eligible.sort(
+                key=lambda m: (m.id in paired_ids, m.liquidity or 0), reverse=True
+            )
+            eligible = eligible[: settings.max_clob_snapshots]
+        log.info(
+            "snapshots_start",
+            eligible=len(eligible),
+            paired=len(paired_ids),
+            total=len(markets),
+        )
+
+        # token -> (market_id, outcome) for reassembling batch results
+        token_map: dict[str, tuple[int, str]] = {}
+        for market in eligible:
+            outcomes = market.outcomes or []
+            for i, token_id in enumerate(market.token_ids):
+                outcome = outcomes[i] if i < len(outcomes) else f"outcome_{i}"
+                token_map[str(token_id)] = (market.id, outcome)
+
+        try:
+            midpoints = await self._clob.get_midpoints_batch(list(token_map))
+        except Exception:
+            log.exception("snapshot_midpoints_batch_error")
+            return
+
+        books: dict[str, dict] = {}
+        if self._fetch_order_books:
+            book_tokens = [
+                token_id
+                for token_id, (market_id, _) in token_map.items()
+                if not settings.order_books_paired_only or market_id in paired_ids
+            ]
+            if book_tokens:
+                try:
+                    books = await self._clob.get_books_batch(
+                        book_tokens, depth_levels=settings.order_book_depth_levels
+                    )
+                except Exception:
+                    log.exception("snapshot_books_batch_error")
+
+        per_market: dict[int, dict] = {}
+        for token_id, (market_id, outcome) in token_map.items():
+            entry = per_market.setdefault(
+                market_id, {"prices": {}, "midpoints": {}, "order_book": {}}
+            )
+            mid = midpoints.get(token_id)
+            if mid is not None:
+                entry["prices"][outcome] = mid
+                entry["midpoints"][outcome] = mid
+            book = books.get(token_id)
+            if book:
+                entry["order_book"][outcome] = book
 
         snapshots_to_insert = []
-        for market in eligible:
-            try:
-                snapshot_data = await self._clob.get_snapshot_for_market(
-                    token_ids=market.token_ids,
-                    outcomes=market.outcomes,
-                    fetch_order_books=self._fetch_order_books,
-                )
-                if snapshot_data["prices"]:
-                    snapshots_to_insert.append(
-                        {
-                            "market_id": market.id,
-                            "prices": snapshot_data["prices"],
-                            "midpoints": snapshot_data["midpoints"],
-                            "order_book": snapshot_data["order_book"],
-                        }
-                    )
-            except Exception:
-                log.exception(
-                    "snapshot_error", market_id=market.polymarket_id
-                )
+        for market_id, entry in per_market.items():
+            if not entry["prices"]:
+                continue
+            snapshots_to_insert.append(
+                {
+                    "market_id": market_id,
+                    "prices": entry["prices"],
+                    "midpoints": entry["midpoints"],
+                    # Per-outcome keyed books ({outcome: {bids, asks}});
+                    # legacy rows carried one top-level {bids, asks} dict
+                    "order_book": entry["order_book"] or None,
+                }
+            )
 
         if snapshots_to_insert:
             async with self._session_factory() as session:

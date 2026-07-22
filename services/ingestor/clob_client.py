@@ -8,6 +8,41 @@ import structlog
 
 log = structlog.get_logger()
 
+# POST /midpoints and POST /books accept [{"token_id": ...}, ...]; no batch
+# cap is documented, so stay conservative and fall back to single-token GETs
+# if a batch request is rejected.
+BATCH_SIZE = 100
+
+
+def _chunks(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def normalize_book(book: dict | None, depth_levels: int) -> dict | None:
+    """Sort levels best-first and truncate to bound JSONB growth.
+
+    The CLOB does not guarantee level ordering; compute_vwap walks levels
+    front-to-back assuming best-first, and truncation must keep the BEST
+    levels — so sorting here is correctness, not cosmetics.
+    """
+    if not isinstance(book, dict):
+        return None
+
+    def _price(level) -> float:
+        try:
+            raw = level[0] if isinstance(level, (list, tuple)) else level.get("price", 0)
+            return float(raw)
+        except (TypeError, ValueError, IndexError):
+            return 0.0
+
+    bids = sorted(book.get("bids") or [], key=_price, reverse=True)
+    asks = sorted(book.get("asks") or [], key=_price)
+    if depth_levels > 0:
+        bids = bids[:depth_levels]
+        asks = asks[:depth_levels]
+    return {"bids": bids, "asks": asks}
+
 
 class ClobClient:
     def __init__(self, base_url: str, rate_limit_rps: float = 2.0):
@@ -25,7 +60,7 @@ class ClobClient:
                 await asyncio.sleep(wait_time)
             self._last_request_time = time.monotonic()
 
-    async def _request(self, method: str, url: str, **kwargs) -> dict | None:
+    async def _request(self, method: str, url: str, **kwargs) -> dict | list | None:
         for attempt in range(self._max_retries):
             await self._rate_limit()
             try:
@@ -91,12 +126,114 @@ class ClobClient:
             return int(result["base_fee"])
         return None
 
+    # ------------------------------------------------------------------
+    # Batch endpoints — the coverage raise depends on these: sequential
+    # single-token GETs at 2 RPS cost ~8.3 min for 500 binary markets,
+    # saturating the 300s poll cycle. Batched: ~110 requests for ~11k
+    # tokens ≈ 55s.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_mid(value) -> str | None:
+        if isinstance(value, dict):
+            value = value.get("mid", value.get("midpoint"))
+        if value is None:
+            return None
+        return str(value)
+
+    async def get_midpoints_batch(self, token_ids: list[str]) -> dict[str, str]:
+        """POST /midpoints for many tokens; returns {token_id: mid}.
+
+        Falls back to single-token GETs for a chunk the batch endpoint
+        rejects, so a contract change degrades to the old (slow) behavior
+        instead of a blackout.
+        """
+        out: dict[str, str] = {}
+        for chunk in _chunks(token_ids, BATCH_SIZE):
+            body = [{"token_id": t} for t in chunk]
+            try:
+                result = await self._request("POST", "/midpoints", json=body)
+            except httpx.HTTPStatusError as e:
+                log.warning(
+                    "clob_midpoints_batch_rejected",
+                    status=e.response.status_code,
+                    chunk=len(chunk),
+                )
+                result = None
+            if isinstance(result, dict):
+                for token_id, value in result.items():
+                    mid = self._parse_mid(value)
+                    if mid is not None:
+                        out[token_id] = mid
+                continue
+            if isinstance(result, list):
+                for item in result:
+                    if isinstance(item, dict) and item.get("token_id"):
+                        mid = self._parse_mid(item.get("mid", item.get("midpoint")))
+                        if mid is not None:
+                            out[item["token_id"]] = mid
+                continue
+            # Batch failed — sequential fallback for this chunk only
+            for token_id in chunk:
+                try:
+                    mid = await self.get_midpoint(token_id)
+                except httpx.HTTPError:
+                    continue
+                if mid is not None:
+                    out[token_id] = mid
+        return out
+
+    async def get_books_batch(
+        self, token_ids: list[str], depth_levels: int = 10
+    ) -> dict[str, dict]:
+        """POST /books for many tokens; returns {token_id: {bids, asks}}.
+
+        Books are normalized best-first and truncated to depth_levels per
+        side (full books at 288 cycles/day would be ~GB-scale growth).
+        """
+        out: dict[str, dict] = {}
+        for chunk in _chunks(token_ids, BATCH_SIZE):
+            body = [{"token_id": t} for t in chunk]
+            try:
+                result = await self._request("POST", "/books", json=body)
+            except httpx.HTTPStatusError as e:
+                log.warning(
+                    "clob_books_batch_rejected",
+                    status=e.response.status_code,
+                    chunk=len(chunk),
+                )
+                result = None
+            if isinstance(result, list):
+                for book in result:
+                    if not isinstance(book, dict):
+                        continue
+                    token_id = book.get("asset_id") or book.get("token_id")
+                    normalized = normalize_book(book, depth_levels)
+                    if token_id and normalized:
+                        out[token_id] = normalized
+                continue
+            # Batch failed — sequential fallback for this chunk only
+            for token_id in chunk:
+                try:
+                    book = await self.get_order_book(token_id)
+                except httpx.HTTPError:
+                    continue
+                normalized = normalize_book(book, depth_levels)
+                if normalized:
+                    out[token_id] = normalized
+        return out
+
     async def get_snapshot_for_market(
         self,
         token_ids: list[str],
         outcomes: list[str],
         fetch_order_books: bool = False,
+        depth_levels: int = 10,
     ) -> dict:
+        """Single-market snapshot (sequential; kept for callers off the batch
+        path, e.g. scripts). Books are fetched for ALL outcomes and keyed by
+        outcome — the old first-outcome-only book was applied to whichever
+        outcome got traded."""
         midpoints = {}
         prices = {}
         for i, token_id in enumerate(token_ids):
@@ -108,7 +245,13 @@ class ClobClient:
 
         order_book = None
         if fetch_order_books and token_ids:
-            order_book = await self.get_order_book(token_ids[0])
+            books = {}
+            for i, token_id in enumerate(token_ids):
+                outcome = outcomes[i] if i < len(outcomes) else f"outcome_{i}"
+                book = normalize_book(await self.get_order_book(token_id), depth_levels)
+                if book:
+                    books[outcome] = book
+            order_book = books or None
 
         return {
             "prices": prices,

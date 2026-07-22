@@ -24,6 +24,27 @@ class Settings(BaseSettings):
     rate_limit_rps: float = 2.0
     fetch_order_books: bool = False
     max_snapshot_markets: int = 100
+    # Hard cap on markets snapshotted per CLOB poll cycle (was a hardcoded
+    # 500). With the batch endpoints, ~6k markets cost ~110 requests (~55s
+    # at 2 RPS) — the cap now mainly bounds DB growth, not cycle time.
+    max_clob_snapshots: int = 500
+    # Order-book capture: levels kept per side (bounds JSONB growth; books
+    # are sorted best-first before truncation), and whether books are
+    # fetched only for markets that belong to verified pairs (the
+    # backtesting-relevant set) or for every snapshotted market.
+    order_book_depth_levels: int = 10
+    order_books_paired_only: bool = True
+    # Raw-trade capture: persist WS last_trade_price events to market_trades.
+    capture_ws_trades: bool = True
+    # 4.8 gate: historical behavior folds WS trade prices into snapshot
+    # prices/midpoints, which contaminates the frozen-price guard's inputs.
+    # Keep true until a before/after frozen-rejection-rate baseline exists,
+    # then flip on the NAS and compare.
+    fold_trade_prices_into_midpoints: bool = True
+    # Retention pruning (0 = keep forever). Run by the ingestor; size the
+    # values against NAS disk headroom before raising snapshot coverage.
+    snapshot_retention_days: int = 0
+    trades_retention_days: int = 0
     log_level: str = "INFO"
 
     # WebSocket streaming settings
@@ -33,6 +54,9 @@ class Settings(BaseSettings):
     ws_reconnect_max_delay: float = 60.0
     ws_ping_interval: int = 10
     ws_snapshot_buffer_seconds: float = 2.0
+    # WS subscription budget (was hardcoded 3000 in the client). Subscribing
+    # all ~78k paired tokens causes reconnect churn — raise cautiously.
+    max_ws_subscriptions: int = 3000
 
     # Detector settings
     similarity_threshold: float = 0.82
