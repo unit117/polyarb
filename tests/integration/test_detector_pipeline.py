@@ -71,6 +71,7 @@ class TestDetectionPipelineRunOnce:
 
                 with patch("services.detector.pipeline.settings") as mock_settings:
                     mock_settings.kalshi_enabled = False
+                    mock_settings.classifier_cycle_failure_budget = 0
                     mock_settings.uncertainty_price_floor = 0.05
                     mock_settings.uncertainty_price_ceil = 0.95
 
@@ -147,6 +148,7 @@ class TestDetectionPipelineRunOnce:
 
                     with patch("services.detector.pipeline.settings") as mock_settings:
                         mock_settings.kalshi_enabled = False
+                        mock_settings.classifier_cycle_failure_budget = 0
                         mock_settings.max_snapshot_age_seconds = 0
                         mock_settings.uncertainty_price_floor = 0.05
                         mock_settings.uncertainty_price_ceil = 0.95
@@ -203,6 +205,7 @@ class TestDetectionPipelineRunOnce:
 
                     with patch("services.detector.pipeline.settings") as mock_settings:
                         mock_settings.kalshi_enabled = False
+                        mock_settings.classifier_cycle_failure_budget = 0
                         mock_settings.uncertainty_price_floor = 0.05
                         mock_settings.uncertainty_price_ceil = 0.95
 
@@ -256,6 +259,7 @@ class TestDetectionPipelineRunOnce:
                 with patch("services.detector.pipeline.classify_pair", new_callable=AsyncMock) as mock_classify:
                     with patch("services.detector.pipeline.settings") as mock_settings:
                         mock_settings.kalshi_enabled = False
+                        mock_settings.classifier_cycle_failure_budget = 0
                         mock_settings.uncertainty_price_floor = 0.05
                         mock_settings.uncertainty_price_ceil = 0.95
 
@@ -313,6 +317,7 @@ class TestDetectionPipelineRunOnce:
 
                         with patch("services.detector.pipeline.settings") as mock_settings:
                             mock_settings.kalshi_enabled = False
+                            mock_settings.classifier_cycle_failure_budget = 0
                             mock_settings.uncertainty_price_floor = 0.05
                             mock_settings.uncertainty_price_ceil = 0.95
 

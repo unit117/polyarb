@@ -208,3 +208,145 @@ class TestCapabilityRegistry:
         )
         caps = resolve_capabilities("gpt-4.1-mini")
         assert caps.max_tokens_label == 300
+
+
+def _rate_limit_with_retry_after(seconds: str):
+    req = httpx.Request("POST", "http://test/v1/chat/completions")
+    resp = httpx.Response(429, request=req, headers={"retry-after": seconds})
+    return openai.RateLimitError("rate limited", response=resp, body=None)
+
+
+class TestRetryAfterClamp:
+    @pytest.mark.asyncio
+    async def test_huge_retry_after_fails_fast(self):
+        # Quota 429 with retry-after in the hours must NOT be slept on while
+        # holding the detection lock — fail now, retry next cycle.
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=_rate_limit_with_retry_after("3600")
+        )
+        result = await classify_llm(client, "gpt-4o-mini", {"question": "A"}, {"question": "B"})
+        assert result["classification_error"] is True
+        assert client.chat.completions.create.await_count == 1  # no retry
+
+    @pytest.mark.asyncio
+    async def test_small_retry_after_honored(self):
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                _rate_limit_with_retry_after("0"),
+                _response(GOOD_JSON),
+            ]
+        )
+        result = await classify_llm(client, "gpt-4o-mini", {"question": "A"}, {"question": "B"})
+        assert result["dependency_type"] == "implication"
+        assert client.chat.completions.create.await_count == 2
+
+
+class TestMalformed200Responses:
+    @pytest.mark.asyncio
+    async def test_non_object_json_tagged_not_raised(self):
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(return_value=_response("[1, 2, 3]"))
+        result = await classify_llm(client, "gpt-4o-mini", {"question": "A"}, {"question": "B"})
+        assert result["dependency_type"] == "none"
+        assert result["classification_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_empty_choices_tagged_not_raised(self):
+        client = AsyncMock()
+        response = MagicMock()
+        response.choices = []
+        client.chat.completions.create = AsyncMock(return_value=response)
+        result = await classify_llm(client, "gpt-4o-mini", {"question": "A"}, {"question": "B"})
+        assert result["classification_error"] is True
+
+
+class TestCycleFailureBudget:
+    def _pipeline(self):
+        from services.detector.pipeline import DetectionPipeline
+
+        return DetectionPipeline(
+            session_factory=MagicMock(),
+            openai_client=MagicMock(),
+            redis=MagicMock(),
+            similarity_threshold=0.82,
+            similarity_top_k=10,
+            batch_size=100,
+            classifier_model="gpt-4.1-mini",
+        )
+
+    @pytest.mark.asyncio
+    async def test_budget_short_circuits_after_consecutive_failures(self, monkeypatch):
+        import services.detector.pipeline as pl
+
+        monkeypatch.setattr(settings, "classifier_cycle_failure_budget", 3)
+        err = {
+            "dependency_type": "none",
+            "confidence": 0.0,
+            "classification_source": "llm_label",
+            "classification_error": True,
+        }
+        mock_classify = AsyncMock(return_value=err)
+        monkeypatch.setattr(pl, "classify_pair", mock_classify)
+
+        p = self._pipeline()
+        p._cycle_llm_failures = 0
+        for i in range(6):
+            result = await p._classify_with_cache(
+                {"id": 1, "question": "A"}, {"id": 2 + i, "question": "B"}, {}, []
+            )
+            assert result["classification_error"] is True
+        # LLM invoked only up to the budget; the rest were short-circuited
+        assert mock_classify.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_success_resets_the_consecutive_counter(self, monkeypatch):
+        import services.detector.pipeline as pl
+
+        monkeypatch.setattr(settings, "classifier_cycle_failure_budget", 3)
+        err = {
+            "dependency_type": "none",
+            "confidence": 0.0,
+            "classification_source": "llm_label",
+            "classification_error": True,
+        }
+        ok = {
+            "dependency_type": "none",
+            "confidence": 0.5,
+            "classification_source": "llm_label",
+        }
+        mock_classify = AsyncMock(side_effect=[err, err, ok, err, err, err, err])
+        monkeypatch.setattr(pl, "classify_pair", mock_classify)
+
+        p = self._pipeline()
+        for i in range(7):
+            await p._classify_with_cache(
+                {"id": 1, "question": "A"}, {"id": 2 + i, "question": "B"}, {}, []
+            )
+        # err err ok(reset) err err err -> budget hit at 3 consecutive; the
+        # 7th call is short-circuited
+        assert mock_classify.await_count == 6
+
+
+class TestOverrideValidation:
+    def test_bad_types_dropped_good_kept(self, monkeypatch):
+        monkeypatch.setattr(
+            settings,
+            "classifier_model_capabilities",
+            json.dumps(
+                {
+                    "gpt": {
+                        "temperature_label": "hot",       # bad type -> dropped
+                        "max_tokens_label": True,          # bool masquerading as int -> dropped
+                        "prompt_adapter": "yaml_freeform", # unknown adapter -> dropped
+                        "max_tokens_vector": 1024,         # valid -> kept
+                    }
+                }
+            ),
+        )
+        caps = resolve_capabilities("gpt-4.1-mini")
+        assert caps.temperature_label == 0.1
+        assert caps.max_tokens_label == 256
+        assert caps.prompt_adapter == "openai_generic"
+        assert caps.max_tokens_vector == 1024

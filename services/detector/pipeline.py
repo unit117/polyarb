@@ -70,6 +70,12 @@ class DetectionPipeline:
         self.classifier_prompt_adapter = classifier_prompt_adapter
         self._rescan_lock = asyncio.Lock()
         self._detection_lock = asyncio.Lock()
+        # Consecutive post-retry LLM failures within the current detection
+        # cycle; past the budget, remaining candidates skip the LLM (errors
+        # are never cached, so they all retry next cycle). Bounds lock-held
+        # time during a sustained provider outage (~95s per candidate).
+        self._cycle_llm_failures = 0
+        self._cycle_budget_logged = False
 
     # ------------------------------------------------------------------
     # Classification cache
@@ -160,6 +166,23 @@ class DetectionPipeline:
         if classification is not None:
             return classification
 
+        budget = settings.classifier_cycle_failure_budget
+        if budget > 0 and self._cycle_llm_failures >= budget:
+            if not self._cycle_budget_logged:
+                logger.warning(
+                    "llm_cycle_failure_budget_exhausted",
+                    consecutive_failures=self._cycle_llm_failures,
+                    budget=budget,
+                )
+                self._cycle_budget_logged = True
+            return {
+                "dependency_type": "none",
+                "confidence": 0.0,
+                "reasoning": "llm cycle failure budget exhausted",
+                "classification_source": "llm_label",
+                "classification_error": True,
+            }
+
         classification = await classify_pair(
             self.openai_client,
             self.classifier_model,
@@ -167,6 +190,11 @@ class DetectionPipeline:
             market_b_dict,
             prompt_adapter=self.classifier_prompt_adapter,
         )
+        if classification.get("classification_error"):
+            self._cycle_llm_failures += 1
+        elif classification.get("classification_source") in ("llm_vector", "llm_label"):
+            self._cycle_llm_failures = 0
+
         cache_row = _build_cache_row(
             market_a_dict,
             market_b_dict,
@@ -365,6 +393,8 @@ class DetectionPipeline:
         on the market_pairs unique index.
         """
         async with self._detection_lock:
+            self._cycle_llm_failures = 0
+            self._cycle_budget_logged = False
             return await self._run_once_inner()
 
     async def _run_once_inner(self) -> dict:

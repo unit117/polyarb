@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     # fields), so a new provider quirk is a .env edit instead of a code
     # hotfix. See services/detector/model_capabilities.py for the format.
     classifier_model_capabilities: str = ""
+    # Per-request LLM timeout. App-level retry owns retries (max_retries=0 on
+    # the client); 60s covers reasoning-model vector calls (2048-token budgets)
+    # that a 30s cap would chronically abort into 3x retry amplification.
+    classifier_timeout_seconds: float = 60.0
+    # After this many CONSECUTIVE post-retry LLM failures within one detection
+    # cycle, skip LLM classification for the cycle's remaining candidates
+    # (rule-based and cached classification still run). Bounds lock-held time
+    # during a sustained provider outage. 0 disables.
+    classifier_cycle_failure_budget: int = 3
     openrouter_api_key: str = ""  # legacy fallback for OpenRouter-based classifier routing
     shadow_classifier_model: str = ""  # for shadow mode comparison (e.g. minimax/minimax-m2.7)
     shadow_classifier_base_url: str = ""

@@ -34,6 +34,10 @@ DEPENDENCY_TYPES = ("implication", "partition", "mutual_exclusion", "conditional
 # this policy is the only retry layer — before it, every failure class fell
 # straight through to a fail-closed "none" that got cached permanently.
 _RETRY_BACKOFF = (1.0, 4.0)  # sleeps between the 3 attempts
+# Retry-After is server-controlled; quota 429s can carry hours. Sleeping
+# that long would hold the detection lock — beyond this cap, fail the call
+# now (the error result is never cached, so the pair retries next cycle).
+_MAX_RETRY_AFTER_SECONDS = 30.0
 
 
 def _is_transient_llm_error(exc: Exception) -> bool:
@@ -78,7 +82,18 @@ async def _create_with_retry(client: openai.AsyncOpenAI, kwargs: dict, *, call: 
             last_exc = exc
             if attempt == attempts - 1:
                 break
-            delay = max(_RETRY_BACKOFF[attempt], _retry_after_seconds(exc) or 0.0)
+            retry_after = _retry_after_seconds(exc)
+            if retry_after is not None and retry_after > _MAX_RETRY_AFTER_SECONDS:
+                logger.warning(
+                    "llm_retry_after_too_large",
+                    call=call,
+                    retry_after_seconds=retry_after,
+                )
+                break
+            delay = min(
+                max(_RETRY_BACKOFF[attempt], retry_after or 0.0),
+                _MAX_RETRY_AFTER_SECONDS,
+            )
             logger.warning(
                 "llm_transient_error_retrying",
                 call=call,
@@ -631,6 +646,14 @@ async def classify_llm(
             kwargs["extra_body"] = caps.extra_body
         response = await _create_with_retry(client, kwargs, call="label")
 
+        if not response.choices:
+            logger.warning("llm_no_choices", model=model)
+            return {
+                "dependency_type": "none",
+                "confidence": 0.0,
+                "reasoning": "no choices in response",
+                "classification_error": True,
+            }
         msg = response.choices[0].message
         content = msg.content
         if not content:
@@ -665,6 +688,16 @@ async def classify_llm(
         # Strip think tags in case label-based fallback hits a reasoning model
         raw = _strip_think_tags(raw)
         result = json.loads(raw)
+        if not isinstance(result, dict):
+            # Valid JSON but not an object (e.g. a bare list/string) —
+            # result.get below would raise and abort the whole cycle
+            logger.warning("llm_non_object_json", raw=raw[:200])
+            return {
+                "dependency_type": "none",
+                "confidence": 0.0,
+                "reasoning": raw[:500],
+                "classification_error": True,
+            }
         result["prompt_version"] = rendered_prompt.version
         result["prompt_adapter"] = rendered_prompt.adapter
 
@@ -867,6 +900,9 @@ async def classify_llm_resolution(
             kwargs["response_format"] = {"type": "json_object"}
 
         response = await _create_with_retry(client, kwargs, call="vector")
+        if not response.choices:
+            logger.warning("resolution_vector_no_choices", model=model)
+            return None
         msg = response.choices[0].message
         content = msg.content
         # Reasoning-only response (e.g. M2.7 exhausted token budget on <think>):
@@ -896,6 +932,9 @@ async def classify_llm_resolution(
         # Strip <think> tags (MiniMax M2.7 mandatory reasoning)
         cleaned = _strip_think_tags(raw)
         result = json.loads(cleaned)
+        if not isinstance(result, dict):
+            logger.warning("resolution_vector_non_object_json", raw=raw[:200])
+            return None
 
         valid_outcomes = result.get("valid_outcomes", [])
         if not valid_outcomes or not isinstance(valid_outcomes, list):

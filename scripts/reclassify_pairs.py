@@ -68,10 +68,19 @@ async def reclassify_all(
             or settings.openrouter_api_key
             or settings.openai_api_key
         )
-        client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=settings.classifier_timeout_seconds,
+            max_retries=0,
+        )
     else:
         api_key = api_key_override or settings.openai_api_key
-        client = openai.AsyncOpenAI(api_key=api_key)
+        client = openai.AsyncOpenAI(
+            api_key=api_key,
+            timeout=settings.classifier_timeout_seconds,
+            max_retries=0,
+        )
 
     log.info(
         "classifier_client",
@@ -146,6 +155,16 @@ async def reclassify_all(
                     stats["errors"] += 1
                     log.error("classify_error", pair_id=pair.id, error=str(e))
                     return
+
+            if classification.get("classification_error"):
+                # Provider failure, not a verdict — do NOT overwrite the pair
+                stats["errors"] += 1
+                log.warning(
+                    "classification_error_skipped",
+                    pair_id=pair.id,
+                    reasoning=str(classification.get("reasoning", ""))[:120],
+                )
+                return
 
             new_type = classification["dependency_type"]
             new_confidence = classification["confidence"]

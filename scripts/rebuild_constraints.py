@@ -48,7 +48,11 @@ async def main() -> None:
         "unverified": 0, "llm_reclassified": 0,
     }
 
-    llm_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+    llm_client = openai.AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        timeout=settings.classifier_timeout_seconds,
+        max_retries=0,
+    )
 
     async with SessionFactory() as session:
         result = await session.execute(select(MarketPair))
@@ -125,7 +129,14 @@ async def main() -> None:
                     market_b_dict,
                     prompt_adapter=settings.classifier_prompt_adapter,
                 )
-                if llm_result["dependency_type"] != "none":
+                if llm_result.get("classification_error"):
+                    # Provider failure, not a verdict — keep the pair as-is
+                    logger.warning(
+                        "pair_llm_error_skipped",
+                        pair_id=pair.id,
+                        reasoning=str(llm_result.get("reasoning", ""))[:120],
+                    )
+                elif llm_result["dependency_type"] != "none":
                     old_type = pair.dependency_type
                     pair.dependency_type = llm_result["dependency_type"]
                     pair.confidence = llm_result.get("confidence", 0.5)

@@ -42,6 +42,46 @@ class ModelCapabilities:
 
 DEFAULT_CAPS = ModelCapabilities()
 _FIELD_NAMES = {f.name for f in fields(ModelCapabilities)}
+# Expected value types per field for .env override validation; None is
+# allowed where the default is Optional. Kept in sync with the dataclass.
+_FIELD_TYPES: dict[str, tuple] = {
+    "temperature_label": (float, int, type(None)),
+    "temperature_vector": (float, int, type(None)),
+    "max_tokens_label": (int,),
+    "max_tokens_vector": (int,),
+    "supports_json_response_format": (bool,),
+    "extra_body": (dict, type(None)),
+    "prompt_adapter": (str,),
+}
+_VALID_PROMPT_ADAPTERS = {"openai_generic", "claude_xml"}
+
+
+def _validate_override(pattern: str, override: dict) -> dict:
+    """Drop mistyped/invalid override fields with a warning."""
+    clean = {}
+    for k, v in override.items():
+        if k not in _FIELD_NAMES:
+            logger.warning(
+                "classifier_capabilities_unknown_field", pattern=pattern, field=k
+            )
+            continue
+        if not isinstance(v, _FIELD_TYPES[k]) or (
+            k.startswith("max_tokens") and isinstance(v, bool)
+        ):
+            logger.warning(
+                "classifier_capabilities_bad_type",
+                pattern=pattern,
+                field=k,
+                value=repr(v)[:80],
+            )
+            continue
+        if k == "prompt_adapter" and v not in _VALID_PROMPT_ADAPTERS:
+            logger.warning(
+                "classifier_capabilities_bad_adapter", pattern=pattern, value=v
+            )
+            continue
+        clean[k] = v
+    return clean
 
 
 def is_kimi_fixed_param_model(model: str) -> bool:
@@ -106,14 +146,7 @@ def resolve_capabilities(model: str) -> ModelCapabilities:
     m = model.lower()
     for pattern, override in _env_overrides().items():
         if pattern.lower() in m and isinstance(override, dict):
-            known = {k: v for k, v in override.items() if k in _FIELD_NAMES}
-            unknown = sorted(set(override) - _FIELD_NAMES)
-            if unknown:
-                logger.warning(
-                    "classifier_capabilities_unknown_fields",
-                    pattern=pattern,
-                    fields=unknown,
-                )
-            if known:
-                caps = replace(caps, **known)
+            clean = _validate_override(pattern, override)
+            if clean:
+                caps = replace(caps, **clean)
     return caps

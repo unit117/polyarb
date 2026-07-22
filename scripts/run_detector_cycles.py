@@ -74,6 +74,8 @@ async def main():
 
     if settings.classifier_base_url:
         openai_client = openai.AsyncOpenAI(
+            timeout=settings.classifier_timeout_seconds,
+            max_retries=0,
             api_key=(
                 settings.classifier_api_key
                 or settings.openrouter_api_key
@@ -82,7 +84,11 @@ async def main():
             base_url=settings.classifier_base_url,
         )
     else:
-        openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        openai_client = openai.AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.classifier_timeout_seconds,
+            max_retries=0,
+        )
     threshold = args.similarity_threshold or settings.similarity_threshold
 
     pipeline = DetectionPipeline(

@@ -362,6 +362,12 @@ async def evaluate(
                 use_vectors,
                 prompt_adapter=prompt_adapter,
             )
+            if result.get("classification_error"):
+                # Provider failure — record distinctly so it can't be scored
+                # as a genuine 'none' verdict
+                p[f"reclassified_{model}"] = "__error__"
+                p[f"reclassified_{model}_source"] = "error"
+                continue
             p[f"reclassified_{model}"] = result.get("dependency_type", "none")
             p[f"reclassified_{model}_source"] = result.get("classification_source", "")
 
@@ -391,6 +397,9 @@ async def evaluate(
                 use_vectors,
                 prompt_adapter=compare_prompt_adapter,
             )
+            if result.get("classification_error"):
+                p[f"shadow_{compare_model}"] = "__error__"
+                continue
             p[f"shadow_{compare_model}"] = result.get("dependency_type", "none")
 
         _score_reclassifications(labeled, compare_model, prefix="shadow_")
