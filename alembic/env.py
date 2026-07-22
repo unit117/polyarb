@@ -39,6 +39,12 @@ def run_migrations_online() -> None:
         # race. Session-level lock — released when this connection closes;
         # losers block, then re-read alembic_version and no-op.
         connection.exec_driver_sql("SELECT pg_advisory_lock(919117)")
+        # exec_driver_sql opened an implicit transaction; commit it so
+        # alembic's begin_transaction() OWNS the migration transaction —
+        # otherwise the DDL and version bump silently ROLL BACK when the
+        # connection closes. (pg_advisory_lock is session-scoped: it
+        # survives this commit and releases when the connection closes.)
+        connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
