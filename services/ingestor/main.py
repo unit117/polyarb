@@ -101,46 +101,77 @@ async def main() -> None:
         await redis.aclose()
 
 
+RETENTION_BATCH_ROWS = 50_000
+RETENTION_MAX_BATCHES_PER_WAKE = 20
+
+
+async def _prune_batched(model, ts_col, cutoff, label: str) -> None:
+    """Delete rows older than cutoff in bounded batches.
+
+    price_snapshots is ~180 GB on the NAS and has no pure-timestamp index —
+    a single DELETE would hold locks and write WAL for the whole backlog.
+    Batches walk the PK (id order ≈ insertion order), each in its own
+    transaction; a one-row oldest-id probe skips the scan entirely when
+    there is nothing old enough to prune.
+    """
+    from sqlalchemy import delete, select
+
+    total = 0
+    for _ in range(RETENTION_MAX_BATCHES_PER_WAKE):
+        async with SessionFactory() as session:
+            oldest = await session.execute(
+                select(ts_col).order_by(model.id).limit(1)
+            )
+            oldest_ts = oldest.scalar_one_or_none()
+            if oldest_ts is None or oldest_ts >= cutoff:
+                break
+            result = await session.execute(
+                delete(model).where(
+                    model.id.in_(
+                        select(model.id)
+                        .where(ts_col < cutoff)
+                        .order_by(model.id)
+                        .limit(RETENTION_BATCH_ROWS)
+                    )
+                )
+            )
+            await session.commit()
+            total += result.rowcount or 0
+            if (result.rowcount or 0) < RETENTION_BATCH_ROWS:
+                break
+    if total:
+        log.info(f"{label}_retention_pruned", rows=total)
+
+
 async def _retention_loop() -> None:
     """Prune old price_snapshots / market_trades on a 6h cadence.
 
     Off by default (retention 0 = keep forever — the whole point of the
     capture work is future backtests). Enable via .env once NAS disk
-    headroom demands it.
+    headroom demands it; the batch cap spreads a large first-enablement
+    backlog across wakes instead of one catastrophic delete.
     """
     from datetime import datetime, timedelta, timezone
-
-    from sqlalchemy import delete
 
     from shared.models import MarketTrade, PriceSnapshot
 
     while True:
         try:
             now = datetime.now(timezone.utc)
-            async with SessionFactory() as session:
-                if settings.snapshot_retention_days > 0:
-                    cutoff = now - timedelta(days=settings.snapshot_retention_days)
-                    result = await session.execute(
-                        delete(PriceSnapshot).where(PriceSnapshot.timestamp < cutoff)
-                    )
-                    if result.rowcount:
-                        log.info(
-                            "snapshot_retention_pruned",
-                            rows=result.rowcount,
-                            days=settings.snapshot_retention_days,
-                        )
-                if settings.trades_retention_days > 0:
-                    cutoff = now - timedelta(days=settings.trades_retention_days)
-                    result = await session.execute(
-                        delete(MarketTrade).where(MarketTrade.received_at < cutoff)
-                    )
-                    if result.rowcount:
-                        log.info(
-                            "trades_retention_pruned",
-                            rows=result.rowcount,
-                            days=settings.trades_retention_days,
-                        )
-                await session.commit()
+            if settings.snapshot_retention_days > 0:
+                await _prune_batched(
+                    PriceSnapshot,
+                    PriceSnapshot.timestamp,
+                    now - timedelta(days=settings.snapshot_retention_days),
+                    "snapshot",
+                )
+            if settings.trades_retention_days > 0:
+                await _prune_batched(
+                    MarketTrade,
+                    MarketTrade.received_at,
+                    now - timedelta(days=settings.trades_retention_days),
+                    "trades",
+                )
         except Exception:
             log.exception("retention_loop_error")
         await asyncio.sleep(6 * 3600)
