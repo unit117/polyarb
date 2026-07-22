@@ -68,6 +68,30 @@ def _extract_winner(raw_market: dict) -> str | None:
     return None
 
 
+def trim_snapshot_coverage(
+    eligible: list, liquidity_top_ids: set[int], paired_ids: set[int], cap: int
+) -> list:
+    """Trim the snapshot set to the cap WITHOUT starving discovery.
+
+    The liquidity top-N is the only polling coverage a market gets before
+    it joins a verified pair; a naive paired-first trim evicts it and
+    permanently chokes new-pair creation (no fresh prices -> detector
+    skips/unverifies candidates -> the verified set only shrinks). So the
+    discovery set is reserved unconditionally and paired markets fill the
+    remaining budget by liquidity.
+    """
+    if len(eligible) <= cap:
+        return eligible
+    reserved = [m for m in eligible if m.id in liquidity_top_ids]
+    rest = sorted(
+        (m for m in eligible if m.id not in liquidity_top_ids),
+        key=lambda m: (m.id in paired_ids, m.liquidity or 0),
+        reverse=True,
+    )
+    budget = max(cap - len(reserved), 0)
+    return reserved + rest[:budget]
+
+
 class MarketPoller:
     def __init__(
         self,
@@ -94,21 +118,6 @@ class MarketPoller:
 
     def set_ws_client(self, ws_client) -> None:
         self._ws_client = ws_client
-
-    def get_eligible_token_ids(self, markets: list[Market]) -> list[str]:
-        """Return token IDs for markets eligible for price streaming."""
-        markets_by_id = {m.id: m for m in markets if m.token_ids}
-        by_liquidity = sorted(markets_by_id.values(), key=lambda m: m.liquidity or 0, reverse=True)
-        eligible_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
-
-        # Include paired markets (same logic as snapshot_prices)
-        # Can't query DB synchronously here, so collect all token_ids from top + paired
-        token_ids = []
-        for mid in eligible_ids:
-            m = markets_by_id.get(mid)
-            if m and m.token_ids:
-                token_ids.extend(str(t) for t in m.token_ids)
-        return token_ids
 
     async def sync_markets(self) -> list[Market]:
         log.info("sync_markets_start")
@@ -357,13 +366,19 @@ class MarketPoller:
             log.info("snapshot_frozen_cooldown_excluded", pairs=len(cooled))
         eligible_ids |= paired_ids
 
-        # Cap bounds DB growth; paired markets outrank liquidity-only ones
+        liquidity_top_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
         eligible = [markets_by_id[mid] for mid in eligible_ids if mid in markets_by_id]
         if len(eligible) > settings.max_clob_snapshots:
-            eligible.sort(
-                key=lambda m: (m.id in paired_ids, m.liquidity or 0), reverse=True
+            log.warning(
+                "snapshot_cap_truncated",
+                eligible=len(eligible),
+                paired=len(paired_ids),
+                cap=settings.max_clob_snapshots,
+                dropped=len(eligible) - settings.max_clob_snapshots,
             )
-            eligible = eligible[: settings.max_clob_snapshots]
+        eligible = trim_snapshot_coverage(
+            eligible, liquidity_top_ids, paired_ids, settings.max_clob_snapshots
+        )
         log.info(
             "snapshots_start",
             eligible=len(eligible),
@@ -414,8 +429,18 @@ class MarketPoller:
                 entry["order_book"][outcome] = book
 
         snapshots_to_insert = []
+        partial_skipped = 0
         for market_id, entry in per_market.items():
             if not entry["prices"]:
+                continue
+            # Refuse partial rows (mirrors the WS flush guard): a row missing
+            # an outcome reads as price 0.0 downstream, which fails
+            # verification's price checks and permanently unverifies a
+            # healthy pair on the next rescan.
+            market = markets_by_id.get(market_id)
+            expected = set(market.outcomes or []) if market else set()
+            if expected and not expected.issubset(entry["prices"].keys()):
+                partial_skipped += 1
                 continue
             snapshots_to_insert.append(
                 {
@@ -427,6 +452,9 @@ class MarketPoller:
                     "order_book": entry["order_book"] or None,
                 }
             )
+
+        if partial_skipped:
+            log.info("snapshot_partial_skipped", count=partial_skipped)
 
         if snapshots_to_insert:
             async with self._session_factory() as session:
@@ -444,6 +472,24 @@ class MarketPoller:
                     continue
                 if price >= self._resolution_threshold:
                     market_id = snap_data["market_id"]
+                    # Near-end gate: a 0.98 mid on a market months from its
+                    # end date is a confident price, not a resolution — the
+                    # expanded paired coverage would otherwise mass-resolve
+                    # dormant near-certain markets irreversibly. Gamma sync
+                    # remains the authoritative resolver.
+                    gate_hours = settings.resolution_inference_window_hours
+                    if gate_hours > 0:
+                        market = markets_by_id.get(market_id)
+                        end_date = getattr(market, "end_date", None)
+                        if end_date is None:
+                            continue
+                        if end_date.tzinfo is None:
+                            end_date = end_date.replace(tzinfo=timezone.utc)
+                        hours_to_end = (
+                            end_date - datetime.now(timezone.utc)
+                        ).total_seconds() / 3600
+                        if hours_to_end > gate_hours:
+                            continue
                     # Mark as resolved in DB and publish event
                     async with self._session_factory() as session:
                         mkt = await session.get(Market, market_id)

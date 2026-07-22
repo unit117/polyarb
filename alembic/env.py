@@ -34,6 +34,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # All service entrypoints run `alembic upgrade head` concurrently on
+        # `compose up`; serialize them so DDL (e.g. CREATE TABLE) doesn't
+        # race. Session-level lock — released when this connection closes;
+        # losers block, then re-read alembic_version and no-op.
+        connection.exec_driver_sql("SELECT pg_advisory_lock(919117)")
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

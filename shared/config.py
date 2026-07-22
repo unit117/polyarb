@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # values against NAS disk headroom before raising snapshot coverage.
     snapshot_retention_days: int = 0
     trades_retention_days: int = 0
+    # Price-inference resolution (>= resolution_price_threshold) only fires
+    # within this many hours of the market's end_date (0 = legacy ungated).
+    # A 0.98 mid months from end is a confident price, not a resolution.
+    resolution_inference_window_hours: int = 48
     log_level: str = "INFO"
 
     # WebSocket streaming settings

@@ -48,14 +48,16 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index("ix_market_trades_market_id", "market_trades", ["market_id"])
-    op.create_index("ix_market_trades_token_id", "market_trades", ["token_id"])
+    # Two indexes only (write-amplification matters on an append-heavy
+    # table): the composite covers market_id lookups, and the dedup index's
+    # leading token_id column covers token lookups.
     op.create_index(
         "ix_market_trades_market_ts", "market_trades", ["market_id", "event_ts"]
     )
-    op.create_index(
-        "ix_market_trades_token_ts", "market_trades", ["token_id", "event_ts"]
-    )
+    # Best-effort replay dedup. KNOWN COLLAPSE: legitimate distinct trades
+    # with identical (token, ts, price, size, side) — same-millisecond equal
+    # fills — are indistinguishable from reconnect replays and are dropped,
+    # so persisted volume is a lower bound.
     op.create_index(
         "uq_market_trades_dedup",
         "market_trades",

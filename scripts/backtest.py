@@ -49,6 +49,7 @@ from services.optimizer.frank_wolfe import optimize
 from services.optimizer.trades import compute_trades
 from services.simulator.portfolio import Portfolio
 from services.simulator.vwap import compute_vwap
+from shared.pricing import select_outcome_book
 
 RESOLUTION_THRESHOLD = 0.98
 
@@ -365,7 +366,12 @@ async def simulate_opportunity(
             continue
 
         snapshot = await get_snapshot_at(session, market.id, as_of)
-        order_book = snapshot.order_book if snapshot else None
+        # Dual-shape: per-outcome keyed books (new) or legacy single book
+        order_book = (
+            select_outcome_book(snapshot.order_book, trade.outcome)
+            if snapshot
+            else None
+        )
         midpoint = trade.market_price or 0.5
 
         size = base_size

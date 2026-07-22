@@ -29,6 +29,20 @@ async def main() -> None:
     )
     redis = await get_redis()
 
+    # Capture posture, logged once so a mis-set .env is visible at a glance
+    log.info(
+        "capture_posture",
+        fetch_order_books=settings.fetch_order_books,
+        order_books_paired_only=settings.order_books_paired_only,
+        order_book_depth_levels=settings.order_book_depth_levels,
+        capture_ws_trades=settings.capture_ws_trades,
+        fold_trade_prices_into_midpoints=settings.fold_trade_prices_into_midpoints,
+        max_clob_snapshots=settings.max_clob_snapshots,
+        max_ws_subscriptions=settings.max_ws_subscriptions,
+        snapshot_retention_days=settings.snapshot_retention_days,
+        trades_retention_days=settings.trades_retention_days,
+    )
+
     # When WS is enabled, slow polling to 5-minute reconciliation
     poll_interval = 300 if settings.ws_enabled else settings.poll_interval_seconds
 

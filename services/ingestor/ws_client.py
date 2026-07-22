@@ -11,6 +11,7 @@ import json
 import random
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 import structlog
 import websockets
@@ -37,6 +38,8 @@ log = structlog.get_logger()
 # merged snapshot flush via the normal path; the value is at the freshness
 # boundary periodic readers already enforce, so no phantom-arb risk.
 WS_RECONNECT_PENDING_TIMEOUT = 300.0
+WS_TRADE_INSERT_CHUNK = 1000
+WS_MAX_PENDING_TRADES = 20_000
 
 
 class ClobWebSocket:
@@ -120,7 +123,9 @@ class ClobWebSocket:
             # Market ids that appear in any pair (pairs aren't filtered by
             # activity, so we intersect with the active set below).
             pair_result = await session.execute(
-                select(MarketPair.market_a_id, MarketPair.market_b_id)
+                select(MarketPair.market_a_id, MarketPair.market_b_id).where(
+                    MarketPair.verified.is_(True)
+                )
             )
             paired_ids: set[int] = set()
             for row in pair_result.fetchall():
@@ -284,6 +289,15 @@ class ClobWebSocket:
         """
         while self._running:
             await asyncio.sleep(self._buffer_seconds)
+            if not self._pending_snapshots and not self._pending_trades:
+                continue
+
+            # Trade tape flushes independently and FIRST: it must not be
+            # gated on price updates existing, or lost when the snapshot
+            # insert fails (once the fold gate is off, trades may be the
+            # only thing buffered).
+            await self._flush_trades()
+
             if not self._pending_snapshots:
                 continue
 
@@ -372,30 +386,11 @@ class ClobWebSocket:
                     sample=stuck[:5],
                 )
 
-            trade_rows = self._pending_trades
-            self._pending_trades = []
-
             try:
                 if rows:
                     async with self._session_factory() as session:
                         await session.execute(insert(PriceSnapshot), rows)
                         await session.commit()
-
-                if trade_rows:
-                    try:
-                        async with self._session_factory() as session:
-                            # Reconnect replays can duplicate events; the
-                            # dedup index absorbs them
-                            await session.execute(
-                                insert(MarketTrade)
-                                .values(trade_rows)
-                                .on_conflict_do_nothing(),
-                            )
-                            await session.commit()
-                    except Exception:
-                        log.exception(
-                            "ws_trades_flush_error", count=len(trade_rows)
-                        )
 
                 # Check for resolution (only on fresh rows)
                 for row_data in rows:
@@ -507,13 +502,22 @@ class ClobWebSocket:
                 fee_rate_bps = int(float(fee_raw)) if fee_raw is not None else None
             except (TypeError, ValueError):
                 fee_rate_bps = None
+            def _num(val):
+                try:
+                    return str(Decimal(str(val)))
+                except (InvalidOperation, ValueError, TypeError):
+                    return None
+
+            clean_price = _num(price)
+            if clean_price is None:
+                return  # price is NOT NULL; a bad value would poison the batch
             self._pending_trades.append(
                 {
                     "market_id": market_id,
                     "token_id": asset_id,
                     "outcome": outcome,
-                    "price": str(price),
-                    "size": str(msg["size"]) if msg.get("size") is not None else None,
+                    "price": clean_price,
+                    "size": _num(msg.get("size")),
                     "side": str(side)[:4].upper() if side else None,
                     "fee_rate_bps": fee_rate_bps,
                     "event_ts": event_ts,
@@ -525,6 +529,39 @@ class ClobWebSocket:
                 self._pending_snapshots[market_id] = {"prices": {}, "midpoints": {}}
             self._pending_snapshots[market_id]["prices"][outcome] = str(price)
             self._mark_outcome_refreshed(market_id, outcome)
+
+    async def _flush_trades(self) -> None:
+        """Bulk-insert buffered market_trades rows.
+
+        Failures re-queue (capped) instead of dropping tape — the dedup
+        index + on_conflict_do_nothing make re-insertion after a partial
+        commit idempotent. Chunked to stay far under asyncpg's 32767
+        bind-parameter limit.
+        """
+        if not self._pending_trades:
+            return
+        trade_rows = self._pending_trades
+        self._pending_trades = []
+        inserted = 0
+        try:
+            async with self._session_factory() as session:
+                for i in range(0, len(trade_rows), WS_TRADE_INSERT_CHUNK):
+                    chunk = trade_rows[i : i + WS_TRADE_INSERT_CHUNK]
+                    await session.execute(
+                        insert(MarketTrade).values(chunk).on_conflict_do_nothing()
+                    )
+                    await session.commit()
+                    inserted += len(chunk)
+        except Exception:
+            remaining = trade_rows[inserted:]
+            self._pending_trades = (remaining + self._pending_trades)[
+                :WS_MAX_PENDING_TRADES
+            ]
+            log.exception(
+                "ws_trades_flush_error",
+                failed=len(remaining),
+                requeued=len(self._pending_trades),
+            )
 
     def _mark_outcome_refreshed(self, market_id: int, outcome: str) -> None:
         """Remove an outcome from the reconnect-pending set for a market."""

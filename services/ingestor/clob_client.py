@@ -154,26 +154,39 @@ class ClobClient:
             try:
                 result = await self._request("POST", "/midpoints", json=body)
             except httpx.HTTPStatusError as e:
+                # Contract problem (4xx): worth the slow sequential fallback
                 log.warning(
                     "clob_midpoints_batch_rejected",
                     status=e.response.status_code,
                     chunk=len(chunk),
                 )
                 result = None
+            except httpx.HTTPError as e:
+                # Transport problem: the sequential fallback would turn one
+                # failed request into 100 doomed ones during an outage —
+                # skip the chunk and keep what other chunks returned
+                log.warning("clob_midpoints_batch_transport_error", error=str(e))
+                continue
+            covered = 0
             if isinstance(result, dict):
                 for token_id, value in result.items():
                     mid = self._parse_mid(value)
                     if mid is not None:
                         out[token_id] = mid
-                continue
-            if isinstance(result, list):
+                        covered += 1
+            elif isinstance(result, list):
                 for item in result:
                     if isinstance(item, dict) and item.get("token_id"):
                         mid = self._parse_mid(item.get("mid", item.get("midpoint")))
                         if mid is not None:
                             out[item["token_id"]] = mid
+                            covered += 1
+            if result is not None and covered > 0:
                 continue
-            # Batch failed — sequential fallback for this chunk only
+            if result is not None:
+                # Accepted-but-empty response — contract drift; fall back
+                log.warning("clob_midpoints_batch_empty", chunk=len(chunk))
+            # Sequential fallback for this chunk only
             for token_id in chunk:
                 try:
                     mid = await self.get_midpoint(token_id)
@@ -203,6 +216,10 @@ class ClobClient:
                     chunk=len(chunk),
                 )
                 result = None
+            except httpx.HTTPError as e:
+                log.warning("clob_books_batch_transport_error", error=str(e))
+                continue
+            covered = 0
             if isinstance(result, list):
                 for book in result:
                     if not isinstance(book, dict):
@@ -211,8 +228,12 @@ class ClobClient:
                     normalized = normalize_book(book, depth_levels)
                     if token_id and normalized:
                         out[token_id] = normalized
+                        covered += 1
+            if result is not None and covered > 0:
                 continue
-            # Batch failed — sequential fallback for this chunk only
+            if result is not None:
+                log.warning("clob_books_batch_empty", chunk=len(chunk))
+            # Sequential fallback for this chunk only
             for token_id in chunk:
                 try:
                     book = await self.get_order_book(token_id)

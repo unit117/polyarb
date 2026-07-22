@@ -244,8 +244,8 @@ class MarketTrade(Base):
     __tablename__ = "market_trades"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id"), index=True)
-    token_id: Mapped[str] = mapped_column(String, index=True)
+    market_id: Mapped[int] = mapped_column(ForeignKey("markets.id"))
+    token_id: Mapped[str] = mapped_column(String)
     outcome: Mapped[str] = mapped_column(String)
     price: Mapped[Decimal] = mapped_column(Numeric)
     size: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
@@ -258,10 +258,11 @@ class MarketTrade(Base):
 
     __table_args__ = (
         Index("ix_market_trades_market_ts", "market_id", "event_ts"),
-        Index("ix_market_trades_token_ts", "token_id", "event_ts"),
-        # Best-effort reconnect-replay dedup (WS events carry no unique id).
-        # NULLs compare distinct in Postgres, so rows missing fields simply
-        # skip dedup — acceptable for backtest tape.
+        # Best-effort reconnect-replay dedup (WS events carry no unique id);
+        # its leading token_id column doubles as the token lookup index.
+        # NULLs compare distinct in Postgres, so rows missing fields skip
+        # dedup. KNOWN COLLAPSE: distinct same-millisecond identical fills
+        # are dropped as replays — persisted volume is a lower bound.
         Index(
             "uq_market_trades_dedup",
             "token_id",

@@ -85,3 +85,26 @@ class TestFoldGate:
         ws._handle_last_trade(_trade_msg())
         assert len(ws._pending_trades) == 1
         assert 7 not in ws._pending_snapshots
+
+
+class TestTradeFlushResilience:
+    @pytest.mark.asyncio
+    async def test_flush_failure_requeues_capped(self):
+        from unittest.mock import AsyncMock
+
+        ws = _ws()
+        ws._handle_last_trade(_trade_msg())
+        failing_session = MagicMock()
+        failing_session.__aenter__ = AsyncMock(side_effect=RuntimeError("db down"))
+        failing_session.__aexit__ = AsyncMock(return_value=False)
+        ws._session_factory = MagicMock(return_value=failing_session)
+        await ws._flush_trades()
+        assert len(ws._pending_trades) == 1  # re-queued, not dropped
+
+    @pytest.mark.asyncio
+    async def test_flush_noop_when_empty(self):
+        ws = _ws()
+        ws._session_factory = MagicMock(
+            side_effect=AssertionError("must not touch DB")
+        )
+        await ws._flush_trades()
