@@ -21,7 +21,7 @@ Seven Docker containers orchestrated via `docker-compose.yml`. All Python servic
 | **Simulator** | Paper-trades opportunities with VWAP slippage modeling, Kelly sizing, circuit breakers, and portfolio tracking |
 | **Dashboard** | FastAPI backend + React frontend with real-time WebSocket streaming of portfolio, trades, and opportunities |
 | **PostgreSQL** | pgvector-enabled Postgres 16 for markets, pairs, opportunities, trades, and embeddings |
-| **Redis** | Event bus (8 pub/sub channels) for inter-service communication |
+| **Redis** | Event bus (9 pub/sub channels) for inter-service communication |
 
 ## Quick Start
 
@@ -44,7 +44,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The dashboard will be available at `http://localhost:8081`.
+The dashboard will be available at `http://localhost:8080` (the repo default; the production NAS overrides `DASHBOARD_PORT=8081` because 8080 is taken there).
 
 ### Configuration
 
@@ -201,7 +201,7 @@ Live paper trading has been running since March 20, 2026. As of July 20, 2026 th
 |---------|------|-----------|
 | PostgreSQL | 5434 | 5432 |
 | Redis | 6380 | 6379 |
-| Dashboard | 8081 | 8080 |
+| Dashboard | 8080 (NAS overrides to 8081) | 8080 |
 | Dashboard (backtest) | 8082 | 8080 |
 
 ## Project Structure
