@@ -11,6 +11,7 @@ from shared.circuit_breaker import CircuitBreaker
 from shared.config import settings, venue_fee, DRAWDOWN_THRESHOLD, DRAWDOWN_WINDOW, DRAWDOWN_MIN_SCALE
 from shared.models import PriceSnapshot
 from shared.frozen_cooldown import record_frozen_rejection
+from shared.metrics import incr_metric
 from shared.pricing import get_latest_snapshot, is_price_frozen, select_outcome_book
 from shared.schemas import OptimalTrades
 from services.simulator.portfolio import Portfolio, opening_exposure_size
@@ -144,6 +145,7 @@ async def build_validated_bundle(
                 if snap_ts.tzinfo is None:
                     snap_ts = snap_ts.replace(tzinfo=timezone.utc)
                 if snap_ts < _PROCESS_START:
+                    await incr_metric(redis, "startup_grace_skips")
                     logger.info(
                         "startup_grace_stale_snapshot_skipped",
                         opportunity_id=opp.id,
@@ -302,6 +304,7 @@ async def build_validated_bundle(
             opp.pair_id, settings.pair_flow_window_seconds
         )
         if recent_flow + opening_flow > Decimal(str(settings.max_pair_weekly_flow)):
+            await incr_metric(redis, "pair_flow_cap_rejections")
             logger.info(
                 "pair_flow_cap_rejected",
                 opportunity_id=opp.id,

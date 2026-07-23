@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -17,6 +18,7 @@ from shared.events import (
 )
 from shared.config import settings
 from shared.frozen_cooldown import cooled_pair_ids
+from shared.metrics import incr_metric, set_gauge
 from shared.schemas import MarketResolvedEvent, MarketUpdatedEvent, SnapshotCreatedEvent
 from shared.models import Market, MarketPair, PriceSnapshot
 from services.ingestor.clob_client import ClobClient
@@ -369,6 +371,7 @@ class MarketPoller:
         liquidity_top_ids = {m.id for m in by_liquidity[: self._max_snapshot_markets]}
         eligible = [markets_by_id[mid] for mid in eligible_ids if mid in markets_by_id]
         if len(eligible) > settings.max_clob_snapshots:
+            await incr_metric(self._redis, "snapshot_cap_truncations")
             log.warning(
                 "snapshot_cap_truncated",
                 eligible=len(eligible),
@@ -454,6 +457,7 @@ class MarketPoller:
             )
 
         if partial_skipped:
+            await incr_metric(self._redis, "snapshot_partial_skips", by=partial_skipped)
             log.info("snapshot_partial_skipped", count=partial_skipped)
 
         if snapshots_to_insert:
@@ -595,6 +599,7 @@ class MarketPoller:
 
     async def poll_once(self) -> list[Market]:
         log.info("poll_cycle_start")
+        cycle_started = time.monotonic()
         markets = await self.sync_markets()
 
         # Update WS subscriptions with current eligible markets
@@ -632,6 +637,9 @@ class MarketPoller:
         except Exception:
             log.exception("compute_embeddings_error")
 
+        await set_gauge(
+            self._redis, "poll_cycle_seconds", round(time.monotonic() - cycle_started, 1)
+        )
         log.info("poll_cycle_done")
         return markets
 

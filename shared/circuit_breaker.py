@@ -22,6 +22,7 @@ import structlog
 from redis.exceptions import RedisError
 
 from shared.events import publish
+from shared.metrics import incr_metric
 
 logger = structlog.get_logger()
 
@@ -107,6 +108,7 @@ class CircuitBreaker:
         self._trip_reason = reason
         self._trip_time = time.time()
         logger.warning("circuit_breaker_tripped", reason=reason, **details)
+        await incr_metric(self.redis, f"cb_trip:{self.scope}:{reason}")
         try:
             # TTL doubles as the auto-reset across restarts: key gone = reset.
             await self.redis.set(self._trip_key, reason, ex=self.cooldown_seconds)

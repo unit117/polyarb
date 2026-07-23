@@ -22,6 +22,7 @@ import structlog
 from redis.exceptions import RedisError
 
 from shared.config import settings
+from shared.metrics import incr_metric
 
 logger = structlog.get_logger()
 
@@ -40,6 +41,7 @@ async def record_frozen_rejection(redis, pair_id: int) -> bool:
     try:
         count_key = REJECT_COUNT_KEY.format(pair_id=pair_id)
         count = await redis.incr(count_key)
+        await incr_metric(redis, "cooldown_rejections_recorded")
         if count == 1:
             await redis.expire(count_key, settings.frozen_pair_reject_window_seconds)
         if count < settings.frozen_pair_reject_threshold:
@@ -50,6 +52,8 @@ async def record_frozen_rejection(redis, pair_id: int) -> bool:
             ex=settings.frozen_pair_cooldown_seconds,
             nx=True,
         )
+        if newly_set:
+            await incr_metric(redis, "cooldowns_started")
         return bool(newly_set)
     except RedisError as exc:
         logger.debug("frozen_cooldown_record_failed", pair_id=pair_id, error=str(exc))

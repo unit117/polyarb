@@ -10,6 +10,7 @@ import OpportunityDetail from "./components/OpportunityDetail.tsx";
 
 const PnlChart = lazy(() => import("./components/PnlChart.tsx"));
 const MetricsPanel = lazy(() => import("./components/MetricsPanel.tsx"));
+const ObservabilityPanel = lazy(() => import("./components/ObservabilityPanel.tsx"));
 import { useDashboardData } from "./hooks/useDashboardData.ts";
 import type { TradingMode } from "./hooks/useDashboardData.ts";
 import s from "./App.module.css";
@@ -133,6 +134,7 @@ export default function App() {
             {tab === "metrics" && (
               <Suspense fallback={<div style={{ padding: 40, textAlign: "center", color: "var(--color-text-dim)" }}>Loading metrics...</div>}>
                 <MetricsPanel />
+                <ObservabilityPanel />
               </Suspense>
             )}
           </main>

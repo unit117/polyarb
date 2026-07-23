@@ -26,6 +26,7 @@ from shared.events import (
 )
 from shared.schemas import MarketResolvedEvent, SnapshotCreatedEvent
 from shared.config import settings
+from shared.metrics import incr_metric
 from shared.models import Market, MarketTrade, PriceSnapshot
 
 log = structlog.get_logger()
@@ -562,6 +563,10 @@ class ClobWebSocket:
                 failed=len(remaining),
                 requeued=len(self._pending_trades),
             )
+            await incr_metric(self._redis, "ws_trade_flush_errors")
+        else:
+            if inserted:
+                await incr_metric(self._redis, "ws_trades_flushed", by=inserted)
 
     def _mark_outcome_refreshed(self, market_id: int, outcome: str) -> None:
         """Remove an outcome from the reconnect-pending set for a market."""

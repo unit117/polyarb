@@ -1,17 +1,22 @@
 """Observability and metrics API routes."""
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter
-from sqlalchemy import case, cast, func, select, Float
+from fastapi import APIRouter, Request
+from redis.exceptions import RedisError
+from sqlalchemy import case, cast, func, select, text, Float
 from sqlalchemy.orm import joinedload, load_only
 
 from shared.db import SessionFactory
+from shared.metrics import get_metrics
 from shared.models import (
     ArbitrageOpportunity,
     Market,
     MarketPair,
+    MarketTrade,
+    PairClassificationCache,
     PaperTrade,
     PriceSnapshot,
 )
@@ -412,3 +417,153 @@ def _align_series(
             used_b.add(best_j)
 
     return aligned_a, aligned_b
+
+
+@router.get("/metrics/observability")
+async def get_observability(request: Request, days: int = 7):
+    """Phase-5 remediation observability: safety-mechanism counters, breaker
+    state, concentration shares, capture rates, and storage growth.
+
+    Counters come from the daily-bucketed Redis hashes written at each
+    mechanism's event site (shared.metrics); the rest is queried live.
+    NOTE: price_snapshots (179GB+) has no pure-timestamp index — every
+    query here is bounded by PK, catalog stats, or an indexed column.
+    """
+    redis = request.app.state.redis
+
+    counters = await get_metrics(redis, days=days)
+
+    # Breaker + kill-switch state
+    breaker: dict[str, object] = {}
+    try:
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        paper_trip, live_trip, paper_loss, live_loss, kill, live_kill = (
+            await redis.mget(
+                "polyarb:cb:paper:trip",
+                "polyarb:cb:live:trip",
+                f"polyarb:cb:paper:daily_loss:{day}",
+                f"polyarb:cb:live:daily_loss:{day}",
+                "polyarb:kill_switch",
+                "polyarb:live_kill_switch",
+            )
+        )
+
+        def _s(v):
+            return v.decode() if isinstance(v, bytes) else v
+
+        breaker = {
+            "paper_trip": _s(paper_trip),
+            "live_trip": _s(live_trip),
+            "paper_daily_loss": float(_s(paper_loss) or 0),
+            "live_daily_loss": float(_s(live_loss) or 0),
+            "kill_switch": _s(kill),
+            "live_kill_switch": _s(live_kill),
+        }
+    except RedisError:
+        breaker = {"error": "redis_unavailable"}
+
+    # Active cooldowns right now
+    cooldowns_active = 0
+    try:
+        async for _ in redis.scan_iter(match="polyarb:frozen_pair_cooldown:*", count=500):
+            cooldowns_active += 1
+    except RedisError:
+        cooldowns_active = -1
+
+    async with SessionFactory() as session:
+        # Top-5 pair concentration by 7d gross trade value (indexed on
+        # executed_at? No — bounded by the small paper_trades table itself)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        gross = func.sum(PaperTrade.size * PaperTrade.vwap_price)
+        result = await session.execute(
+            select(
+                ArbitrageOpportunity.pair_id,
+                func.count(PaperTrade.id),
+                gross,
+            )
+            .join(
+                ArbitrageOpportunity,
+                PaperTrade.opportunity_id == ArbitrageOpportunity.id,
+            )
+            .where(
+                PaperTrade.executed_at > cutoff,
+                PaperTrade.source == "paper",
+                PaperTrade.side.in_(("BUY", "SELL")),
+            )
+            .group_by(ArbitrageOpportunity.pair_id)
+            .order_by(gross.desc())
+            .limit(5)
+        )
+        top_rows = result.all()
+        total_result = await session.execute(
+            select(func.coalesce(func.sum(PaperTrade.size * PaperTrade.vwap_price), 0))
+            .where(
+                PaperTrade.executed_at > cutoff,
+                PaperTrade.source == "paper",
+                PaperTrade.side.in_(("BUY", "SELL")),
+            )
+        )
+        total_gross = float(total_result.scalar() or 0)
+        top_pairs = [
+            {
+                "pair_id": pid,
+                "trades_7d": int(n),
+                "gross_7d": round(float(g or 0), 2),
+                "share_pct": round(100 * float(g or 0) / total_gross, 1)
+                if total_gross > 0
+                else None,
+            }
+            for pid, n, g in top_rows
+        ]
+
+        # Trade-tape rate: market_trades is small and received_at-recent rows
+        # sit at the end of the PK
+        tape_result = await session.execute(
+            select(func.count()).select_from(MarketTrade).where(
+                MarketTrade.received_at
+                > datetime.now(timezone.utc) - timedelta(hours=24)
+            )
+        )
+        trades_24h = int(tape_result.scalar() or 0)
+
+        # Classification cache size (catalog estimate — exact count on a
+        # 360k-row table is fine too, but estimates are instant)
+        cache_result = await session.execute(
+            select(func.count()).select_from(PairClassificationCache)
+        )
+        cache_rows = int(cache_result.scalar() or 0)
+
+        # Storage growth: fast catalog queries only
+        sizes_result = await session.execute(
+            text(
+                """
+                SELECT relname, pg_total_relation_size(c.oid) AS bytes
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public'
+                  AND relname IN ('price_snapshots', 'market_trades',
+                                  'markets', 'pair_classification_cache',
+                                  'paper_trades', 'arbitrage_opportunities')
+                """
+            )
+        )
+        table_sizes = {r.relname: int(r.bytes) for r in sizes_result}
+        db_size_result = await session.execute(
+            text("SELECT pg_database_size(current_database())")
+        )
+        db_size = int(db_size_result.scalar() or 0)
+
+    disk = shutil.disk_usage("/")
+
+    return {
+        "counters_by_day": counters,
+        "breaker": breaker,
+        "cooldowns_active": cooldowns_active,
+        "top_pairs_7d": top_pairs,
+        "total_gross_7d": round(total_gross, 2),
+        "trades_captured_24h": trades_24h,
+        "classification_cache_rows": cache_rows,
+        "table_bytes": table_sizes,
+        "database_bytes": db_size,
+        "disk": {"total": disk.total, "free": disk.free},
+    }

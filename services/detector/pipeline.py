@@ -28,6 +28,7 @@ from shared.models import (
 )
 from shared.config import settings
 from shared.frozen_cooldown import is_pair_cooled
+from shared.metrics import incr_metric
 from shared.pricing import get_latest_snapshot
 from services.detector.similarity import find_similar_pairs, find_cross_venue_pairs
 from services.detector.classifier import classify_pair
@@ -192,6 +193,7 @@ class DetectionPipeline:
         )
         if classification.get("classification_error"):
             self._cycle_llm_failures += 1
+            await incr_metric(self.redis, "llm_classification_errors")
         elif classification.get("classification_source") in ("llm_vector", "llm_label"):
             self._cycle_llm_failures = 0
 
