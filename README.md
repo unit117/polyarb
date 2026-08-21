@@ -193,7 +193,7 @@ docker compose --profile backtest up -d dashboard-backtest
 
 E1 backtest ran over 489 days (2024-09-24 → 2026-01-25) with $10k capital. After 27 bug fixes the post-fix baseline was +0.19% (GPT-4.1-mini classifier); Sonnet 4 reached +0.84% (Sharpe 1.51). See `E1_Backtest_Findings_Summary.md` for details.
 
-Live paper trading has been running since March 20, 2026. As of July 20, 2026 the book stands at **+16.1% over the 99-day clean window** since the final accounting purge (Apr 12, $9,130 base → $10,597), with the most recent week at +3.0% and a 56–61% win rate on settled trades.
+Live paper trading ran from March 20 to **August 21, 2026**, when it was stopped. The book finished at $10,867 (**+19.1% over the 131-day clean window** since the Apr 12 accounting purge, $9,130 base), but a fill-realism audit against the recorded Polymarket trade tape showed that PnL is largely **not executable**: ~99% of fills used the no-order-book midpoint fallback, bundles were sized at ~$1 (below Polymarket's 5-share minimum), and only ~1–12% of legs had a real print at our price within 5 minutes. See `docs/paper-trading-findings-2026-08-21.md` before treating any paper number as an edge.
 
 ## Ports
 
@@ -274,7 +274,7 @@ Major fixes include:
 - **Frozen-pair cooldown** — pairs whose quotes stop moving (dead/stale order books) enter a Redis-backed 4-hour cooldown, killing infinite detect → optimize → reject loops that previously starved the pipeline
 - **Redis pub/sub polling** — subscribers use `get_message` polling instead of idle `pubsub.listen()`, which crash-looped under redis-py ≥ 7.4; dependency versions are now pinned
 
-The remaining engineering debt is **structural, not correctional** — the core detection, optimization, and trading logic is sound. What remains is explicit contracts and decomposition:
+One correctness caveat remains and is **not** fixed: the paper simulator's fill model. `compute_vwap()` silently midpoint-fills when the per-outcome order book is missing, and the 2026-08-21 audit found that was ~99% of fills (WS-written snapshots carry `null` books), so paper PnL overstates what was executable — see `docs/paper-trading-findings-2026-08-21.md`. The detection and optimization logic is sound; the remaining engineering debt beyond that fill model is **structural** — explicit contracts and decomposition:
 
 ## AI Readability
 

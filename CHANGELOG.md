@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-08-21 — Paper trading stopped; fill-realism audit; repo cleanup
+
+### Decision
+- **Paper trading stopped** (simulator container stopped on the NAS 2026-08-21 15:28 UTC). Final book $10,866.99, +19.1% over the 131-day clean window, realized $1,669.52, 12,320 trades. Other services left running for data capture.
+
+### Findings (`docs/paper-trading-findings-2026-08-21.md`)
+- ~99% of paper fills since Jul 23 used the `_midpoint_fill` fallback (no per-outcome order book at fill time — WS-written snapshots carry `null` books); only 27/2,096 legs had a real book.
+- Bundles sized at ~$1 by half-Kelly × $100; 97% of legs since April < 5 shares, below Polymarket's 5-share `minimum_order_size`.
+- Tape check vs. `market_trades`: a real print at-or-better than our price within 5 min existed for 18% of BUY / 8.5% of SELL legs (strict 12% / 1%); SELL legs priced a median 11.6¢ above the next real trade. 66% of reconstructed realized PnL came from in-play sports O/U markets.
+- 32 open positions ($1,648) stale since Jul 7 (inactive-unresolved markets), carried at cost.
+- Conclusion: the paper PnL is mostly not executable; the accounting is correct, the fill model is not. Fix list recorded in the findings doc and `BUGS.md` #4–#5.
+
+### Docs
+- `README.md` / `CLAUDE.md`: status rewritten to "stopped", +16.1% claim replaced with the audited picture; new gotcha on the midpoint fallback.
+
+### Repo cleanup
+- Moved 19 stale root-level documents into `docs/archive/{audits,plans,research,reports}/` (audit reports, inspection/findings trackers, classifier/prompt plans, research notes, generated .docx reports and their generator script). No code references changed.
+- Removed untracked OS/editor junk (`.DS_Store`, Syncthing conflict copies, `.swp`, `.coverage`, `.pytest_cache`).
+
 ## 2026-03-21 (4) — Rescan Verification Gate, Top-N Classifier, Partition Matrix Fix
 
 ### Bug Fixes

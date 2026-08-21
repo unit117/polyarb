@@ -6,18 +6,27 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 PolyArb — combinatorial arbitrage detection and paper-trading system for Polymarket prediction markets. Detects mathematically provable arbitrage across correlated markets using Frank-Wolfe optimization (Dudik, Lahaie & Pennock 2016, arXiv:1606.02825).
 
-## Current Status (as of 2026-07-23)
+## Current Status (as of 2026-08-21)
 
-Live paper trading since 2026-03-20 on the NAS; +16.1% over the 99-day clean window as of Jul 20 (see the end of README "Backtesting"). The classifier default is `gpt-4.1-mini` but production has run **kimi-k2.6** (Moonshot, via `CLASSIFIER_BASE_URL`) since 2026-06-01 — first gold-set score 70.8%, below the March leaderboard's production tier; 73.5% of live trades are rule-based, so the classifier is not the bottleneck.
+**Paper trading is STOPPED.** The simulator container was stopped on the NAS on 2026-08-21 15:28 UTC (`docker compose stop simulator`; `restart: unless-stopped` keeps it down across reboots). Ingestor, detector, optimizer, dashboard, postgres and redis were left running for data capture — `docker compose stop` them if that is no longer wanted (the detector still spends on kimi; the DB grows ~1.6 GB/day).
 
-The July 2026 six-flaw remediation is complete through Phase 5 (tracked in `REMEDIATION_PLAN.md`, which is **gitignored** by the `*_PLAN.md` rule — local file + memory only):
+Final paper book: $10,866.99 — +19.1% over the 131-day clean window since the Apr 12 purge (realized $1,669.52, 12,320 trades, 57.9% win rate). **Do not read that as an edge.** The 2026-08-21 fill-realism audit (`docs/paper-trading-findings-2026-08-21.md`) found the PnL is mostly not executable:
+- ~99% of fills since Jul 23 took `_midpoint_fill` (no per-outcome book in the snapshot at fill time; WS-written books are `null`) at the optimizer's detection-time midpoint — only 27 of 2,096 legs had a real book.
+- Half-Kelly × $100 sizes bundles at ~$1; 97% of legs since April are < 5 shares, below Polymarket's `minimum_order_size` (5).
+- Tape check: a real print at-or-better than our price within 5 min existed for 18% of BUY and 8.5% of SELL legs (strict: 12% / 1%); SELL legs "sold" a median 11.6¢ above the next real trade. 66% of realized PnL came from in-play sports O/U markets with wide, jumping spreads.
+- 32 open positions ($1,648 cost basis) had no price since Jul 7 (inactive-unresolved markets) and were carried at cost.
+
+If paper trading is ever resumed: require a fresh real book or reject (no midpoint fallback), add a spread guard, floor sizes at the venue minimum, fix closed-market discovery — then re-measure from a clean cutover. The accounting itself (ledger replay, settlement outcomes) was verified correct in July; only the fill model is wrong.
+
+The classifier default is `gpt-4.1-mini` but production ran **kimi-k2.6** (Moonshot, via `CLASSIFIER_BASE_URL`) from 2026-06-01 — first gold-set score 70.8%, below the March leaderboard's production tier; 73.5% of live trades were rule-based, so the classifier was not the bottleneck.
+
+The July 2026 six-flaw remediation is complete through Phase 6 (tracked in `REMEDIATION_PLAN.md`, which is **gitignored** by the `*_PLAN.md` rule — local file + memory only):
 - Safety gates: post-restart startup grace, per-pair exposure-opening flow cap ($100/7d, flip-aware), zero-edge/flow-cap rejections feed the frozen-pair cooldown, Redis-durable circuit-breaker state scoped per book.
 - Classifier: bounded transient-only retries, failures never cached (225k poisoned cache rows purged), declarative per-model capability registry (`CLASSIFIER_MODEL_CAPABILITIES` .env override).
 - Data capture: CLOB batch endpoints, per-outcome order books for paired markets, `market_trades` raw WS tape (~200–300k rows/day).
 - Observability: daily Redis counters for every safety mechanism, `GET /api/metrics/observability`, ObservabilityPanel on the dashboard metrics tab.
 
 Historical context: IMPROVEMENT_PLAN phases 1–6 complete (Mar 2026); E1 backtest complete — 489 days, -86.6% before 27 bug fixes, **+0.19%** after (gpt-4.1-mini baseline; Sonnet 4 scored +0.84%); E2 superseded; PMXT order-book replay tooling shipped (`scripts/pmxt_*.py`).
-
 ## Architecture
 
 ```
@@ -183,6 +192,8 @@ Ports 5432, 5433, 6379, 8080 are already in use on NAS — do not reassign.
 
 ## Planning Documents
 
+- `docs/paper-trading-findings-2026-08-21.md` — final paper-trading audit: why the +19% is not executable, stop decision, what to fix before any resume
+- `docs/archive/` — older audits, plans, research notes and generated reports (moved out of the repo root 2026-08-21)
 - `REMEDIATION_PLAN.md` — July 2026 six-flaw remediation (LOCAL ONLY: `*_PLAN.md` is gitignored)
 - `ECOSYSTEM_PLAN.md` — E1–E6 external integrations (E1 done, E2 superseded)
 - `IMPROVEMENT_PLAN.md` — Phases 1–6 internal fixes (all complete)
@@ -205,4 +216,5 @@ Ports 5432, 5433, 6379, 8080 are already in use on NAS — do not reassign.
 - Becker dataset default `--max-markets 5000` only yields ~597 pairs — increase for broader coverage
 - Pair verification was tightened after the E1 catastrophe: mutual_exclusion requires same event_id + no identical question text
 - Kill switch (`polyarb:kill_switch`, shared across books) and cooldown/breaker state now survive restarts AND `docker compose down` (redis runs appendonly on the named volume `polyarb_redisdata`)
+- `compute_vwap()` (`services/simulator/vwap.py`) silently falls back to midpoint ± 0.5% when the per-outcome book is missing — WS-written snapshots have `null` books, so in practice nearly every paper fill took this path (2,068/2,096 legs since Jul 23 have `slippage == 0.005`). Any fill-realism claim must check the book-presence share at fill time and compare against the `market_trades` tape
 - Kimi (Moonshot direct) rejects any custom temperature with HTTP 400 — handled by the capability registry; fix future provider quirks via `CLASSIFIER_MODEL_CAPABILITIES` in `.env`, not code hotfixes on the NAS
